@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>8864k Studio · 管理后台</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="https://unpkg.com/element-plus@2.8.4/dist/index.css" />
+<style>
+  :root {
+    --brand: #6366f1;
+    --brand-dark: #4f46e5;
+    --bg: #f5f7fb;
+    --sidebar-bg: #0f172a;
+    --sidebar-border: #1e293b;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: Inter, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  code, .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+  /* Element Plus 主色覆盖 */
+  .el-button--primary {
+    --el-button-bg-color: var(--brand);
+    --el-button-border-color: var(--brand);
+    --el-button-hover-bg-color: var(--brand-dark);
+    --el-button-hover-border-color: var(--brand-dark);
+    --el-button-active-bg-color: var(--brand-dark);
+    --el-button-active-border-color: var(--brand-dark);
+  }
+  .el-input__wrapper.is-focus, .el-textarea__inner:focus {
+    box-shadow: 0 0 0 1px var(--brand) inset !important;
+  }
+  .el-radio-button__original-radio:checked+.el-radio-button__inner {
+    background: var(--brand);
+    border-color: var(--brand);
+    box-shadow: -1px 0 0 0 var(--brand);
+  }
+  .el-checkbox__input.is-checked .el-checkbox__inner,
+  .el-checkbox__input.is-indeterminate .el-checkbox__inner {
+    background-color: var(--brand);
+    border-color: var(--brand);
+  }
+  .el-checkbox__input.is-checked + .el-checkbox__label,
+  .el-radio__input.is-checked + .el-radio__label { color: var(--brand); }
+  .el-switch.is-checked .el-switch__core { background: var(--brand); border-color: var(--brand); }
+  .el-link { color: var(--brand); }
+
+  /* ─── Layout ─── */
+  .layout { display: flex; height: 100vh; }
+  .sidebar {
+    width: 240px;
+    background: var(--sidebar-bg);
+    color: #cbd5e1;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  .sb-header { padding: 22px 20px; border-bottom: 1px solid var(--sidebar-border); display: flex; align-items: center; gap: 12px; }
+  .sb-logo {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--brand), #a855f7);
+    display: flex; align-items: center; justify-content: center;
+    color: white;
+    box-shadow: 0 4px 12px rgba(99,102,241,0.4);
+  }
+  .sb-title { font-weight: 700; color: white; line-height: 1.2; }
+  .sb-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+
+  .sb-nav { flex: 1; padding: 12px; overflow: auto; }
+  .sb-nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    color: #cbd5e1;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .15s ease;
+    margin-bottom: 2px;
+  }
+  .sb-nav-item:hover { background: rgba(255,255,255,0.04); color: white; }
+  .sb-nav-item.active {
+    background: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(168,85,247,0.12));
+    color: white;
+    box-shadow: inset 0 0 0 1px rgba(99,102,241,0.25);
+  }
+  .sb-nav-item .el-icon { font-size: 17px; }
+
+  .sb-foot { padding: 14px; border-top: 1px solid var(--sidebar-border); }
+  .sb-user { display: flex; align-items: center; gap: 10px; padding: 8px 4px; }
+  .sb-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--brand), #a855f7);
+    color: white; font-weight: 700; font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .sb-user-info { flex: 1; min-width: 0; }
+  .sb-user-name { color: white; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sb-user-role { font-size: 11px; color: #64748b; }
+  .sb-logout { color: #94a3b8; cursor: pointer; padding: 6px; border-radius: 6px; transition: all .15s; }
+  .sb-logout:hover { background: rgba(255,255,255,0.05); color: white; }
+
+  /* ─── Main ─── */
+  .main { flex: 1; overflow: auto; }
+  .main-bar {
+    background: white;
+    border-bottom: 1px solid var(--border);
+    padding: 18px 32px;
+    display: flex; justify-content: space-between; align-items: center;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .main-bar h2 { margin: 0; font-size: 22px; font-weight: 700; color: var(--text); }
+  .main-bar .sub { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+  .main-content { padding: 28px 32px; }
+
+  /* ─── Cards ─── */
+  .stat-card {
+    padding: 20px; border-radius: 12px; background: white;
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    transition: all .2s;
+  }
+  .stat-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06); transform: translateY(-1px); }
+  .stat-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .stat-icon.indigo { background: #e0e7ff; color: #4338ca; }
+  .stat-icon.slate  { background: #f1f5f9; color: #475569; }
+  .stat-icon.green  { background: #dcfce7; color: #15803d; }
+  .stat-icon.orange { background: #ffedd5; color: #c2410c; }
+  .stat-icon.red    { background: #fee2e2; color: #b91c1c; }
+  .stat-icon.blue   { background: #dbeafe; color: #1d4ed8; }
+  .stat-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+  .stat-value { font-size: 28px; font-weight: 800; color: var(--text); }
+
+  .panel {
+    background: white;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    overflow: hidden;
+  }
+  .panel-pad { padding: 20px 24px; }
+
+  /* ─── Login ─── */
+  .login-wrap {
+    height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #eef2ff 0%, #faf5ff 50%, #fef3f2 100%);
+    padding: 16px;
+  }
+  .login-card {
+    width: 100%; max-width: 420px;
+    background: white;
+    border-radius: 16px;
+    padding: 36px;
+    box-shadow: 0 20px 60px -10px rgba(0,0,0,0.08);
+  }
+  .login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+
+  /* User table avatar */
+  .user-cell { display: flex; align-items: center; gap: 12px; }
+  .user-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--brand), #a855f7);
+    color: white; font-weight: 700; font-size: 12px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+
+  /* Dialog tweaks */
+  .el-dialog { border-radius: 14px; }
+  .el-dialog__header { padding: 22px 24px 16px; margin-right: 0; border-bottom: 1px solid var(--border); }
+  .el-dialog__title { font-size: 17px; font-weight: 700; }
+  .el-dialog__body { padding: 22px 24px; }
+  .el-dialog__footer { padding: 16px 24px; border-top: 1px solid var(--border); }
+
+  /* Misc */
+  .gradient-card {
+    background: linear-gradient(135deg, var(--brand) 0%, #a855f7 100%);
+    color: white; border-radius: 12px; padding: 18px 20px;
+  }
+  .gradient-card .label { color: rgba(255,255,255,0.8); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .gradient-card .value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+
+  .info-box {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .info-box ul { margin: 6px 0 0; padding-left: 18px; }
+  .info-box ul li { margin-top: 4px; }
+  .info-box b { color: var(--text); }
+
+  .credential-box {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .credential-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .credential-value { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-family: "JetBrains Mono", monospace; font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<div id="app" v-cloak>
+
+  <!-- ═══════════════════════ LOGIN ═══════════════════════ -->
+  <div v-if="view === 'login'" class="login-wrap">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="sb-logo"><el-icon :size="20"><Star /></el-icon></div>
+        <div>
+          <div class="sb-title" style="color:#0f172a">8864k Studio</div>
+          <div class="sb-sub">管理员控制台</div>
+        </div>
+      </div>
+      <h2 style="margin:0 0 4px; font-size:24px; font-weight:700;">登录</h2>
+      <p style="margin:0 0 24px; color:var(--text-muted); font-size:14px;">仅限管理员账号</p>
+      <el-form @submit.prevent="login" label-position="top" :model="loginForm">
+        <el-form-item label="邮箱">
+          <el-input v-model="loginForm.email" type="email" placeholder="admin@8864k.com" autocomplete="username" autofocus />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="loginForm.password" type="password" placeholder="••••••••" show-password autocomplete="current-password" />
+        </el-form-item>
+        <el-button native-type="submit" type="primary" :loading="loginLoading" size="large" style="width:100%">登录</el-button>
+      </el-form>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ APP ═══════════════════════ -->
+  <div v-else class="layout">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="sb-header">
+        <div class="sb-logo"><el-icon :size="18"><Star /></el-icon></div>
+        <div>
+          <div class="sb-title">8864k Studio</div>
+          <div class="sb-sub">Admin</div>
+        </div>
+      </div>
+      <nav class="sb-nav">
+        <div :class="['sb-nav-item', tab==='stats' && 'active']" @click="switchTab('stats')">
+          <el-icon><DataBoard /></el-icon> 概览
+        </div>
+        <div :class="['sb-nav-item', tab==='users' && 'active']" @click="switchTab('users')">
+          <el-icon><User /></el-icon> 用户
+        </div>
+        <div :class="['sb-nav-item', tab==='reconcile' && 'active']" @click="switchTab('reconcile')">
+          <el-icon><Money /></el-icon> 对账
+        </div>
+        <div :class="['sb-nav-item', tab==='tasks' && 'active']" @click="switchTab('tasks')">
+          <el-icon><List /></el-icon> 任务流水
+        </div>
+      </nav>
+      <div class="sb-foot">
+        <div class="sb-user">
+          <div class="sb-avatar">{{ initials(me?.email) }}</div>
+          <div class="sb-user-info">
+            <div class="sb-user-name">{{ me?.email }}</div>
+            <div class="sb-user-role">Administrator</div>
+          </div>
+          <el-tooltip content="退出登录" placement="top">
+            <div class="sb-logout" @click="logout"><el-icon :size="16"><SwitchButton /></el-icon></div>
+          </el-tooltip>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+
+      <!-- ── STATS ── -->
+      <template v-if="tab === 'stats'">
+        <div class="main-bar">
+          <div>
+            <h2>运营概览</h2>
+            <div class="sub">实时数据，每次进入页面刷新</div>
+          </div>
+          <el-button @click="loadStats"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <el-row :gutter="16" v-loading="loading.stats">
+            <el-col v-for="(c,i) in statCards" :key="i" :xs="24" :sm="12" :md="8" style="margin-bottom:16px">
+              <div class="stat-card">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                  <div>
+                    <div class="stat-label">{{ c.label }}</div>
+                    <div class="stat-value">{{ c.value }}</div>
+                  </div>
+                  <div :class="'stat-icon ' + c.color"><el-icon :size="20"><component :is="c.icon" /></el-icon></div>
+                </div>
+              </div>
+            </el-col>
+          </el-row>
+          <div class="panel panel-pad" style="margin-top:8px">
+            <h3 style="margin:0 0 10px; font-size:15px; display:flex; align-items:center; gap:8px;">
+              <el-icon><InfoFilled /></el-icon> 指标说明
+            </h3>
+            <div class="info-box" style="border:none; padding:0; background:none;">
+              <ul>
+                <li><b>已收入</b>：客户在你这边消费总额（含 30% markup）</li>
+                <li><b>BytePlus 成本</b>：你账号被 BytePlus 真实扣的钱</li>
+                <li><b>毛利</b> = 已收入 − BytePlus 成本</li>
+                <li><b>冻结中</b>：任务还没结算的预扣款，终态后退多扣或转入"已收入"</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── USERS ── -->
+      <template v-if="tab === 'users'">
+        <div class="main-bar">
+          <div>
+            <h2>用户管理</h2>
+            <div class="sub">点击用户行可编辑 / 充值 / 看任务历史</div>
+          </div>
+          <el-button type="primary" @click="openNewUser"><el-icon><Plus /></el-icon> 开新账号</el-button>
+        </div>
+        <div class="main-content">
+          <div class="panel">
+            <el-table :data="users" v-loading="loading.users" style="width:100%" stripe @row-click="openEditUser">
+              <el-table-column label="用户" min-width="220">
+                <template #default="{ row }">
+                  <div class="user-cell">
+                    <div class="user-avatar">{{ initials(row.email) }}</div>
+                    <div style="min-width:0">
+                      <div style="font-weight:600;">{{ row.email || row.id }}</div>
+                      <div v-if="row.note" style="font-size:12px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ row.note }}</div>
+                    </div>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="余额" align="right" width="120">
+                <template #default="{ row }"><span class="mono" style="font-weight:600;">${{ fmt(row.balance_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="BytePlus key" min-width="240">
+                <template #default="{ row }">
+                  <el-tag v-if="row.has_byteplus_key" type="success" size="small" effect="light">
+                    已配 {{ row.byteplus_account_label ? '· ' + row.byteplus_account_label : '' }}
+                  </el-tag>
+                  <el-tag v-else type="warning" size="small" effect="light">未配（用全局）</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="160">
+                <template #default="{ row }">
+                  <el-tag v-if="row.is_admin" size="small" effect="dark" style="margin-right:6px; background:#a855f7; border-color:#a855f7;">admin</el-tag>
+                  <el-tag v-if="row.is_active" type="success" size="small" effect="light">启用</el-tag>
+                  <el-tag v-else type="info" size="small" effect="light">禁用</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column align="right" width="80">
+                <template #default><el-icon style="color:var(--text-muted)"><ArrowRight /></el-icon></template>
+              </el-table-column>
+              <template #empty>
+                <div style="padding:48px; color:var(--text-muted);">还没有用户。点右上角"开新账号"</div>
+              </template>
+            </el-table>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── RECONCILE ── -->
+      <template v-if="tab === 'reconcile'">
+        <div class="main-bar">
+          <div>
+            <h2>BytePlus 对账</h2>
+            <div class="sub">每个用户对应一把 BytePlus key，与 BytePlus 控制台 1:1 比对</div>
+          </div>
+          <el-button @click="loadReconcile"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <div class="panel">
+            <el-table :data="reconcile" v-loading="loading.reconcile" style="width:100%" stripe>
+              <el-table-column label="用户" min-width="200">
+                <template #default="{ row }">
+                  <div class="user-cell">
+                    <div class="user-avatar">{{ initials(row.email) }}</div>
+                    <span style="font-weight:600;">{{ row.email || row.id }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="BP 标签" min-width="180">
+                <template #default="{ row }"><span style="color:var(--text-muted);">{{ row.byteplus_account_label || (row.has_key ? '(已配但未标)' : '—') }}</span></template>
+              </el-table-column>
+              <el-table-column label="任务数" prop="tasks" align="right" width="90" />
+              <el-table-column label="tokens" align="right" width="120">
+                <template #default="{ row }"><span class="mono">{{ row.tokens.toLocaleString() }}</span></template>
+              </el-table-column>
+              <el-table-column label="BytePlus 成本" align="right" width="130">
+                <template #default="{ row }"><span class="mono" style="color:#c2410c">${{ fmt(row.byteplus_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="已收入" align="right" width="120">
+                <template #default="{ row }"><span class="mono" style="color:#15803d">${{ fmt(row.charged_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="毛利" align="right" width="120">
+                <template #default="{ row }">
+                  <span class="mono" :style="{color: (row.charged_usd - row.byteplus_usd) >= 0 ? '#15803d' : '#dc2626'}">
+                    ${{ fmt(row.charged_usd - row.byteplus_usd) }}
+                  </span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── TASKS ── -->
+      <template v-if="tab === 'tasks'">
+        <div class="main-bar">
+          <div>
+            <h2>任务流水</h2>
+            <div class="sub">所有用户最近 100 个任务</div>
+          </div>
+          <el-button @click="loadTasks"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <div class="panel">
+            <el-table :data="tasks" v-loading="loading.tasks" style="width:100%" stripe>
+              <el-table-column label="时间" width="160">
+                <template #default="{ row }"><span style="font-size:12px; color:var(--text-muted)">{{ fmtTs(row.created_at) }}</span></template>
+              </el-table-column>
+              <el-table-column label="用户" min-width="180" prop="user_email" />
+              <el-table-column label="模型 / 规格" min-width="180">
+                <template #default="{ row }">
+                  <div style="font-weight:600">{{ row.client_model }}</div>
+                  <div style="font-size:12px; color:var(--text-muted)">{{ row.resolution || '-' }} · {{ row.duration || '-' }}s</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="Prompt" min-width="200" show-overflow-tooltip prop="prompt_text" />
+              <el-table-column label="tokens" align="right" width="110">
+                <template #default="{ row }"><span class="mono">{{ row.completion_tokens ? row.completion_tokens.toLocaleString() : '-' }}</span></template>
+              </el-table-column>
+              <el-table-column label="BP $" align="right" width="100">
+                <template #default="{ row }"><span class="mono" style="color:#c2410c">{{ fmt(row.upstream_actual_cost_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="收费 $" align="right" width="100">
+                <template #default="{ row }"><span class="mono" style="color:#15803d">{{ fmt(row.actual_cost_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="状态" width="120">
+                <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small" effect="light">{{ statusLabel(row.status) }}</el-tag></template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </template>
+    </main>
+  </div>
+
+  <!-- ═══════════════════ Dialog: New user ═══════════════════ -->
+  <el-dialog v-model="dialogs.newUser" title="开新客户账号" width="560px" :close-on-click-modal="false">
+    <el-form ref="newUserFormRef" :model="newUserForm" label-position="top">
+      <el-form-item label="邮箱" required>
+        <el-input v-model="newUserForm.email" type="email" placeholder="customer@example.com" />
+      </el-form-item>
+      <el-row :gutter="12">
+        <el-col :span="12">
+          <el-form-item label="初始余额 (USD)">
+            <el-input-number v-model="newUserForm.balance_usd" :precision="2" :min="0" controls-position="right" style="width:100%" />
+          </el-form-item>
+        </el-col>
+        <el-col :span="12">
+          <el-form-item label="初始密码">
+            <el-input v-model="newUserForm.password" placeholder="留空自动生成" />
+          </el-form-item>
+        </el-col>
+      </el-row>
+      <el-form-item label="BytePlus API Key">
+        <el-input v-model="newUserForm.byteplus_api_key" placeholder="ark-xxxxxxxxxxxx (从 BytePlus 控制台单独申请)" />
+        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+          每客户一把独立 key，方便对账。留空则用全局 fallback key。
+        </div>
+      </el-form-item>
+      <el-form-item label="客户 API Key">
+        <el-input v-model="newUserForm.api_key" placeholder="留空自动生成 sk-xxxx (建议跟 BytePlus key 命名对齐, 如 sk-alice-001)" />
+        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+          客户调用 API 用的 key (sk-xxx)。<b>建议跟上方 BytePlus key 用相同后缀</b>，
+          例: BytePlus key <code>ark-customer1</code> 配 客户 key <code>sk-customer1</code>，对账查表时一眼对上。
+        </div>
+      </el-form-item>
+      <el-form-item label="BytePlus 标签 (内部备注)">
+        <el-input v-model="newUserForm.byteplus_account_label" placeholder="例: 客户1 - 阿里巴巴技术团队" />
+      </el-form-item>
+      <el-form-item label="备注">
+        <el-input v-model="newUserForm.note" type="textarea" :rows="2" placeholder="渠道来源 / 合同编号..." />
+      </el-form-item>
+      <el-checkbox v-model="newUserForm.is_admin">授予管理员权限</el-checkbox>
+    </el-form>
+    <template #footer>
+      <el-button @click="dialogs.newUser = false">取消</el-button>
+      <el-button type="primary" :loading="loading.newUser" @click="createUser">
+        <el-icon><Check /></el-icon> 创建账号
+      </el-button>
+    </template>
+  </el-dialog>
+
+  <!-- ═══════════════════ Dialog: User created ═══════════════════ -->
+  <el-dialog v-model="dialogs.created" title="账号创建成功" width="500px">
+    <div v-if="created" style="display:flex; flex-direction:column; gap:14px">
+      <div style="font-size:14px; color:var(--text-muted)">
+        用户 <b style="color:var(--text)">{{ created.email }}</b> 已创建。请把以下信息发给客户：
+      </div>
+      <div class="credential-box">
+        <div style="display:flex; flex-direction:column; gap:14px">
+          <div>
+            <div class="credential-label">登录页 URL</div>
+            <div class="credential-value">https://{{ host }}/app/</div>
+          </div>
+          <div>
+            <div class="credential-label">邮箱</div>
+            <div class="credential-value">{{ created.email }}</div>
+          </div>
+          <div v-if="created.temporary_password">
+            <div class="credential-label">临时密码 (登录用)</div>
+            <div class="credential-value">{{ created.temporary_password }}</div>
+          </div>
+          <div>
+            <div class="credential-label">API Key (开发者集成)</div>
+            <div class="credential-value">{{ created.api_key }}</div>
+          </div>
+        </div>
+      </div>
+      <el-alert type="warning" :closable="false" show-icon>
+        <b>这是唯一一次显示密码的机会</b>。关闭后无法再次查看，需要的话只能用 admin 重置。
+      </el-alert>
+    </div>
+    <template #footer>
+      <el-button type="primary" @click="dialogs.created = false">知道了</el-button>
+    </template>
+  </el-dialog>
+
+  <!-- ═══════════════════ Dialog: Edit user ═══════════════════ -->
+  <el-dialog v-model="dialogs.editUser" :title="editing ? (editing.email || editing.id) : '编辑用户'" width="780px" :close-on-click-modal="false">
+    <div v-if="editing">
+      <div style="font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--text-muted); margin:-8px 0 16px">
+        {{ editing.id }} · API key: {{ editing.api_key.slice(0,12) }}…{{ editing.api_key.slice(-6) }}
+      </div>
+
+      <el-row :gutter="12" style="margin-bottom:18px">
+        <el-col :span="8"><div class="gradient-card"><div class="label">余额</div><div class="value">${{ fmt(editing.balance_usd) }}</div></div></el-col>
+        <el-col :span="8"><div class="stat-card"><div class="stat-label">累计 BP 成本</div><div class="stat-value" style="color:#c2410c; font-size:22px">${{ fmt(editing.lifetime_stats.total_byteplus_usd) }}</div></div></el-col>
+        <el-col :span="8"><div class="stat-card"><div class="stat-label">累计已收入</div><div class="stat-value" style="color:#15803d; font-size:22px">${{ fmt(editing.lifetime_stats.total_charged_usd) }}</div></div></el-col>
+      </el-row>
+
+      <el-form :model="editForm" label-position="top">
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="余额 (USD)">
+              <el-input-number v-model="editForm.balance_usd" :precision="4" controls-position="right" style="width:100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="快速充值">
+              <el-input v-model.number="topupAmount" type="number" placeholder="10.00">
+                <template #append><el-button @click="doTopup" type="primary"><el-icon><Plus /></el-icon> 充值</el-button></template>
+              </el-input>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="BytePlus API Key (留空不改)">
+          <el-input v-model="editForm.byteplus_api_key" :placeholder="editing.byteplus_api_key ? `当前: ${editing.byteplus_api_key} (留空保持)` : '未设置'" />
+        </el-form-item>
+        <el-form-item label="客户 API Key (留空不改)">
+          <el-input v-model="editForm.api_key" :placeholder="`当前: ${editing.api_key.slice(0,12)}…${editing.api_key.slice(-6)} (留空保持)`" />
+          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+            ⚠️ 修改 key 会让客户原来的 key 立刻失效，需要把新 key 重新发给客户
+          </div>
+        </el-form-item>
+        <el-form-item label="BytePlus 标签">
+          <el-input v-model="editForm.byteplus_account_label" />
+        </el-form-item>
+        <el-form-item label="新密码 (留空不改)">
+          <el-input v-model="editForm.new_password" placeholder="••••••••" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="editForm.note" type="textarea" :rows="2" />
+        </el-form-item>
+        <el-checkbox v-model="editForm.is_active">账号已启用</el-checkbox>
+      </el-form>
+
+      <h4 style="margin:24px 0 12px; font-size:14px; display:flex; align-items:center; gap:8px;">
+        <el-icon><Clock /></el-icon> 最近 20 个任务
+      </h4>
+      <el-table :data="editing.recent_tasks" size="small" style="width:100%" empty-text="暂无任务">
+        <el-table-column label="时间" width="135">
+          <template #default="{ row }"><span style="font-size:11px; color:var(--text-muted)">{{ fmtTs(row.created_at) }}</span></template>
+        </el-table-column>
+        <el-table-column label="模型" prop="client_model" width="120" />
+        <el-table-column label="Prompt" min-width="160" show-overflow-tooltip prop="prompt_text" />
+        <el-table-column label="tokens" align="right" width="80">
+          <template #default="{ row }"><span class="mono">{{ row.completion_tokens ? row.completion_tokens.toLocaleString() : '-' }}</span></template>
+        </el-table-column>
+        <el-table-column label="BP $" align="right" width="80">
+          <template #default="{ row }"><span class="mono" style="color:#c2410c">{{ fmt(row.upstream_actual_cost_usd) }}</span></template>
+        </el-table-column>
+        <el-table-column label="收费 $" align="right" width="80">
+          <template #default="{ row }"><span class="mono" style="color:#15803d">{{ fmt(row.actual_cost_usd) }}</span></template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small" effect="light">{{ statusLabel(row.status) }}</el-tag></template>
+        </el-table-column>
+      </el-table>
+    </div>
+    <template #footer>
+      <el-button @click="dialogs.editUser = false">关闭</el-button>
+      <el-button type="primary" :loading="loading.saveUser" @click="saveEditUser">
+        <el-icon><Document /></el-icon> 保存
+      </el-button>
+    </template>
+  </el-dialog>
+
+</div>
+
+<script src="https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/element-plus@2.8.4/dist/index.full.min.js"></script>
+<script src="https://unpkg.com/@element-plus/icons-vue@2.3.1/dist/index.iife.min.js"></script>
+<script>
+const { createApp, ref, reactive, computed } = Vue;
+const { ElMessage, ElMessageBox } = ElementPlus;
+
+const App = {
+  data() {
+    return {
+      view: "loading",  // loading | login | app
+      tab: "stats",
+      me: null,
+      host: location.host,
+
+      loginForm: { email: "", password: "" },
+      loginLoading: false,
+
+      stats: null,
+      users: [],
+      reconcile: [],
+      tasks: [],
+      loading: { stats: false, users: false, reconcile: false, tasks: false, newUser: false, saveUser: false },
+
+      dialogs: { newUser: false, editUser: false, created: false },
+      newUserForm: this.emptyNewUser(),
+      created: null,
+
+      editing: null,
+      editForm: {},
+      topupAmount: null,
+    };
+  },
+  computed: {
+    statCards() {
+      const s = this.stats || {};
+      return [
+        { label: "活跃用户", value: s.active_users ?? "—", icon: "User", color: "indigo" },
+        { label: "总任务数", value: s.total_tasks ?? "—", icon: "Histogram", color: "slate" },
+        { label: "已收入 (USD)", value: this.fmtUsd(s.revenue_settled_usd), icon: "Money", color: "green" },
+        { label: "BytePlus 成本", value: this.fmtUsd(s.upstream_cost_usd), icon: "Coin", color: "orange" },
+        { label: "毛利 (USD)", value: this.fmtUsd(s.gross_profit_usd), icon: "TrendCharts", color: (s.gross_profit_usd ?? 0) >= 0 ? "green" : "red" },
+        { label: "冻结中 (USD)", value: this.fmtUsd(s.held_usd), icon: "Lock", color: "blue" },
+      ];
+    },
+  },
+  methods: {
+    emptyNewUser() { return { email: "", password: "", balance_usd: 0, api_key: "", byteplus_api_key: "", byteplus_account_label: "", note: "", is_admin: false }; },
+    async api(path, opts={}) {
+      const r = await fetch(path, { credentials: "include", headers: {"Content-Type": "application/json"}, ...opts });
+      let body; try { body = await r.json(); } catch { body = {}; }
+      if (!r.ok) throw { status: r.status, body };
+      return body;
+    },
+    errMsg(e) { return e.body?.error?.message || e.body?.detail?.error?.message || e.body?.detail || "请求失败"; },
+    fmt(n, d=4) { return n == null ? "-" : Number(n).toFixed(d); },
+    fmtUsd(n) { return n == null ? "$—" : "$" + Number(n).toFixed(4); },
+    fmtTs(ts) { return ts ? new Date(ts*1000).toLocaleString("zh-CN", { hour12: false }) : "-"; },
+    initials(e) { return (e || "?").split("@")[0].slice(0, 2).toUpperCase(); },
+    statusType(s) {
+      return ({ queued: "info", running: "primary", succeeded: "success", failed: "danger", cancelled: "warning", expired: "warning" })[s] || "info";
+    },
+    statusLabel(s) {
+      return ({ queued: "排队中", running: "生成中", succeeded: "已完成", failed: "失败", cancelled: "已取消", expired: "已过期" })[s] || s;
+    },
+
+    // ─── Auth ───
+    async login() {
+      this.loginLoading = true;
+      try {
+        const u = await this.api("/auth/login", { method: "POST", body: JSON.stringify(this.loginForm) });
+        if (!u.is_admin) { ElMessage.error("此账号不是管理员"); return; }
+        this.me = u;
+        this.view = "app";
+        this.switchTab("stats");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loginLoading = false; }
+    },
+    async logout() {
+      await this.api("/auth/logout", { method: "POST" });
+      location.reload();
+    },
+    async checkAuth() {
+      try {
+        const u = await this.api("/auth/me");
+        if (!u.is_admin) { this.view = "login"; return; }
+        this.me = u; this.view = "app"; this.switchTab("stats");
+      } catch { this.view = "login"; }
+    },
+
+    // ─── Tabs ───
+    switchTab(name) {
+      this.tab = name;
+      if (name === "stats") this.loadStats();
+      if (name === "users") this.loadUsers();
+      if (name === "reconcile") this.loadReconcile();
+      if (name === "tasks") this.loadTasks();
+    },
+
+    // ─── Loaders ───
+    async loadStats() {
+      this.loading.stats = true;
+      try { this.stats = await this.api("/admin/stats"); }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.stats = false; }
+    },
+    async loadUsers() {
+      this.loading.users = true;
+      try { this.users = (await this.api("/admin/users")).data; }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.users = false; }
+    },
+    async loadReconcile() {
+      this.loading.reconcile = true;
+      try { this.reconcile = (await this.api("/admin/reconcile")).data; }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.reconcile = false; }
+    },
+    async loadTasks() {
+      this.loading.tasks = true;
+      try { this.tasks = (await this.api("/admin/tasks?limit=100")).data; }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.tasks = false; }
+    },
+
+    // ─── New user ───
+    openNewUser() {
+      this.newUserForm = this.emptyNewUser();
+      this.dialogs.newUser = true;
+    },
+    async createUser() {
+      if (!this.newUserForm.email) { ElMessage.error("邮箱必填"); return; }
+      this.loading.newUser = true;
+      try {
+        const obj = { ...this.newUserForm };
+        // 把空字符串变成 null，让后端 API 不下发该字段
+        ["password","api_key","byteplus_api_key","byteplus_account_label","note"].forEach(k => { if (!obj[k]) obj[k] = null; });
+        const r = await this.api("/admin/users", { method: "POST", body: JSON.stringify(obj) });
+        this.dialogs.newUser = false;
+        this.created = r;
+        this.dialogs.created = true;
+        this.loadUsers();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.newUser = false; }
+    },
+
+    // ─── Edit user ───
+    async openEditUser(row) {
+      try {
+        const u = await this.api(`/admin/users/${row.id}`);
+        this.editing = u;
+        this.editForm = {
+          balance_usd: u.balance_usd,
+          api_key: "",
+          byteplus_api_key: "",
+          byteplus_account_label: u.byteplus_account_label || "",
+          new_password: "",
+          note: u.note || "",
+          is_active: !!u.is_active,
+        };
+        this.topupAmount = null;
+        this.dialogs.editUser = true;
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+    async doTopup() {
+      const amt = Number(this.topupAmount);
+      if (!amt || amt <= 0) { ElMessage.warning("请输入大于 0 的金额"); return; }
+      try {
+        await ElMessageBox.confirm(`确认给 ${this.editing.email} 充值 $${amt} ?`, "确认充值", { type: "info" });
+      } catch { return; }
+      try {
+        await this.api(`/admin/users/${this.editing.id}/topup`, { method: "POST", body: JSON.stringify({ amount_usd: amt }) });
+        ElMessage.success(`充值成功 +$${amt}`);
+        await this.openEditUser(this.editing);
+        await this.loadUsers();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+    async saveEditUser() {
+      this.loading.saveUser = true;
+      try {
+        const obj = {
+          balance_usd: this.editForm.balance_usd,
+          byteplus_account_label: this.editForm.byteplus_account_label || null,
+          note: this.editForm.note || null,
+          is_active: this.editForm.is_active,
+        };
+        if (this.editForm.byteplus_api_key) obj.byteplus_api_key = this.editForm.byteplus_api_key;
+        if (this.editForm.api_key)          obj.api_key          = this.editForm.api_key;
+        if (this.editForm.new_password)     obj.new_password     = this.editForm.new_password;
+        await this.api(`/admin/users/${this.editing.id}`, { method: "PATCH", body: JSON.stringify(obj) });
+        ElMessage.success("已保存");
+        this.dialogs.editUser = false;
+        this.loadUsers();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.saveUser = false; }
+    },
+  },
+  async mounted() {
+    await this.checkAuth();
+  },
+};
+
+const app = createApp(App);
+app.use(ElementPlus);
+for (const [name, comp] of Object.entries(ElementPlusIconsVue)) {
+  app.component(name, comp);
+}
+app.mount("#app");
+</script>
+
+<style>
+[v-cloak] { display: none; }
+</style>
+
+</body>
+</html>

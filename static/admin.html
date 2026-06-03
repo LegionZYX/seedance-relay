@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>8864k Studio · 管理后台</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="https://unpkg.com/element-plus@2.8.4/dist/index.css" />
+<style>
+  :root {
+    --brand: #6366f1;
+    --brand-dark: #4f46e5;
+    --bg: #f5f7fb;
+    --sidebar-bg: #0f172a;
+    --sidebar-border: #1e293b;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: Inter, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  code, .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+  /* Element Plus 主色覆盖 */
+  .el-button--primary {
+    --el-button-bg-color: var(--brand);
+    --el-button-border-color: var(--brand);
+    --el-button-hover-bg-color: var(--brand-dark);
+    --el-button-hover-border-color: var(--brand-dark);
+    --el-button-active-bg-color: var(--brand-dark);
+    --el-button-active-border-color: var(--brand-dark);
+  }
+  .el-input__wrapper.is-focus, .el-textarea__inner:focus {
+    box-shadow: 0 0 0 1px var(--brand) inset !important;
+  }
+  .el-radio-button__original-radio:checked+.el-radio-button__inner {
+    background: var(--brand);
+    border-color: var(--brand);
+    box-shadow: -1px 0 0 0 var(--brand);
+  }
+  .el-checkbox__input.is-checked .el-checkbox__inner,
+  .el-checkbox__input.is-indeterminate .el-checkbox__inner {
+    background-color: var(--brand);
+    border-color: var(--brand);
+  }
+  .el-checkbox__input.is-checked + .el-checkbox__label,
+  .el-radio__input.is-checked + .el-radio__label { color: var(--brand); }
+  .el-switch.is-checked .el-switch__core { background: var(--brand); border-color: var(--brand); }
+  .el-link { color: var(--brand); }
+
+  /* ─── Layout ─── */
+  .layout { display: flex; height: 100vh; }
+  .sidebar {
+    width: 240px;
+    background: var(--sidebar-bg);
+    color: #cbd5e1;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  .sb-header { padding: 22px 20px; border-bottom: 1px solid var(--sidebar-border); display: flex; align-items: center; gap: 12px; }
+  .sb-logo {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--brand), #a855f7);
+    display: flex; align-items: center; justify-content: center;
+    color: white;
+    box-shadow: 0 4px 12px rgba(99,102,241,0.4);
+  }
+  .sb-title { font-weight: 700; color: white; line-height: 1.2; }
+  .sb-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+
+  .sb-nav { flex: 1; padding: 12px; overflow: auto; }
+  .sb-nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    color: #cbd5e1;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .15s ease;
+    margin-bottom: 2px;
+  }
+  .sb-nav-item:hover { background: rgba(255,255,255,0.04); color: white; }
+  .sb-nav-item.active {
+    background: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(168,85,247,0.12));
+    color: white;
+    box-shadow: inset 0 0 0 1px rgba(99,102,241,0.25);
+  }
+  .sb-nav-item .el-icon { font-size: 17px; }
+
+  .sb-foot { padding: 14px; border-top: 1px solid var(--sidebar-border); }
+  .sb-user { display: flex; align-items: center; gap: 10px; padding: 8px 4px; }
+  .sb-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--brand), #a855f7);
+    color: white; font-weight: 700; font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .sb-user-info { flex: 1; min-width: 0; }
+  .sb-user-name { color: white; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sb-user-role { font-size: 11px; color: #64748b; }
+  .sb-logout { color: #94a3b8; cursor: pointer; padding: 6px; border-radius: 6px; transition: all .15s; }
+  .sb-logout:hover { background: rgba(255,255,255,0.05); color: white; }
+
+  /* ─── Main ─── */
+  .main { flex: 1; overflow: auto; }
+  .main-bar {
+    background: white;
+    border-bottom: 1px solid var(--border);
+    padding: 18px 32px;
+    display: flex; justify-content: space-between; align-items: center;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .main-bar h2 { margin: 0; font-size: 22px; font-weight: 700; color: var(--text); }
+  .main-bar .sub { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+  .main-content { padding: 28px 32px; }
+
+  /* ─── Cards ─── */
+  .stat-card {
+    padding: 20px; border-radius: 12px; background: white;
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    transition: all .2s;
+  }
+  .stat-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06); transform: translateY(-1px); }
+  .stat-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+  }
+  .stat-icon.indigo { background: #e0e7ff; color: #4338ca; }
+  .stat-icon.slate  { background: #f1f5f9; color: #475569; }
+  .stat-icon.green  { background: #dcfce7; color: #15803d; }
+  .stat-icon.orange { background: #ffedd5; color: #c2410c; }
+  .stat-icon.red    { background: #fee2e2; color: #b91c1c; }
+  .stat-icon.blue   { background: #dbeafe; color: #1d4ed8; }
+  .stat-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+  .stat-value { font-size: 28px; font-weight: 800; color: var(--text); }
+
+  .panel {
+    background: white;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    overflow: hidden;
+  }
+  .panel-pad { padding: 20px 24px; }
+
+  /* ─── Login ─── */
+  .login-wrap {
+    height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #eef2ff 0%, #faf5ff 50%, #fef3f2 100%);
+    padding: 16px;
+  }
+  .login-card {
+    width: 100%; max-width: 420px;
+    background: white;
+    border-radius: 16px;
+    padding: 36px;
+    box-shadow: 0 20px 60px -10px rgba(0,0,0,0.08);
+  }
+  .login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+
+  /* Key cell */
+  .key-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #f1f5f9;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    max-width: 100%;
+  }
+  .key-text {
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 220px;
+  }
+  .key-action {
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color .15s;
+    font-size: 14px;
+  }
+  .key-action:hover { color: var(--brand); }
+
+  /* User table avatar */
+  .user-cell { display: flex; align-items: center; gap: 12px; }
+  .user-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--brand), #a855f7);
+    color: white; font-weight: 700; font-size: 12px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+
+  /* Dialog tweaks */
+  .el-dialog { border-radius: 14px; }
+  .el-dialog__header { padding: 22px 24px 16px; margin-right: 0; border-bottom: 1px solid var(--border); }
+  .el-dialog__title { font-size: 17px; font-weight: 700; }
+  .el-dialog__body { padding: 22px 24px; }
+  .el-dialog__footer { padding: 16px 24px; border-top: 1px solid var(--border); }
+
+  /* Misc */
+  .gradient-card {
+    background: linear-gradient(135deg, var(--brand) 0%, #a855f7 100%);
+    color: white; border-radius: 12px; padding: 18px 20px;
+  }
+  .gradient-card .label { color: rgba(255,255,255,0.8); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .gradient-card .value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+
+  .info-box {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .info-box ul { margin: 6px 0 0; padding-left: 18px; }
+  .info-box ul li { margin-top: 4px; }
+  .info-box b { color: var(--text); }
+
+  .credential-box {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .credential-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .credential-value { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-family: "JetBrains Mono", monospace; font-size: 12px; word-break: break-all; }
+
+  .media-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .media-thumb {
+    width: 52px; height: 52px; border-radius: 8px;
+    background: #f1f5f9; border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; flex-shrink: 0; color: var(--text-muted);
+  }
+  .media-thumb img, .media-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .media-meta { min-width: 0; }
+  .media-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .media-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+  .filter-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .upload-statbar { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .upload-stat { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .upload-stat .label { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .upload-stat .value { font-size: 20px; font-weight: 800; margin-top: 4px; }
+
+  /* Markdown 渲染样式 */
+  .markdown-body { line-height: 1.7; color: #1f2937; font-size: 14.5px; }
+  .markdown-body h1 { font-size: 2em; font-weight: 800; margin: 0 0 0.4em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+  .markdown-body h2 { font-size: 1.5em; font-weight: 700; margin: 1.8em 0 0.6em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+  .markdown-body h3 { font-size: 1.2em; font-weight: 700; margin: 1.5em 0 0.5em; }
+  .markdown-body h4 { font-size: 1.05em; font-weight: 700; margin: 1.2em 0 0.4em; }
+  .markdown-body p  { margin: 0.7em 0; }
+  .markdown-body a  { color: var(--brand); text-decoration: none; }
+  .markdown-body a:hover { text-decoration: underline; }
+  .markdown-body ul, .markdown-body ol { padding-left: 1.6em; margin: 0.6em 0; }
+  .markdown-body li { margin: 0.2em 0; }
+  .markdown-body code { background: #f1f5f9; color: #be185d; padding: 0.15em 0.4em; border-radius: 4px; font-family: "JetBrains Mono", monospace; font-size: 0.88em; }
+  .markdown-body pre  { background: #0f172a; color: #e2e8f0; padding: 16px 20px; border-radius: 10px; overflow-x: auto; margin: 1em 0; font-size: 13px; line-height: 1.55; }
+  .markdown-body pre code { background: none; color: inherit; padding: 0; }
+  .markdown-body blockquote { border-left: 4px solid var(--brand); margin: 1em 0; padding: 0.1em 1em; color: #475569; background: #f8fafc; border-radius: 0 6px 6px 0; }
+  .markdown-body table { border-collapse: collapse; margin: 1em 0; width: 100%; font-size: 13.5px; }
+  .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+  .markdown-body th { background: #f8fafc; font-weight: 600; }
+  .markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 2em 0; }
+  .markdown-body img { max-width: 100%; }
+</style>
+</head>
+<body>
+
+<div id="app" v-cloak>
+
+  <!-- ═══════════════════════ LOGIN ═══════════════════════ -->
+  <div v-if="view === 'login'" class="login-wrap">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="sb-logo"><el-icon :size="20"><Star /></el-icon></div>
+        <div>
+          <div class="sb-title" style="color:#0f172a">8864k Studio</div>
+          <div class="sb-sub">管理员控制台</div>
+        </div>
+      </div>
+      <h2 style="margin:0 0 4px; font-size:24px; font-weight:700;">登录</h2>
+      <p style="margin:0 0 24px; color:var(--text-muted); font-size:14px;">仅限管理员账号</p>
+      <el-form @submit.prevent="login" label-position="top" :model="loginForm">
+        <el-form-item label="邮箱">
+          <el-input v-model="loginForm.email" type="email" placeholder="admin@8864k.com" autocomplete="username" autofocus />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="loginForm.password" type="password" placeholder="••••••••" show-password autocomplete="current-password" />
+        </el-form-item>
+        <el-button native-type="submit" type="primary" :loading="loginLoading" size="large" style="width:100%">登录</el-button>
+      </el-form>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ APP ═══════════════════════ -->
+  <div v-else class="layout">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="sb-header">
+        <div class="sb-logo"><el-icon :size="18"><Star /></el-icon></div>
+        <div>
+          <div class="sb-title">8864k Studio</div>
+          <div class="sb-sub">Admin</div>
+        </div>
+      </div>
+      <nav class="sb-nav">
+        <div :class="['sb-nav-item', tab==='stats' && 'active']" @click="switchTab('stats')">
+          <el-icon><DataBoard /></el-icon> 概览
+        </div>
+        <div :class="['sb-nav-item', tab==='users' && 'active']" @click="switchTab('users')">
+          <el-icon><User /></el-icon> 用户
+        </div>
+        <div :class="['sb-nav-item', tab==='uploads' && 'active']" @click="switchTab('uploads')">
+          <el-icon><FolderOpened /></el-icon> 素材
+        </div>
+        <div :class="['sb-nav-item', tab==='reconcile' && 'active']" @click="switchTab('reconcile')">
+          <el-icon><Money /></el-icon> 对账
+        </div>
+        <div :class="['sb-nav-item', tab==='tasks' && 'active']" @click="switchTab('tasks')">
+          <el-icon><List /></el-icon> 任务流水
+        </div>
+        <div :class="['sb-nav-item', tab==='docs' && 'active']" @click="switchTab('docs')">
+          <el-icon><Document /></el-icon> API 文档
+        </div>
+      </nav>
+      <div class="sb-foot">
+        <div class="sb-user">
+          <div class="sb-avatar">{{ initials(me?.email) }}</div>
+          <div class="sb-user-info">
+            <div class="sb-user-name">{{ me?.email }}</div>
+            <div class="sb-user-role">Administrator</div>
+          </div>
+          <el-tooltip content="退出登录" placement="top">
+            <div class="sb-logout" @click="logout"><el-icon :size="16"><SwitchButton /></el-icon></div>
+          </el-tooltip>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+
+      <!-- ── STATS ── -->
+      <template v-if="tab === 'stats'">
+        <div class="main-bar">
+          <div>
+            <h2>运营概览</h2>
+            <div class="sub">实时数据，每次进入页面刷新</div>
+          </div>
+          <el-button @click="loadStats"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <el-row :gutter="16" v-loading="loading.stats">
+            <el-col v-for="(c,i) in statCards" :key="i" :xs="24" :sm="12" :md="8" style="margin-bottom:16px">
+              <div class="stat-card">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                  <div>
+                    <div class="stat-label">{{ c.label }}</div>
+                    <div class="stat-value">{{ c.value }}</div>
+                  </div>
+                  <div :class="'stat-icon ' + c.color"><el-icon :size="20"><component :is="c.icon" /></el-icon></div>
+                </div>
+              </div>
+            </el-col>
+          </el-row>
+          <div class="panel panel-pad" style="margin-top:8px">
+            <h3 style="margin:0 0 12px; font-size:15px; display:flex; align-items:center; gap:8px;">
+              <el-icon><Key /></el-icon> 平台 IAM / 素材注册配置
+            </h3>
+            <el-row :gutter="12" v-loading="loading.config">
+              <el-col :xs="24" :sm="8">
+                <div class="info-box">
+                  <b>IAM AK/SK</b>
+                  <div style="margin-top:8px">
+                    <el-tag :type="configReady ? 'success' : 'warning'" effect="light">
+                      {{ configReady ? '已配置' : '未完整配置' }}
+                    </el-tag>
+                  </div>
+                  <div style="font-size:12px; margin-top:8px;">只存服务端环境变量或密钥管理器，后台不保存明文。</div>
+                </div>
+              </el-col>
+              <el-col :xs="24" :sm="8">
+                <div class="info-box">
+                  <b>素材组</b>
+                  <div style="margin-top:8px">
+                    <el-tag :type="adminConfig?.asset_registry?.modelark_asset_group_id_configured ? 'success' : 'info'" effect="light">
+                      {{ adminConfig?.asset_registry?.modelark_asset_group_id_configured ? '已配置' : '自动创建或未配置' }}
+                    </el-tag>
+                  </div>
+                  <div style="font-size:12px; margin-top:8px;">来源：{{ adminConfig?.asset_registry?.modelark_asset_group_id_source || '-' }}</div>
+                </div>
+              </el-col>
+              <el-col :xs="24" :sm="8">
+                <div class="info-box">
+                  <b>客户自助白名单</b>
+                  <div style="margin-top:8px">
+                    <el-tag :type="adminConfig?.asset_registry?.face_asset_self_service ? 'success' : 'info'" effect="light">
+                      {{ adminConfig?.asset_registry?.face_asset_self_service ? '已开启' : '未开启' }}
+                    </el-tag>
+                  </div>
+                  <div style="font-size:12px; margin-top:8px;">开启后客户可用一行参数触发 asset:// 注册。</div>
+                </div>
+              </el-col>
+            </el-row>
+          </div>
+          <div class="panel panel-pad" style="margin-top:8px">
+            <h3 style="margin:0 0 10px; font-size:15px; display:flex; align-items:center; gap:8px;">
+              <el-icon><InfoFilled /></el-icon> 指标说明
+            </h3>
+            <div class="info-box" style="border:none; padding:0; background:none;">
+              <ul>
+                <li><b>已收入</b>：客户在你这边消费总额（含 30% markup）</li>
+                <li><b>BytePlus 成本</b>：你账号被 BytePlus 真实扣的钱</li>
+                <li><b>毛利</b> = 已收入 − BytePlus 成本</li>
+                <li><b>冻结中</b>：任务还没结算的预扣款，终态后退多扣或转入"已收入"</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── USERS ── -->
+      <template v-if="tab === 'users'">
+        <div class="main-bar">
+          <div>
+            <h2>用户管理</h2>
+            <div class="sub">点击用户行可编辑 / 充值 / 看任务历史</div>
+          </div>
+          <el-button type="primary" @click="openNewUser"><el-icon><Plus /></el-icon> 开新账号</el-button>
+        </div>
+        <div class="main-content">
+          <div class="panel">
+            <el-table :data="users" v-loading="loading.users" style="width:100%" stripe @row-click="openEditUser">
+              <el-table-column label="用户" min-width="200" fixed="left">
+                <template #default="{ row }">
+                  <div class="user-cell">
+                    <div class="user-avatar">{{ initials(row.email) }}</div>
+                    <div style="min-width:0">
+                      <div style="font-weight:600;">{{ row.email || row.id }}</div>
+                      <div v-if="row.byteplus_account_label" style="font-size:12px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ row.byteplus_account_label }}</div>
+                    </div>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="余额" align="right" width="110">
+                <template #default="{ row }"><span class="mono" style="font-weight:600;">${{ fmt(row.balance_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="加价率" align="right" width="120">
+                <template #default="{ row }">
+                  <el-tag :type="row.pricing_scope === 'customer' ? 'success' : 'info'" size="small" effect="light">
+                    {{ fmtPct(row.effective_markup_pct) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="客户 API Key (sk-)" min-width="260">
+                <template #default="{ row }">
+                  <div class="key-cell" @click.stop>
+                    <span class="mono key-text">{{ revealed[row.id+'_api'] ? row.api_key : maskKey(row.api_key) }}</span>
+                    <el-tooltip :content="revealed[row.id+'_api'] ? '隐藏' : '显示'" placement="top">
+                      <el-icon class="key-action" @click="toggleReveal(row.id+'_api')">
+                        <component :is="revealed[row.id+'_api'] ? 'Hide' : 'View'" />
+                      </el-icon>
+                    </el-tooltip>
+                    <el-tooltip content="复制" placement="top">
+                      <el-icon class="key-action" @click="copyText(row.api_key, '客户 key')"><CopyDocument /></el-icon>
+                    </el-tooltip>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="BytePlus API Key (ark-)" min-width="260">
+                <template #default="{ row }">
+                  <div v-if="row.byteplus_api_key" class="key-cell" @click.stop>
+                    <span class="mono key-text">{{ revealed[row.id+'_bp'] ? row.byteplus_api_key : maskKey(row.byteplus_api_key) }}</span>
+                    <el-tooltip :content="revealed[row.id+'_bp'] ? '隐藏' : '显示'" placement="top">
+                      <el-icon class="key-action" @click="toggleReveal(row.id+'_bp')">
+                        <component :is="revealed[row.id+'_bp'] ? 'Hide' : 'View'" />
+                      </el-icon>
+                    </el-tooltip>
+                    <el-tooltip content="复制" placement="top">
+                      <el-icon class="key-action" @click="copyText(row.byteplus_api_key, 'BytePlus key')"><CopyDocument /></el-icon>
+                    </el-tooltip>
+                  </div>
+                  <el-tag v-else type="warning" size="small" effect="light">未配（用全局）</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="140">
+                <template #default="{ row }">
+                  <el-tag v-if="row.is_admin" size="small" effect="dark" style="margin-right:6px; background:#a855f7; border-color:#a855f7;">admin</el-tag>
+                  <el-tag v-if="row.is_active" type="success" size="small" effect="light">启用</el-tag>
+                  <el-tag v-else type="info" size="small" effect="light">禁用</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column align="center" width="60">
+                <template #default><el-icon style="color:var(--text-muted)"><ArrowRight /></el-icon></template>
+              </el-table-column>
+              <template #empty>
+                <div style="padding:48px; color:var(--text-muted);">还没有用户。点右上角"开新账号"</div>
+              </template>
+            </el-table>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── UPLOADS ── -->
+      <template v-if="tab === 'uploads'">
+        <div class="main-bar">
+          <div>
+            <h2>素材管理</h2>
+            <div class="sub">所有客户上传的素材账本，按 API key 归属隔离，后台可统一排查</div>
+          </div>
+          <el-button @click="loadUploads"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <div class="panel panel-pad">
+            <div class="filter-row">
+              <el-select v-model="uploadFilters.user_id" placeholder="全部客户" clearable style="width:260px" @change="loadUploads">
+                <el-option label="全部客户" value="" />
+                <el-option v-for="u in users" :key="u.id" :label="u.email || u.id" :value="u.id" />
+              </el-select>
+              <el-select v-model="uploadFilters.purpose" placeholder="全部类型" clearable style="width:140px" @change="loadUploads">
+                <el-option label="全部类型" value="" />
+                <el-option label="图片" value="image" />
+                <el-option label="视频" value="video" />
+                <el-option label="音频" value="audio" />
+              </el-select>
+              <el-select v-model="uploadFilters.face_asset_whitelisted" placeholder="白名单状态" clearable style="width:170px" @change="loadUploads">
+                <el-option label="全部白名单状态" value="" />
+                <el-option label="已进人脸白名单" value="true" />
+                <el-option label="未进人脸白名单" value="false" />
+              </el-select>
+            </div>
+            <div class="upload-statbar">
+              <div class="upload-stat"><div class="label">素材数</div><div class="value">{{ uploadStats.total_uploads || 0 }}</div></div>
+              <div class="upload-stat"><div class="label">总大小</div><div class="value">{{ formatBytes(uploadStats.total_size_bytes || 0) }}</div></div>
+              <div class="upload-stat"><div class="label">白名单素材</div><div class="value">{{ uploadStats.face_whitelisted_uploads || 0 }}</div></div>
+            </div>
+          </div>
+          <div class="panel" style="margin-top:14px">
+            <el-table :data="uploads" v-loading="loading.uploads" style="width:100%" stripe>
+              <el-table-column label="素材" min-width="280" fixed="left">
+                <template #default="{ row }">
+                  <div class="media-cell">
+                    <div class="media-thumb">
+                      <img v-if="row.purpose === 'image'" :src="row.url" loading="lazy" />
+                      <video v-else-if="row.purpose === 'video'" :src="row.url" muted preload="metadata"></video>
+                      <el-icon v-else><Headset /></el-icon>
+                    </div>
+                    <div class="media-meta">
+                      <div class="media-title">{{ row.original_filename || row.id }}</div>
+                      <div class="media-sub mono">{{ row.id }} · {{ purposeLabel(row.purpose) }} · {{ formatBytes(row.size_bytes) }}</div>
+                    </div>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="客户" min-width="210">
+                <template #default="{ row }">
+                  <div style="font-weight:600">{{ row.user_email || row.user_id }}</div>
+                  <div v-if="row.byteplus_account_label" style="font-size:12px; color:var(--text-muted)">{{ row.byteplus_account_label }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="白名单" width="150">
+                <template #default="{ row }">
+                  <el-tag :type="row.face_asset_whitelisted ? 'success' : 'info'" size="small" effect="light">
+                    {{ row.face_asset_whitelisted ? '已白名单' : '普通素材' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="asset://" min-width="240">
+                <template #default="{ row }">
+                  <div v-if="row.asset_url" class="key-cell" @click.stop>
+                    <span class="mono key-text">{{ row.asset_url }}</span>
+                    <el-icon class="key-action" @click="copyText(row.asset_url, 'asset URL')"><CopyDocument /></el-icon>
+                  </div>
+                  <span v-else style="font-size:12px; color:var(--text-muted)">未注册 asset</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="上传时间" width="170">
+                <template #default="{ row }"><span style="font-size:12px; color:var(--text-muted)">{{ fmtTs(row.created_at) }}</span></template>
+              </el-table-column>
+              <el-table-column label="操作" width="170" fixed="right">
+                <template #default="{ row }">
+                  <el-button size="small" text @click="copyText(JSON.stringify(row.suggested_content_block), 'content block')">复制引用</el-button>
+                  <el-button size="small" text @click="openUrl(row.url)">打开</el-button>
+                </template>
+              </el-table-column>
+              <template #empty>
+                <div style="padding:48px; color:var(--text-muted);">还没有素材上传。</div>
+              </template>
+            </el-table>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── RECONCILE ── -->
+      <template v-if="tab === 'reconcile'">
+        <div class="main-bar">
+          <div>
+            <h2>BytePlus 对账</h2>
+            <div class="sub">每个用户对应一把 BytePlus key，与 BytePlus 控制台 1:1 比对</div>
+          </div>
+          <el-button @click="loadReconcile"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <div class="panel">
+            <el-table :data="reconcile" v-loading="loading.reconcile" style="width:100%" stripe>
+              <el-table-column label="用户" min-width="200">
+                <template #default="{ row }">
+                  <div class="user-cell">
+                    <div class="user-avatar">{{ initials(row.email) }}</div>
+                    <span style="font-weight:600;">{{ row.email || row.id }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="BP 标签" min-width="180">
+                <template #default="{ row }"><span style="color:var(--text-muted);">{{ row.byteplus_account_label || (row.has_key ? '(已配但未标)' : '—') }}</span></template>
+              </el-table-column>
+              <el-table-column label="任务数" prop="tasks" align="right" width="90" />
+              <el-table-column label="tokens" align="right" width="120">
+                <template #default="{ row }"><span class="mono">{{ row.tokens.toLocaleString() }}</span></template>
+              </el-table-column>
+              <el-table-column label="BytePlus 成本" align="right" width="130">
+                <template #default="{ row }"><span class="mono" style="color:#c2410c">${{ fmt(row.byteplus_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="已收入" align="right" width="120">
+                <template #default="{ row }"><span class="mono" style="color:#15803d">${{ fmt(row.charged_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="毛利" align="right" width="120">
+                <template #default="{ row }">
+                  <span class="mono" :style="{color: (row.charged_usd - row.byteplus_usd) >= 0 ? '#15803d' : '#dc2626'}">
+                    ${{ fmt(row.charged_usd - row.byteplus_usd) }}
+                  </span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── DOCS ── -->
+      <template v-if="tab === 'docs'">
+        <div class="main-bar">
+          <div>
+            <h2>API 文档</h2>
+            <div class="sub">客户接入指南（你也可以把这个发给客户做参考）</div>
+          </div>
+          <el-button @click="copyDocsLink"><el-icon><Link /></el-icon> 复制文档地址</el-button>
+        </div>
+        <div class="main-content">
+          <div class="panel panel-pad markdown-body" v-loading="loading.docs">
+            <div v-html="docsHtml"></div>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── TASKS ── -->
+      <template v-if="tab === 'tasks'">
+        <div class="main-bar">
+          <div>
+            <h2>任务流水</h2>
+            <div class="sub">所有用户最近 100 个任务</div>
+          </div>
+          <el-button @click="loadTasks"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <div class="panel">
+            <el-table :data="tasks" v-loading="loading.tasks" style="width:100%" stripe>
+              <el-table-column label="时间" width="160">
+                <template #default="{ row }"><span style="font-size:12px; color:var(--text-muted)">{{ fmtTs(row.created_at) }}</span></template>
+              </el-table-column>
+              <el-table-column label="用户" min-width="180" prop="user_email" />
+              <el-table-column label="模型 / 规格" min-width="180">
+                <template #default="{ row }">
+                  <div style="font-weight:600">{{ row.client_model }}</div>
+                  <div style="font-size:12px; color:var(--text-muted)">{{ row.resolution || '-' }} · {{ row.duration || '-' }}s</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="Prompt" min-width="200" show-overflow-tooltip prop="prompt_text" />
+              <el-table-column label="tokens" align="right" width="110">
+                <template #default="{ row }"><span class="mono">{{ row.completion_tokens ? row.completion_tokens.toLocaleString() : '-' }}</span></template>
+              </el-table-column>
+              <el-table-column label="BP $" align="right" width="100">
+                <template #default="{ row }"><span class="mono" style="color:#c2410c">{{ fmt(row.upstream_actual_cost_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="收费 $" align="right" width="100">
+                <template #default="{ row }"><span class="mono" style="color:#15803d">{{ fmt(row.actual_cost_usd) }}</span></template>
+              </el-table-column>
+              <el-table-column label="状态" width="120">
+                <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small" effect="light">{{ statusLabel(row.status) }}</el-tag></template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </template>
+    </main>
+  </div>
+
+  <!-- ═══════════════════ Dialog: New user ═══════════════════ -->
+  <el-dialog v-model="dialogs.newUser" title="开新客户账号" width="560px" :close-on-click-modal="false">
+    <el-form ref="newUserFormRef" :model="newUserForm" label-position="top">
+      <el-form-item label="邮箱" required>
+        <el-input v-model="newUserForm.email" type="email" placeholder="customer@example.com" />
+      </el-form-item>
+      <el-row :gutter="12">
+        <el-col :span="12">
+          <el-form-item label="初始余额 (USD)">
+            <el-input-number v-model="newUserForm.balance_usd" :precision="2" :min="0" controls-position="right" style="width:100%" />
+          </el-form-item>
+        </el-col>
+        <el-col :span="12">
+          <el-form-item label="初始密码">
+            <el-input v-model="newUserForm.password" placeholder="留空自动生成" />
+          </el-form-item>
+        </el-col>
+      </el-row>
+      <el-form-item label="客户加价率">
+        <el-input-number v-model="newUserForm.markup_pct" :precision="2" :step="0.05" :min="0" :max="10" controls-position="right" style="width:100%" placeholder="留空使用全局 MARKUP_PCT" />
+        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+          0.30 = 在 BytePlus 成本上加价 30%。留空则使用服务器全局 MARKUP_PCT。
+        </div>
+      </el-form-item>
+      <el-form-item label="BytePlus API Key">
+        <el-input v-model="newUserForm.byteplus_api_key" placeholder="ark-xxxxxxxxxxxx (从 BytePlus 控制台为该客户单独申请)" />
+        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+          每客户一把独立 BytePlus key，<b>用来跟 BytePlus 后台对账</b>：BytePlus 控制台
+          能看到这把 key 的真实 token 消耗，跟我们后台数据 1:1 比对，确保不串号。
+        </div>
+      </el-form-item>
+      <el-form-item label="BytePlus 标签 (内部备注)">
+        <el-input v-model="newUserForm.byteplus_account_label" placeholder="例: 客户1 - 阿里巴巴技术团队" />
+      </el-form-item>
+      <el-form-item label="备注">
+        <el-input v-model="newUserForm.note" type="textarea" :rows="2" placeholder="渠道来源 / 合同编号..." />
+      </el-form-item>
+      <el-checkbox v-model="newUserForm.is_admin">授予管理员权限</el-checkbox>
+    </el-form>
+    <template #footer>
+      <el-button @click="dialogs.newUser = false">取消</el-button>
+      <el-button type="primary" :loading="loading.newUser" @click="createUser">
+        <el-icon><Check /></el-icon> 创建账号
+      </el-button>
+    </template>
+  </el-dialog>
+
+  <!-- ═══════════════════ Dialog: User created ═══════════════════ -->
+  <el-dialog v-model="dialogs.created" title="账号创建成功" width="500px">
+    <div v-if="created" style="display:flex; flex-direction:column; gap:14px">
+      <div style="font-size:14px; color:var(--text-muted)">
+        用户 <b style="color:var(--text)">{{ created.email }}</b> 已创建。请把以下信息发给客户：
+      </div>
+      <div class="credential-box">
+        <div style="display:flex; flex-direction:column; gap:14px">
+          <div>
+            <div class="credential-label">登录页 URL</div>
+            <div class="credential-value">https://{{ host }}/app/</div>
+          </div>
+          <div>
+            <div class="credential-label">邮箱</div>
+            <div class="credential-value">{{ created.email }}</div>
+          </div>
+          <div v-if="created.temporary_password">
+            <div class="credential-label">临时密码 (登录用)</div>
+            <div class="credential-value">{{ created.temporary_password }}</div>
+          </div>
+          <div>
+            <div class="credential-label">API Key (开发者集成)</div>
+            <div class="credential-value">{{ created.api_key }}</div>
+          </div>
+        </div>
+      </div>
+      <el-alert type="warning" :closable="false" show-icon>
+        <b>这是唯一一次显示密码的机会</b>。关闭后无法再次查看，需要的话只能用 admin 重置。
+      </el-alert>
+    </div>
+    <template #footer>
+      <el-button type="primary" @click="dialogs.created = false">知道了</el-button>
+    </template>
+  </el-dialog>
+
+  <!-- ═══════════════════ Dialog: Edit user ═══════════════════ -->
+  <el-dialog v-model="dialogs.editUser" :title="editing ? (editing.email || editing.id) : '编辑用户'" width="780px" :close-on-click-modal="false">
+    <div v-if="editing">
+      <div style="font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--text-muted); margin:-8px 0 16px">
+        {{ editing.id }} · API key: {{ editing.api_key.slice(0,12) }}…{{ editing.api_key.slice(-6) }}
+      </div>
+
+      <el-row :gutter="12" style="margin-bottom:18px">
+        <el-col :span="8"><div class="gradient-card"><div class="label">余额</div><div class="value">${{ fmt(editing.balance_usd) }}</div></div></el-col>
+        <el-col :span="8"><div class="stat-card"><div class="stat-label">累计 BP 成本</div><div class="stat-value" style="color:#c2410c; font-size:22px">${{ fmt(editing.lifetime_stats.total_byteplus_usd) }}</div></div></el-col>
+        <el-col :span="8"><div class="stat-card"><div class="stat-label">累计已收入</div><div class="stat-value" style="color:#15803d; font-size:22px">${{ fmt(editing.lifetime_stats.total_charged_usd) }}</div></div></el-col>
+      </el-row>
+
+      <el-form :model="editForm" label-position="top">
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="余额 (USD)">
+              <el-input-number v-model="editForm.balance_usd" :precision="4" controls-position="right" style="width:100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="快速充值">
+              <el-input v-model.number="topupAmount" type="number" placeholder="10.00">
+                <template #append><el-button @click="doTopup" type="primary"><el-icon><Plus /></el-icon> 充值</el-button></template>
+              </el-input>
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="客户加价率">
+          <div style="display:flex; gap:8px; align-items:center;">
+            <el-input-number v-model="editForm.markup_pct" :precision="2" :step="0.05" :min="0" :max="10" controls-position="right" style="width:220px" />
+            <el-button @click="editForm.markup_pct = null">使用全局</el-button>
+            <el-tag :type="editForm.markup_pct == null ? 'info' : 'success'" effect="light">
+              {{ editForm.markup_pct == null ? `全局 ${fmtPct(editing.effective_markup_pct)}` : fmtPct(editForm.markup_pct) }}
+            </el-tag>
+          </div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+            只影响之后新建的任务；已创建任务会使用创建时快照价格结算。
+          </div>
+        </el-form-item>
+        <el-form-item label="BytePlus API Key (留空不改)">
+          <el-input v-model="editForm.byteplus_api_key" :placeholder="editing.byteplus_api_key ? `当前: ${editing.byteplus_api_key} (留空保持)` : '未设置'" />
+          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+            BytePlus 控制台里这把 key 的用量将和该客户在我们后台的用量进行对账。
+          </div>
+        </el-form-item>
+        <el-form-item label="BytePlus 标签">
+          <el-input v-model="editForm.byteplus_account_label" />
+        </el-form-item>
+        <el-form-item label="新密码 (留空不改)">
+          <el-input v-model="editForm.new_password" placeholder="••••••••" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="editForm.note" type="textarea" :rows="2" />
+        </el-form-item>
+        <el-checkbox v-model="editForm.is_active">账号已启用</el-checkbox>
+      </el-form>
+
+      <h4 style="margin:24px 0 12px; font-size:14px; display:flex; align-items:center; gap:8px;">
+        <el-icon><FolderOpened /></el-icon> 最近 20 个素材
+      </h4>
+      <el-table :data="editing.recent_uploads || []" size="small" style="width:100%; margin-bottom:18px" empty-text="暂无素材">
+        <el-table-column label="素材" min-width="220">
+          <template #default="{ row }">
+            <div class="media-cell">
+              <div class="media-thumb" style="width:40px;height:40px;border-radius:7px">
+                <img v-if="row.purpose === 'image'" :src="row.url" loading="lazy" />
+                <video v-else-if="row.purpose === 'video'" :src="row.url" muted preload="metadata"></video>
+                <el-icon v-else><Headset /></el-icon>
+              </div>
+              <div class="media-meta">
+                <div class="media-title">{{ row.original_filename || row.id }}</div>
+                <div class="media-sub mono">{{ purposeLabel(row.purpose) }} · {{ formatBytes(row.size_bytes) }}</div>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="白名单" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.face_asset_whitelisted ? 'success' : 'info'" size="small" effect="light">
+              {{ row.face_asset_whitelisted ? '是' : '否' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="时间" width="135">
+          <template #default="{ row }"><span style="font-size:11px; color:var(--text-muted)">{{ fmtTs(row.created_at) }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作" width="150">
+          <template #default="{ row }">
+            <el-button size="small" text @click="copyText(JSON.stringify(row.suggested_content_block), 'content block')">复制引用</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <h4 style="margin:24px 0 12px; font-size:14px; display:flex; align-items:center; gap:8px;">
+        <el-icon><Clock /></el-icon> 最近 20 个任务
+      </h4>
+      <el-table :data="editing.recent_tasks" size="small" style="width:100%" empty-text="暂无任务">
+        <el-table-column label="时间" width="135">
+          <template #default="{ row }"><span style="font-size:11px; color:var(--text-muted)">{{ fmtTs(row.created_at) }}</span></template>
+        </el-table-column>
+        <el-table-column label="模型" prop="client_model" width="120" />
+        <el-table-column label="Prompt" min-width="160" show-overflow-tooltip prop="prompt_text" />
+        <el-table-column label="tokens" align="right" width="80">
+          <template #default="{ row }"><span class="mono">{{ row.completion_tokens ? row.completion_tokens.toLocaleString() : '-' }}</span></template>
+        </el-table-column>
+        <el-table-column label="BP $" align="right" width="80">
+          <template #default="{ row }"><span class="mono" style="color:#c2410c">{{ fmt(row.upstream_actual_cost_usd) }}</span></template>
+        </el-table-column>
+        <el-table-column label="收费 $" align="right" width="80">
+          <template #default="{ row }"><span class="mono" style="color:#15803d">{{ fmt(row.actual_cost_usd) }}</span></template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small" effect="light">{{ statusLabel(row.status) }}</el-tag></template>
+        </el-table-column>
+      </el-table>
+    </div>
+    <template #footer>
+      <el-button @click="dialogs.editUser = false">关闭</el-button>
+      <el-button type="primary" :loading="loading.saveUser" @click="saveEditUser">
+        <el-icon><Document /></el-icon> 保存
+      </el-button>
+    </template>
+  </el-dialog>
+
+</div>
+
+<script src="https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/element-plus@2.8.4/dist/index.full.min.js"></script>
+<script src="https://unpkg.com/@element-plus/icons-vue@2.3.1/dist/index.iife.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script>
+const { createApp, ref, reactive, computed } = Vue;
+const { ElMessage, ElMessageBox } = ElementPlus;
+
+const App = {
+  data() {
+    return {
+      view: "loading",  // loading | login | app
+      tab: "stats",
+      me: null,
+      host: location.host,
+
+      loginForm: { email: "", password: "" },
+      loginLoading: false,
+
+      stats: null,
+      adminConfig: null,
+      users: [],
+      uploads: [],
+      uploadStats: {},
+      uploadFilters: { user_id: "", purpose: "", face_asset_whitelisted: "" },
+      reconcile: [],
+      tasks: [],
+      loading: { stats: false, config: false, users: false, uploads: false, reconcile: false, tasks: false, newUser: false, saveUser: false, docs: false },
+      docsHtml: "",
+
+      dialogs: { newUser: false, editUser: false, created: false },
+      newUserForm: this.emptyNewUser(),
+      created: null,
+
+      editing: null,
+      editForm: {},
+      topupAmount: null,
+
+      // 用户列表 key 显隐: { 'u_xxx_api': true, 'u_xxx_bp': false }
+      revealed: {},
+    };
+  },
+  computed: {
+    statCards() {
+      const s = this.stats || {};
+      return [
+        { label: "活跃用户", value: s.active_users ?? "-", icon: "User", color: "indigo" },
+        { label: "总任务数", value: s.total_tasks ?? "-", icon: "Histogram", color: "slate" },
+        { label: "素材数", value: s.total_uploads ?? "-", icon: "FolderOpened", color: "blue" },
+        { label: "白名单素材", value: s.face_whitelisted_uploads ?? "-", icon: "CircleCheck", color: "green" },
+        { label: "已收入 (USD)", value: this.fmtUsd(s.revenue_settled_usd), icon: "Money", color: "green" },
+        { label: "BytePlus 成本", value: this.fmtUsd(s.upstream_cost_usd), icon: "Coin", color: "orange" },
+        { label: "毛利 (USD)", value: this.fmtUsd(s.gross_profit_usd), icon: "TrendCharts", color: (s.gross_profit_usd ?? 0) >= 0 ? "green" : "red" },
+        { label: "冻结中 (USD)", value: this.fmtUsd(s.held_usd), icon: "Lock", color: "blue" },
+      ];
+    },
+    configReady() {
+      return !!(
+        this.adminConfig?.iam?.byteplus_access_key_id_configured &&
+        this.adminConfig?.iam?.byteplus_access_key_secret_configured
+      );
+    },
+  },
+  methods: {
+    emptyNewUser() { return { email: "", password: "", balance_usd: 0, markup_pct: null, byteplus_api_key: "", byteplus_account_label: "", note: "", is_admin: false }; },
+    async api(path, opts={}) {
+      const r = await fetch(path, { credentials: "include", headers: {"Content-Type": "application/json"}, ...opts });
+      let body; try { body = await r.json(); } catch { body = {}; }
+      if (!r.ok) throw { status: r.status, body };
+      return body;
+    },
+    errMsg(e) { return e.body?.error?.message || e.body?.detail?.error?.message || e.body?.detail || "请求失败"; },
+    fmt(n, d=4) { return n == null ? "-" : Number(n).toFixed(d); },
+    fmtUsd(n) { return n == null ? "$-" : "$" + Number(n).toFixed(4); },
+    fmtPct(n) { return n == null ? "全局" : `${(Number(n) * 100).toFixed(0)}%`; },
+    fmtTs(ts) { return ts ? new Date(ts*1000).toLocaleString("zh-CN", { hour12: false }) : "-"; },
+    formatBytes(n) {
+      const size = Number(n || 0);
+      if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(2) + " MB";
+      if (size >= 1024) return (size / 1024).toFixed(1) + " KB";
+      return size + " B";
+    },
+    purposeLabel(p) { return ({ image: "图片", video: "视频", audio: "音频" })[p] || p || "-"; },
+    openUrl(url) { if (url) window.open(url, "_blank", "noopener"); },
+    initials(e) { return (e || "?").split("@")[0].slice(0, 2).toUpperCase(); },
+    statusType(s) {
+      return ({ queued: "info", running: "primary", succeeded: "success", failed: "danger", cancelled: "warning", expired: "warning" })[s] || "info";
+    },
+    statusLabel(s) {
+      return ({ queued: "排队中", running: "生成中", succeeded: "已完成", failed: "失败", cancelled: "已取消", expired: "已过期" })[s] || s;
+    },
+
+    // ─── Key 显隐 / 复制 ───
+    maskKey(k) {
+      if (!k) return "—";
+      if (k.length <= 14) return k.slice(0, 4) + "•••" + k.slice(-3);
+      return k.slice(0, 8) + "•••••••" + k.slice(-5);
+    },
+    toggleReveal(key) {
+      this.revealed = { ...this.revealed, [key]: !this.revealed[key] };
+    },
+    copyText(text, label) {
+      navigator.clipboard.writeText(text);
+      ElMessage.success(`${label || ""} 已复制`);
+    },
+
+    // ─── Auth ───
+    async login() {
+      this.loginLoading = true;
+      try {
+        const u = await this.api("/auth/login", { method: "POST", body: JSON.stringify(this.loginForm) });
+        if (!u.is_admin) { ElMessage.error("此账号不是管理员"); return; }
+        this.me = u;
+        this.view = "app";
+        this.switchTab("stats");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loginLoading = false; }
+    },
+    async logout() {
+      await this.api("/auth/logout", { method: "POST" });
+      location.reload();
+    },
+    async checkAuth() {
+      try {
+        const u = await this.api("/auth/me");
+        if (!u.is_admin) { this.view = "login"; return; }
+        this.me = u; this.view = "app"; this.switchTab("stats");
+      } catch { this.view = "login"; }
+    },
+
+    // ─── Tabs ───
+    switchTab(name) {
+      this.tab = name;
+      if (name === "stats") { this.loadStats(); this.loadConfig(); }
+      if (name === "users") this.loadUsers();
+      if (name === "uploads") this.loadUploads();
+      if (name === "reconcile") this.loadReconcile();
+      if (name === "tasks") this.loadTasks();
+      if (name === "docs")  this.loadDocs();
+    },
+
+    // ─── API Docs ───
+    async loadDocs() {
+      if (this.docsHtml) return;     // 缓存, 不重复拉
+      this.loading.docs = true;
+      try {
+        const md = await fetch("/v1/docs/api.md", { credentials: "include" }).then(r => r.text());
+        this.docsHtml = marked.parse(md);
+      } catch (e) {
+        this.docsHtml = "<p style='color:red'>加载文档失败: " + e.message + "</p>";
+      } finally {
+        this.loading.docs = false;
+      }
+    },
+    copyDocsLink() {
+      const url = `${location.origin}/v1/docs/api.md`;
+      navigator.clipboard.writeText(url);
+      ElMessage.success("文档地址已复制: " + url);
+    },
+
+    // ─── Loaders ───
+    async loadStats() {
+      this.loading.stats = true;
+      try { this.stats = await this.api("/admin/stats"); }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.stats = false; }
+    },
+    async loadConfig() {
+      this.loading.config = true;
+      try { this.adminConfig = await this.api("/admin/config"); }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.config = false; }
+    },
+    async loadUsers() {
+      this.loading.users = true;
+      try { this.users = (await this.api("/admin/users")).data; }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.users = false; }
+    },
+    async loadUploads() {
+      this.loading.uploads = true;
+      try {
+        if (!this.users.length) {
+          try { this.users = (await this.api("/admin/users")).data; } catch {}
+        }
+        const qs = new URLSearchParams({ limit: "100" });
+        if (this.uploadFilters.user_id) qs.set("user_id", this.uploadFilters.user_id);
+        if (this.uploadFilters.purpose) qs.set("purpose", this.uploadFilters.purpose);
+        if (this.uploadFilters.face_asset_whitelisted) qs.set("face_asset_whitelisted", this.uploadFilters.face_asset_whitelisted);
+        const r = await this.api(`/admin/uploads?${qs.toString()}`);
+        this.uploads = r.data;
+        this.uploadStats = r.stats || {};
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.uploads = false; }
+    },
+    async loadReconcile() {
+      this.loading.reconcile = true;
+      try { this.reconcile = (await this.api("/admin/reconcile")).data; }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.reconcile = false; }
+    },
+    async loadTasks() {
+      this.loading.tasks = true;
+      try { this.tasks = (await this.api("/admin/tasks?limit=100")).data; }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.tasks = false; }
+    },
+
+    // ─── New user ───
+    openNewUser() {
+      this.newUserForm = this.emptyNewUser();
+      this.dialogs.newUser = true;
+    },
+    async createUser() {
+      if (!this.newUserForm.email) { ElMessage.error("邮箱必填"); return; }
+      this.loading.newUser = true;
+      try {
+        const obj = { ...this.newUserForm };
+        // 把空字符串变成 null，让后端 API 不下发该字段
+        ["password","byteplus_api_key","byteplus_account_label","note"].forEach(k => { if (!obj[k]) obj[k] = null; });
+        const r = await this.api("/admin/users", { method: "POST", body: JSON.stringify(obj) });
+        this.dialogs.newUser = false;
+        this.created = r;
+        this.dialogs.created = true;
+        this.loadUsers();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.newUser = false; }
+    },
+
+    // ─── Edit user ───
+    async openEditUser(row) {
+      try {
+        const u = await this.api(`/admin/users/${row.id}`);
+        this.editing = u;
+        this.editForm = {
+          balance_usd: u.balance_usd,
+          markup_pct: u.pricing_scope === "customer" ? u.markup_pct : null,
+          byteplus_api_key: "",
+          byteplus_account_label: u.byteplus_account_label || "",
+          new_password: "",
+          note: u.note || "",
+          is_active: !!u.is_active,
+        };
+        this.topupAmount = null;
+        this.dialogs.editUser = true;
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+    async doTopup() {
+      const amt = Number(this.topupAmount);
+      if (!amt || amt <= 0) { ElMessage.warning("请输入大于 0 的金额"); return; }
+      try {
+        await ElMessageBox.confirm(`确认给 ${this.editing.email} 充值 $${amt} ?`, "确认充值", { type: "info" });
+      } catch { return; }
+      try {
+        await this.api(`/admin/users/${this.editing.id}/topup`, { method: "POST", body: JSON.stringify({ amount_usd: amt }) });
+        ElMessage.success(`充值成功 +$${amt}`);
+        await this.openEditUser(this.editing);
+        await this.loadUsers();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+    async saveEditUser() {
+      this.loading.saveUser = true;
+      try {
+        const obj = {
+          balance_usd: this.editForm.balance_usd,
+          markup_pct: this.editForm.markup_pct,
+          byteplus_account_label: this.editForm.byteplus_account_label || null,
+          note: this.editForm.note || null,
+          is_active: this.editForm.is_active,
+        };
+        if (this.editForm.byteplus_api_key) obj.byteplus_api_key = this.editForm.byteplus_api_key;
+        if (this.editForm.new_password)     obj.new_password     = this.editForm.new_password;
+        await this.api(`/admin/users/${this.editing.id}`, { method: "PATCH", body: JSON.stringify(obj) });
+        ElMessage.success("已保存");
+        this.dialogs.editUser = false;
+        this.loadUsers();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.saveUser = false; }
+    },
+  },
+  async mounted() {
+    await this.checkAuth();
+  },
+};
+
+const app = createApp(App);
+app.use(ElementPlus);
+for (const [name, comp] of Object.entries(ElementPlusIconsVue)) {
+  app.component(name, comp);
+}
+app.mount("#app");
+</script>
+
+<style>
+[v-cloak] { display: none; }
+</style>
+
+</body>
+</html>

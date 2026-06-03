@@ -1,0 +1,19 @@
+services:
+  seedance-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    container_name: seedance-relay
+    restart: unless-stopped
+    ports:
+      # 只在 127.0.0.1 上监听，由本机 Caddy 反代到公网，外网无法直连
+      - "127.0.0.1:8002:8002"
+    env_file:
+      - .env.relay
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

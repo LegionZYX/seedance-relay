@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>8864k Studio · AI 视频生成</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="https://unpkg.com/element-plus@2.8.4/dist/index.css" />
+
+<style>
+  :root {
+    --brand: #6366f1;
+    --brand-dark: #4f46e5;
+    --bg: #f5f7fb;
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: Inter, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+  /* Element Plus 主色 */
+  .el-button--primary {
+    --el-button-bg-color: var(--brand);
+    --el-button-border-color: var(--brand);
+    --el-button-hover-bg-color: var(--brand-dark);
+    --el-button-hover-border-color: var(--brand-dark);
+    --el-button-active-bg-color: var(--brand-dark);
+    --el-button-active-border-color: var(--brand-dark);
+  }
+  .el-input__wrapper.is-focus, .el-textarea__inner:focus {
+    box-shadow: 0 0 0 1px var(--brand) inset !important;
+  }
+  .el-radio-button__original-radio:checked+.el-radio-button__inner {
+    background: var(--brand); border-color: var(--brand); box-shadow: -1px 0 0 0 var(--brand);
+  }
+  .el-checkbox__input.is-checked .el-checkbox__inner {
+    background-color: var(--brand); border-color: var(--brand);
+  }
+  .el-checkbox__input.is-checked + .el-checkbox__label,
+  .el-radio__input.is-checked + .el-radio__label { color: var(--brand); }
+  .el-link { color: var(--brand); }
+
+  /* Header */
+  .top-header {
+    background: white;
+    border-bottom: 1px solid var(--border);
+    height: 64px;
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .top-inner { max-width: 1280px; margin: 0 auto; width: 100%; display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-logo {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--brand), #a855f7);
+    display: flex; align-items: center; justify-content: center;
+    color: white;
+    box-shadow: 0 4px 12px rgba(99,102,241,0.3);
+  }
+  .brand-text { font-weight: 700; font-size: 16px; }
+  .nav { display: flex; align-items: center; gap: 4px; margin-left: 32px; }
+  .nav-link {
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .nav-link:hover { background: #f1f5f9; color: var(--text); }
+  .nav-link.active { background: rgba(99,102,241,0.1); color: var(--brand); }
+
+  .top-right { display: flex; align-items: center; gap: 12px; }
+  .balance-pill {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 14px;
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-weight: 600;
+    color: var(--text);
+    font-size: 14px;
+  }
+  .avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--brand), #a855f7);
+    color: white;
+    font-weight: 700;
+    font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* Main */
+  .main { max-width: 1280px; margin: 0 auto; padding: 32px 24px; }
+  .page-header { margin-bottom: 28px; }
+  .page-title { font-size: 30px; font-weight: 800; margin: 0; }
+  .page-sub { color: var(--text-muted); margin-top: 6px; font-size: 15px; }
+
+  .card {
+    background: white;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    overflow: hidden;
+  }
+  .card-pad { padding: 24px; }
+  .card-title { font-weight: 700; font-size: 15px; margin: 0 0 16px; display: flex; align-items: center; gap: 8px; }
+  .card-title .el-icon { color: var(--brand); }
+
+  /* Cost panel */
+  .cost-card {
+    background: linear-gradient(135deg, var(--brand) 0%, #a855f7 100%);
+    color: white;
+    border-radius: 14px 14px 0 0;
+    padding: 20px 24px;
+    box-shadow: 0 4px 20px rgba(99,102,241,0.2);
+  }
+  .cost-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.9; }
+  .cost-value { font-size: 38px; font-weight: 800; line-height: 1.1; margin-top: 4px; }
+  .cost-tokens { font-size: 13px; margin-top: 6px; opacity: 0.85; }
+
+  /* Login */
+  .login-wrap {
+    height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #eef2ff 0%, #faf5ff 50%, #fef3f2 100%);
+    padding: 16px;
+  }
+  .login-card {
+    width: 100%; max-width: 420px;
+    background: white;
+    border-radius: 16px;
+    padding: 36px;
+    box-shadow: 0 20px 60px -10px rgba(0,0,0,0.08);
+  }
+  .login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+
+  /* Video grid */
+  .video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .video-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all .2s;
+  }
+  .video-card:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.08); transform: translateY(-2px); }
+  .video-thumb {
+    aspect-ratio: 16 / 9;
+    background: #0f172a;
+    position: relative;
+    overflow: hidden;
+  }
+  .video-thumb video { width: 100%; height: 100%; object-fit: cover; }
+  .video-placeholder { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #475569; gap: 6px; }
+  .video-thumb .status-overlay { position: absolute; top: 8px; right: 8px; }
+
+  .asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+  .asset-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    transition: all .2s;
+  }
+  .asset-card:hover { box-shadow: 0 8px 24px rgba(0,0,0,0.08); transform: translateY(-2px); }
+  .asset-card.selected { border-color: var(--brand); box-shadow: 0 0 0 2px rgba(99,102,241,0.14); }
+  .asset-preview {
+    aspect-ratio: 16 / 10;
+    background: #f1f5f9;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted);
+    overflow: hidden;
+  }
+  .asset-preview img, .asset-preview video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .asset-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .file-picker {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    border: 1px dashed #cbd5e1; border-radius: 10px; padding: 14px 16px; background: #f8fafc;
+  }
+  .file-picker input { max-width: 260px; }
+  .guide-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .guide-row { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 18px; align-items: start; }
+  .guide-kicker { font-size: 12px; color: var(--text-muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+  .guide-title { font-size: 18px; font-weight: 800; margin: 0 0 8px; }
+  .guide-copy { color: var(--text-muted); line-height: 1.7; font-size: 14px; margin: 0; }
+  .guide-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  @media (max-width: 760px) { .guide-row { grid-template-columns: 1fr; } }
+
+  /* Account */
+  .account-hero {
+    background: linear-gradient(135deg, var(--brand), #a855f7);
+    color: white;
+    text-align: center;
+    padding: 32px 24px;
+  }
+  .account-avatar {
+    width: 80px; height: 80px; border-radius: 50%;
+    background: rgba(255,255,255,0.2);
+    backdrop-filter: blur(8px);
+    color: white;
+    font-weight: 800; font-size: 28px;
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto;
+  }
+
+  /* Code block */
+  .code-block {
+    background: #0f172a;
+    color: #e2e8f0;
+    border-radius: 10px;
+    padding: 16px 18px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    overflow-x: auto;
+  }
+  .code-block .comment { color: #64748b; }
+  .code-block .string { color: #34d399; }
+
+  /* Pulse for running tasks */
+  .pulse {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--brand);
+    box-shadow: 0 0 0 0 rgba(99,102,241,0.5);
+    animation: pulseRing 2s infinite;
+  }
+  @keyframes pulseRing {
+    0% { box-shadow: 0 0 0 0 rgba(99,102,241,0.5); }
+    70% { box-shadow: 0 0 0 12px rgba(99,102,241,0); }
+    100% { box-shadow: 0 0 0 0 rgba(99,102,241,0); }
+  }
+
+  .running-banner {
+    background: linear-gradient(135deg, #eef2ff, #faf5ff);
+    border: 1px solid #e0e7ff;
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex; align-items: center; gap: 14px;
+  }
+
+  /* Dialog tweaks */
+  .el-dialog { border-radius: 14px; }
+
+  /* Markdown 渲染 */
+  .markdown-body { line-height: 1.7; color: #1f2937; font-size: 14.5px; }
+  .markdown-body h1 { font-size: 2em; font-weight: 800; margin: 0 0 0.4em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+  .markdown-body h2 { font-size: 1.5em; font-weight: 700; margin: 1.8em 0 0.6em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+  .markdown-body h3 { font-size: 1.2em; font-weight: 700; margin: 1.5em 0 0.5em; }
+  .markdown-body h4 { font-size: 1.05em; font-weight: 700; margin: 1.2em 0 0.4em; }
+  .markdown-body p  { margin: 0.7em 0; }
+  .markdown-body a  { color: var(--brand); text-decoration: none; }
+  .markdown-body a:hover { text-decoration: underline; }
+  .markdown-body ul, .markdown-body ol { padding-left: 1.6em; margin: 0.6em 0; }
+  .markdown-body li { margin: 0.2em 0; }
+  .markdown-body code { background: #f1f5f9; color: #be185d; padding: 0.15em 0.4em; border-radius: 4px; font-family: "JetBrains Mono", monospace; font-size: 0.88em; }
+  .markdown-body pre  { background: #0f172a; color: #e2e8f0; padding: 16px 20px; border-radius: 10px; overflow-x: auto; margin: 1em 0; font-size: 13px; line-height: 1.55; }
+  .markdown-body pre code { background: none; color: inherit; padding: 0; }
+  .markdown-body blockquote { border-left: 4px solid var(--brand); margin: 1em 0; padding: 0.1em 1em; color: #475569; background: #f8fafc; border-radius: 0 6px 6px 0; }
+  .markdown-body table { border-collapse: collapse; margin: 1em 0; width: 100%; font-size: 13.5px; }
+  .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+  .markdown-body th { background: #f8fafc; font-weight: 600; }
+  .markdown-body hr { border: 0; border-top: 1px solid var(--border); margin: 2em 0; }
+  .markdown-body img { max-width: 100%; }
+</style>
+</head>
+<body>
+
+<div id="app" v-cloak>
+
+  <!-- ═══════════════════════ LOGIN ═══════════════════════ -->
+  <div v-if="view === 'login'" class="login-wrap">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="brand-logo"><el-icon :size="18"><Star /></el-icon></div>
+        <div>
+          <div style="font-weight:700">8864k Studio</div>
+          <div style="font-size:12px; color:var(--text-muted)">AI 视频生成平台</div>
+        </div>
+      </div>
+      <h2 style="margin:0 0 4px; font-size:24px; font-weight:700;">欢迎回来</h2>
+      <p style="margin:0 0 24px; color:var(--text-muted); font-size:14px;">使用邮箱登录开始创作</p>
+      <el-form @submit.prevent="login" label-position="top" :model="loginForm">
+        <el-form-item label="邮箱">
+          <el-input v-model="loginForm.email" type="email" placeholder="you@example.com" autocomplete="username" autofocus />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="loginForm.password" type="password" placeholder="••••••••" show-password autocomplete="current-password" />
+        </el-form-item>
+        <el-button native-type="submit" type="primary" :loading="loginLoading" size="large" style="width:100%">登录</el-button>
+      </el-form>
+      <div style="margin-top:28px; padding-top:20px; border-top:1px solid var(--border); font-size:12px; color:var(--text-muted); text-align:center;">
+        没有账号？请联系平台管理员开通
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ APP ═══════════════════════ -->
+  <div v-if="view === 'app'">
+    <header class="top-header">
+      <div class="top-inner">
+        <div style="display:flex; align-items:center;">
+          <div class="brand">
+            <div class="brand-logo"><el-icon :size="16"><Star /></el-icon></div>
+            <span class="brand-text">8864k Studio</span>
+          </div>
+          <nav class="nav">
+            <div :class="['nav-link', tab==='generate' && 'active']" @click="switchTab('generate')">新建视频</div>
+            <div :class="['nav-link', tab==='history' && 'active']" @click="switchTab('history')">我的任务</div>
+            <div :class="['nav-link', tab==='assets' && 'active']" @click="switchTab('assets')">素材库</div>
+            <div :class="['nav-link', tab==='guide' && 'active']" @click="switchTab('guide')">操作指南</div>
+            <div :class="['nav-link', tab==='docs' && 'active']" @click="switchTab('docs')">API 文档</div>
+            <div :class="['nav-link', tab==='account' && 'active']" @click="switchTab('account')">账号</div>
+          </nav>
+        </div>
+        <div class="top-right">
+          <el-tooltip placement="bottom">
+            <template #content>
+              <div style="font-size:12px; line-height:1.7;">
+                <div>总额: <b>{{ fmtUsd(me?.total_usd) }}</b></div>
+                <div>可用: {{ fmtUsd(me?.available_usd) }}</div>
+                <div v-if="me?.held_usd">冻结: {{ fmtUsd(me?.held_usd) }} ({{ me?.pending_tasks }} 个任务)</div>
+              </div>
+            </template>
+            <div class="balance-pill">
+              <el-icon :size="14" style="color:var(--brand)"><Wallet /></el-icon>
+              <span>{{ fmtUsd(me?.available_usd) }}</span>
+              <span v-if="me?.held_usd" style="color:var(--text-muted); font-size:12px; margin-left:4px;">/ {{ fmtUsd(me?.total_usd) }}</span>
+            </div>
+          </el-tooltip>
+          <div class="avatar">{{ initials(me?.email) }}</div>
+          <el-tooltip content="退出登录" placement="bottom">
+            <el-button text @click="logout" style="color:var(--text-muted)">
+              <el-icon><SwitchButton /></el-icon>
+            </el-button>
+          </el-tooltip>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+
+      <!-- ═══════════ GENERATE ═══════════ -->
+      <section v-if="tab === 'generate'">
+        <div class="page-header">
+          <h1 class="page-title">新建视频任务</h1>
+          <p class="page-sub">输入你的创意描述，AI 帮你生成视频</p>
+        </div>
+
+        <el-row :gutter="24">
+          <el-col :xs="24" :lg="16">
+            <div class="card card-pad" style="margin-bottom:20px">
+              <div class="card-title"><el-icon><EditPen /></el-icon> 提示词 (Prompt)</div>
+              <el-input
+                v-model="form.prompt"
+                type="textarea"
+                :rows="4"
+                resize="vertical"
+                placeholder="A red lobster wearing a tiny chef hat dances on a neon-lit Tokyo street, cinematic, 35mm film"
+              />
+              <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color:var(--text-muted);">
+                <span><el-icon :size="12"><InfoFilled /></el-icon> 建议英文，部分模型支持中文/日/西/葡/印尼</span>
+                <span>{{ form.prompt.length }} 字</span>
+              </div>
+            </div>
+
+            <div class="card card-pad" style="margin-bottom:20px">
+              <div class="card-title"><el-icon><FolderOpened /></el-icon> 参考素材</div>
+              <div style="display:flex; gap:10px; align-items:center;">
+                <el-select v-model="form.upload_id" placeholder="不使用素材" clearable filterable style="flex:1" @focus="loadUploads">
+                  <el-option label="不使用素材" value="" />
+                  <el-option
+                    v-for="a in uploads"
+                    :key="a.id"
+                    :label="`${a.original_filename || a.id} · ${purposeLabel(a.purpose)}${a.face_asset_whitelisted ? ' · 白名单' : ''}`"
+                    :value="a.id"
+                  />
+                </el-select>
+                <el-button @click="switchTab('assets')"><el-icon><Upload /></el-icon> 上传</el-button>
+              </div>
+              <div v-if="selectedUpload" style="display:flex; gap:12px; align-items:center; margin-top:12px; padding:10px; border:1px solid var(--border); border-radius:10px; background:#f8fafc;">
+                <div class="asset-preview" style="width:76px; height:52px; aspect-ratio:auto; border-radius:8px;">
+                  <img v-if="selectedUpload.purpose === 'image'" :src="selectedUpload.url" loading="lazy" />
+                  <video v-else-if="selectedUpload.purpose === 'video'" :src="selectedUpload.url" muted preload="metadata"></video>
+                  <el-icon v-else><Headset /></el-icon>
+                </div>
+                <div style="min-width:0; flex:1">
+                  <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ selectedUpload.original_filename || selectedUpload.id }}</div>
+                  <div style="font-size:12px; color:var(--text-muted); margin-top:3px;">
+                    {{ selectedUpload.face_asset_whitelisted ? '已进人脸白名单，生成时会使用 asset:// 引用' : '普通素材，生成时会使用公开 URL 引用' }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card card-pad">
+              <div class="card-title"><el-icon><Setting /></el-icon> 参数配置</div>
+
+              <el-form label-position="top">
+                <el-form-item label="模型">
+                  <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                    <el-tag
+                      v-for="m in models"
+                      :key="m.id"
+                      :effect="form.model === m.id ? 'dark' : 'plain'"
+                      :type="form.model === m.id ? '' : 'info'"
+                      style="cursor:pointer; padding: 4px 14px; height: 30px; line-height: 22px; font-size: 13px;"
+                      :style="form.model === m.id ? {background:'var(--brand)', borderColor:'var(--brand)'} : {}"
+                      @click="form.model = m.id"
+                    >{{ m.id }}</el-tag>
+                  </div>
+                  <div v-if="currentModel" style="font-size:12px; color:var(--text-muted); margin-top:8px;">
+                    {{ currentModel.description }}
+                  </div>
+                </el-form-item>
+
+                <el-row :gutter="16">
+                  <el-col :xs="24" :sm="8">
+                    <el-form-item label="分辨率">
+                      <el-radio-group v-model="form.resolution" style="width:100%">
+                        <el-radio-button label="480p" />
+                        <el-radio-button label="720p" />
+                        <el-radio-button label="1080p" />
+                      </el-radio-group>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :xs="12" :sm="8">
+                    <el-form-item label="画面比例">
+                      <el-select v-model="form.ratio" style="width:100%">
+                        <el-option label="16:9 横屏" value="16:9" />
+                        <el-option label="9:16 竖屏" value="9:16" />
+                        <el-option label="1:1 方形" value="1:1" />
+                        <el-option label="4:3" value="4:3" />
+                        <el-option label="3:4" value="3:4" />
+                        <el-option label="21:9 影院" value="21:9" />
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :xs="12" :sm="8">
+                    <el-form-item label="时长（秒）">
+                      <el-input-number v-model="form.duration" :min="2" :max="15" controls-position="right" style="width:100%" />
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <el-row :gutter="16" style="border-top:1px solid var(--border); padding-top:16px; margin-top:8px;">
+                  <el-col :xs="24" :sm="8">
+                    <el-form-item label="Seed">
+                      <el-input v-model="form.seed" type="number" placeholder="留空 = 随机" clearable />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :xs="12" :sm="8" style="padding-top:30px">
+                    <el-checkbox v-model="form.generate_audio">
+                      <div>
+                        <div style="font-weight:500">生成音频</div>
+                        <div style="font-size:11px; color:var(--text-muted)">仅 video-pro / video-1.5-pro</div>
+                      </div>
+                    </el-checkbox>
+                  </el-col>
+                  <el-col :xs="12" :sm="8" style="padding-top:30px">
+                    <el-checkbox v-model="form.watermark">
+                      <div>
+                        <div style="font-weight:500">加水印</div>
+                        <div style="font-size:11px; color:var(--text-muted)">官方 Brand 水印</div>
+                      </div>
+                    </el-checkbox>
+                  </el-col>
+                </el-row>
+              </el-form>
+            </div>
+          </el-col>
+
+          <el-col :xs="24" :lg="8">
+            <div style="position:sticky; top:88px;">
+              <div class="card" style="overflow:visible">
+                <div class="cost-card">
+                  <div class="cost-label">预估费用</div>
+                  <div class="cost-value">${{ fmt(estimatedCost) }}</div>
+                  <div class="cost-tokens">≈ {{ estimatedTokens.toLocaleString() }} tokens</div>
+                </div>
+                <div style="padding:18px 24px;">
+                  <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:12px;">
+                    <span style="color:var(--text-muted)">可用余额</span>
+                    <span class="mono" style="font-weight:600">{{ fmtUsd(me?.available_usd) }}</span>
+                  </div>
+                  <div v-if="me?.held_usd" style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:12px; color:var(--text-muted);">
+                    <span>冻结中</span>
+                    <span class="mono">{{ fmtUsd(me?.held_usd) }} ({{ me?.pending_tasks }})</span>
+                  </div>
+                  <el-alert
+                    v-if="!enoughBalance"
+                    type="warning" :closable="false" show-icon
+                    style="margin-bottom:12px"
+                  >
+                    余额不足，本次需要 <b>${{ fmt(estimatedCost) }}</b>
+                  </el-alert>
+                  <el-button
+                    type="primary" size="large" style="width:100%"
+                    :disabled="!form.prompt.trim() || !enoughBalance"
+                    :loading="loading.submit"
+                    @click="submitGen"
+                  ><el-icon><MagicStick /></el-icon> 提交生成</el-button>
+                  <p style="font-size:11px; color:var(--text-muted); text-align:center; margin:10px 0 0;">
+                    提交后从余额预扣，任务完成自动结算
+                  </p>
+                </div>
+              </div>
+            </div>
+          </el-col>
+        </el-row>
+
+        <!-- 当前任务展示 -->
+        <div v-if="currentTask" class="card card-pad" style="margin-top:24px">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;">
+            <div>
+              <div class="mono" style="font-weight:700; font-size:16px;">{{ currentTask.id }}</div>
+              <div style="font-size:13px; color:var(--text-muted); margin-top:2px;">
+                {{ currentTask.model }} · {{ currentTask.resolution }} · {{ currentTask.duration }}s · {{ fmtTs(currentTask.created_at) }}
+              </div>
+            </div>
+            <el-tag :type="statusType(currentTask.status)" effect="light">{{ statusLabel(currentTask.status) }}</el-tag>
+          </div>
+
+          <div v-if="currentTask.prompt_text" style="background:#f8fafc; border:1px solid var(--border); border-radius:8px; padding:12px 16px; font-style:italic; color:#334155; margin-bottom:14px; font-size:13px;">
+            "{{ currentTask.prompt_text }}"
+          </div>
+
+          <div style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">
+            <template v-if="currentTask.actual_cost_usd != null">
+              本次花费 <b style="color:var(--text)">${{ fmt(currentTask.actual_cost_usd) }}</b>
+            </template>
+            <template v-else>
+              预估 ${{ fmt(currentTask.estimated_cost_usd) }} · 已冻结 <b style="color:var(--text)">${{ fmt(currentTask.held_usd || currentTask.estimated_cost_usd) }}</b>
+            </template>
+          </div>
+
+          <template v-if="currentTask.status === 'succeeded' && currentTask.video_url">
+            <div style="background:#0f172a; border-radius:10px; overflow:hidden; max-width:720px; margin:0 auto;">
+              <video :src="currentTask.video_url" controls autoplay playsinline style="width:100%; display:block;"></video>
+            </div>
+            <div style="display:flex; justify-content:center; margin-top:14px;">
+              <el-button tag="a" :href="currentTask.video_url" :download="currentTask.id + '.mp4'">
+                <el-icon style="margin-right:6px"><Download /></el-icon>下载视频
+              </el-button>
+            </div>
+          </template>
+          <template v-else-if="['failed','cancelled','expired'].includes(currentTask.status)">
+            <el-alert type="error" :closable="false" show-icon>
+              <template #title>任务 {{ statusLabel(currentTask.status) }}</template>
+              {{ currentTask.error?.message || '请查看详情' }}
+            </el-alert>
+          </template>
+          <template v-else>
+            <div class="running-banner">
+              <div class="pulse"></div>
+              <div>
+                <div style="font-weight:600">{{ currentTask.status === 'queued' ? '排队中' : '正在生成' }}</div>
+                <div style="font-size:12.5px; color:var(--text-muted)">通常需要 2-10 分钟，页面会自动刷新</div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </section>
+
+      <!-- ═══════════ HISTORY ═══════════ -->
+      <section v-if="tab === 'history'">
+        <div class="page-header">
+          <h1 class="page-title">我的视频</h1>
+          <p class="page-sub">最近的生成任务，点视频可播放</p>
+        </div>
+        <div v-loading="loading.history" style="min-height:200px">
+          <div v-if="!loading.history && history.length === 0" class="card card-pad" style="text-align:center; padding:60px 24px;">
+            <el-icon :size="48" style="color:#cbd5e1"><Film /></el-icon>
+            <p style="color:var(--text-muted); margin-top:14px;">还没有任务，去新建一个吧</p>
+            <el-button type="primary" @click="switchTab('generate')" style="margin-top:8px"><el-icon><Plus /></el-icon> 新建视频</el-button>
+          </div>
+          <div v-else class="video-grid">
+            <div v-for="t in history" :key="t.id" class="video-card" @click="goToTask(t.id)">
+              <div class="video-thumb">
+                <video v-if="t.status === 'succeeded' && t.video_url" :src="t.video_url" preload="metadata"></video>
+                <div v-else class="video-placeholder">
+                  <el-icon :size="32">
+                    <component :is="t.status === 'running' ? 'Loading' : 'Film'"></component>
+                  </el-icon>
+                  <span style="font-size:12px;">{{ statusLabel(t.status) }}</span>
+                </div>
+                <div class="status-overlay"><el-tag :type="statusType(t.status)" size="small" effect="dark">{{ statusLabel(t.status) }}</el-tag></div>
+              </div>
+              <div style="padding:14px 16px;">
+                <div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start; margin-bottom:6px;">
+                  <span class="mono" style="font-size:11px; color:var(--text-muted)">{{ t.id }}</span>
+                  <span style="font-size:11px; color:var(--text-muted); flex-shrink:0">{{ fmtTs(t.created_at) }}</span>
+                </div>
+                <p style="font-size:13.5px; margin:0 0 10px; line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
+                  {{ t.prompt_text || '—' }}
+                </p>
+                <div style="display:flex; justify-content:space-between; font-size:11.5px; color:var(--text-muted);">
+                  <span>{{ t.model }} · {{ t.resolution || '-' }} · {{ t.duration || '-' }}s</span>
+                  <span class="mono" style="font-weight:600; color:var(--text)">${{ fmt(t.actual_cost_usd ?? t.estimated_cost_usd) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════ DOCS ═══════════ -->
+      <section v-if="tab === 'assets'">
+        <div class="page-header">
+          <h1 class="page-title">我的素材库</h1>
+          <p class="page-sub">这里显示当前 API key 上传过的素材，其他客户看不到</p>
+        </div>
+
+        <div class="card card-pad" style="margin-bottom:20px">
+          <div class="card-title"><el-icon><Upload /></el-icon> 上传素材</div>
+          <div class="file-picker">
+            <div style="min-width:0">
+              <input ref="assetFileInput" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,audio/mpeg,audio/wav" @change="handleAssetFile" />
+              <div style="font-size:12px; color:var(--text-muted); margin-top:6px;">
+                支持 JPG / PNG / WebP / MP4 / MOV / MP3 / WAV。公开视频 URL 会给上游模型拉取。
+              </div>
+            </div>
+            <el-button type="primary" :loading="loading.upload" :disabled="!uploadForm.file" @click="uploadAsset">
+              <el-icon><Upload /></el-icon> 上传
+            </el-button>
+          </div>
+          <el-row :gutter="12" style="margin-top:14px">
+            <el-col :xs="24" :sm="10">
+              <el-switch v-model="uploadForm.face_allowlist" active-text="上传后加入人脸白名单" />
+            </el-col>
+            <el-col :xs="24" :sm="14">
+              <el-input v-model="uploadForm.face_asset_label" placeholder="白名单标签，例如 customer-approved-face" :disabled="!uploadForm.face_allowlist" />
+            </el-col>
+          </el-row>
+        </div>
+
+        <div v-loading="loading.assets" style="min-height:180px">
+          <div v-if="!loading.assets && uploads.length === 0" class="card card-pad" style="text-align:center; padding:56px 24px;">
+            <el-icon :size="48" style="color:#cbd5e1"><FolderOpened /></el-icon>
+            <p style="color:var(--text-muted); margin-top:14px;">还没有素材，先上传一张参考图或一段视频</p>
+          </div>
+          <div v-else class="asset-grid">
+            <div v-for="a in uploads" :key="a.id" :class="['asset-card', form.upload_id === a.id && 'selected']">
+              <div class="asset-preview">
+                <img v-if="a.purpose === 'image'" :src="a.url" loading="lazy" />
+                <video v-else-if="a.purpose === 'video'" :src="a.url" muted preload="metadata"></video>
+                <el-icon v-else :size="34"><Headset /></el-icon>
+              </div>
+              <div style="padding:14px 16px;">
+                <div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start;">
+                  <div style="min-width:0">
+                    <div style="font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ a.original_filename || a.id }}</div>
+                    <div class="mono" style="font-size:11px; color:var(--text-muted); margin-top:3px">{{ a.id }} · {{ purposeLabel(a.purpose) }} · {{ formatBytes(a.size_bytes) }}</div>
+                  </div>
+                  <el-tag :type="a.face_asset_whitelisted ? 'success' : 'info'" size="small" effect="light">
+                    {{ a.face_asset_whitelisted ? '白名单' : '普通' }}
+                  </el-tag>
+                </div>
+                <div class="asset-toolbar" style="margin-top:12px">
+                  <el-button size="small" @click="useUpload(a)"><el-icon><Check /></el-icon> 用作参考</el-button>
+                  <el-button size="small" @click="copyContentBlock(a)"><el-icon><CopyDocument /></el-icon> 复制引用</el-button>
+                  <el-button size="small" text @click="openUrl(a.url)">打开</el-button>
+                </div>
+                <div v-if="a.asset_url" class="mono" style="font-size:11px; color:var(--text-muted); margin-top:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                  {{ a.asset_url }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="tab === 'guide'">
+        <div class="page-header">
+          <h1 class="page-title">操作指南</h1>
+          <p class="page-sub">按字节原生 content[] 调用；真人素材只多加一个 Relay 开关</p>
+        </div>
+
+        <div class="guide-grid">
+          <div class="card card-pad">
+            <div class="guide-row">
+              <div>
+                <div class="guide-kicker">Step 1</div>
+                <h2 class="guide-title">上传或登记素材</h2>
+                <p class="guide-copy">
+                  本地文件用 /v1/uploads；已有公网图片或视频用 /v1/uploads/from-url。返回的素材只归当前 API key 所属账号。
+                </p>
+                <div class="guide-actions">
+                  <el-button size="small" @click="switchTab('assets')"><el-icon><Upload /></el-icon> 去素材库</el-button>
+                  <el-button size="small" @click="copyText(guideUploadCurl)"><el-icon><CopyDocument /></el-icon> 复制命令</el-button>
+                </div>
+              </div>
+              <pre class="code-block">{{ guideUploadCurl }}</pre>
+            </div>
+          </div>
+
+          <div class="card card-pad">
+            <div class="guide-row">
+              <div>
+                <div class="guide-kicker">Step 2</div>
+                <h2 class="guide-title">按字节原生结构生成</h2>
+                <p class="guide-copy">
+                  生成任务使用 model、content、resolution、ratio、duration 等字段。content[] 里可以放 text、image_url、video_url、audio_url。
+                </p>
+                <div class="guide-actions">
+                  <el-button size="small" @click="switchTab('generate')"><el-icon><EditPen /></el-icon> 新建视频</el-button>
+                  <el-button size="small" @click="copyText(guideNativeCurl)"><el-icon><CopyDocument /></el-icon> 复制命令</el-button>
+                </div>
+              </div>
+              <pre class="code-block">{{ guideNativeCurl }}</pre>
+            </div>
+          </div>
+
+          <div class="card card-pad">
+            <div class="guide-row">
+              <div>
+                <div class="guide-kicker">Real Person</div>
+                <h2 class="guide-title">一行开关自动过白名单</h2>
+                <p class="guide-copy">
+                  只在需要真人/人脸参考时加 extra_body.real_person_mode=true。Relay 会用后台 IAM AK/SK 注册素材，替换成 asset://ID，再转发给上游。
+                </p>
+                <div class="guide-actions">
+                  <el-button size="small" @click="copyText(guideRealPersonCurl)"><el-icon><CopyDocument /></el-icon> 复制命令</el-button>
+                </div>
+              </div>
+              <pre class="code-block">{{ guideRealPersonCurl }}</pre>
+            </div>
+          </div>
+
+          <el-row :gutter="16">
+            <el-col :xs="24" :md="12">
+              <div class="card card-pad">
+                <div class="card-title"><el-icon><Key /></el-icon> Key 隔离</div>
+                <p class="guide-copy">客户只用 Relay API Key。生成任务走平台大 Key 或后台绑定的客户 ark Key；素材白名单注册只走服务器保存的 IAM AK/SK。</p>
+              </div>
+            </el-col>
+            <el-col :xs="24" :md="12">
+              <div class="card card-pad">
+                <div class="card-title"><el-icon><Lock /></el-icon> 素材隔离</div>
+                <p class="guide-copy">素材列表按当前 API key 查询。别人上传生成的 asset://ID 不能被当前账号使用；服务端会返回 asset_not_owned。</p>
+              </div>
+            </el-col>
+          </el-row>
+        </div>
+      </section>
+
+      <section v-if="tab === 'docs'">
+        <div class="page-header">
+          <h1 class="page-title">API 接入文档</h1>
+          <p class="page-sub">完整端点说明、参数、错误码、Python / JavaScript / Shell 代码示例</p>
+        </div>
+        <div class="card card-pad markdown-body" v-loading="loading.docs">
+          <div v-html="docsHtml"></div>
+        </div>
+      </section>
+
+      <!-- ═══════════ ACCOUNT ═══════════ -->
+      <section v-if="tab === 'account'">
+        <div class="page-header">
+          <h1 class="page-title">账号设置</h1>
+        </div>
+        <el-row :gutter="24">
+          <el-col :xs="24" :lg="8">
+            <div class="card" style="overflow:hidden">
+              <div class="account-hero">
+                <div class="account-avatar">{{ initials(me?.email) }}</div>
+                <div style="margin-top:14px; font-weight:600;">{{ me?.email }}</div>
+                <div class="mono" style="font-size:11px; opacity:0.85; margin-top:2px;">{{ me?.id }}</div>
+              </div>
+              <div style="padding:24px;">
+                <div style="font-size:11px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">总余额</div>
+                <div style="font-size:34px; font-weight:800; margin-top:6px;">{{ fmtUsd(me?.total_usd) }}</div>
+                <div style="margin-top:14px; display:flex; flex-direction:column; gap:8px;">
+                  <div style="display:flex; justify-content:space-between; font-size:13px;">
+                    <span style="color:#15803d;">● 可用</span>
+                    <span class="mono" style="font-weight:600;">{{ fmtUsd(me?.available_usd) }}</span>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; font-size:13px;">
+                    <span style="color:var(--brand);">● 冻结中
+                      <span v-if="me?.pending_tasks" style="font-size:11px; color:var(--text-muted)">({{ me?.pending_tasks }} 个任务)</span>
+                    </span>
+                    <span class="mono" style="font-weight:600;">{{ fmtUsd(me?.held_usd) }}</span>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; font-size:13px; border-top:1px solid var(--border); padding-top:8px;">
+                    <span style="color:var(--text-muted);">累计已花费</span>
+                    <span class="mono">{{ fmtUsd(me?.lifetime_spent_usd) }}</span>
+                  </div>
+                </div>
+                <p style="font-size:12px; color:var(--text-muted); margin:14px 0 0;">需要充值请联系平台管理员</p>
+              </div>
+            </div>
+          </el-col>
+
+          <el-col :xs="24" :lg="16">
+            <div class="card card-pad">
+              <div class="card-title"><el-icon><Key /></el-icon> 开发者 API Key</div>
+              <p style="font-size:13px; color:var(--text-muted); margin:0 0 16px;">用 SDK / curl 集成调用</p>
+              <el-input v-model="me.api_key" readonly>
+                <template #append>
+                  <el-button @click="copyKey">
+                    <el-icon style="margin-right:4px"><CopyDocument /></el-icon>复制
+                  </el-button>
+                </template>
+              </el-input>
+              <div class="code-block" style="margin-top:18px;">
+<span class="comment"># 创建视频任务</span>
+curl https://video.8864k.com/v1/videos \
+  -X POST \
+  -H "Authorization: Bearer <span class="string">$KEY</span>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": <span class="string">"video-pro"</span>,
+    "content": [{"type":"text","text":<span class="string">"a cat dancing"</span>}],
+    "resolution": <span class="string">"720p"</span>,
+    "duration": 5
+  }'
+              </div>
+            </div>
+          </el-col>
+        </el-row>
+      </section>
+
+    </main>
+  </div>
+
+</div>
+
+<script src="https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/element-plus@2.8.4/dist/index.full.min.js"></script>
+<script src="https://unpkg.com/@element-plus/icons-vue@2.3.1/dist/index.iife.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script>
+const { createApp } = Vue;
+const { ElMessage } = ElementPlus;
+
+const TOKENS_PER_SEC = {
+  "video-pro":      {"480p":10128, "720p":21780, "1080p":49005},
+  "video-pro-fast": {"480p":10128, "720p":21780, "1080p":49005},
+  "video-1.5-pro":  {"480p": 7652, "720p":16456, "1080p":37027},
+};
+const RATE = {
+  "video-pro":      {"480p":0.0084, "720p":0.0084, "1080p":0.00924},
+  "video-pro-fast": {"480p":0.0084, "720p":0.0084, "1080p":0.00924},
+  "video-1.5-pro":  {"480p":0.0017, "720p":0.0017, "1080p":0.0017},
+  "video-1080p":    {"480p":0.0014, "720p":0.0014, "1080p":0.0014},
+  "video-720p":     {"480p":0.001,  "720p":0.001,  "1080p":0.001},
+  "video-lite":     {"480p":0.0007, "720p":0.0007, "1080p":0.0007},
+  "video-lite-i2v": {"480p":0.0007, "720p":0.0007, "1080p":0.0007},
+};
+
+const App = {
+  data() {
+    return {
+      view: "login",  // 启动默认显示登录, checkAuth 通过则切到 'app'
+      tab: "generate",
+      me: null,
+
+      loginForm: { email: "", password: "" },
+      loginLoading: false,
+
+      models: [],
+      form: {
+        model: "video-pro",
+        prompt: "",
+        resolution: "720p",
+        ratio: "16:9",
+        duration: 5,
+        seed: "",
+        generate_audio: false,
+        watermark: false,
+        upload_id: "",
+      },
+
+      currentTask: null,
+      pollTimer: null,
+      estimateInfo: null,
+      estimateTimer: null,
+
+      history: [],
+      uploads: [],
+      uploadForm: { file: null, face_allowlist: false, face_asset_label: "" },
+      loading: { submit: false, history: false, assets: false, upload: false, docs: false },
+      docsHtml: "",
+      guideUploadCurl: `KEY="sk_xxxxxxxxxxxxxxxx"
+
+curl -X POST https://video.yourbrand.com/v1/uploads \\
+  -H "Authorization: Bearer $KEY" \\
+  -F "file=@portrait.jpg;type=image/jpeg" \\
+  -F "face_allowlist=true"`,
+      guideNativeCurl: `curl -X POST https://video.yourbrand.com/v1/videos \\
+  -H "Authorization: Bearer $KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "video-pro",
+    "content": [
+      {"type": "text", "text": "走在小街上"},
+      {
+        "type": "image_url",
+        "image_url": {"url": "asset://asset_xxx"},
+        "role": "reference_image"
+      }
+    ],
+    "resolution": "720p",
+    "ratio": "16:9",
+    "duration": 5
+  }'`,
+      guideRealPersonCurl: `curl -X POST https://video.yourbrand.com/v1/videos \\
+  -H "Authorization: Bearer $KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "video-pro",
+    "content": [
+      {"type": "text", "text": "这个人走在小街上"},
+      {
+        "type": "image_url",
+        "image_url": {"url": "https://cdn.customer.com/portrait.jpg"},
+        "role": "reference_image"
+      }
+    ],
+    "resolution": "720p",
+    "ratio": "16:9",
+    "duration": 5,
+    "extra_body": {"real_person_mode": true}
+  }'`,
+    };
+  },
+  computed: {
+    currentModel() { return this.models.find(m => m.id === this.form.model); },
+    selectedUpload() { return this.uploads.find(a => a.id === this.form.upload_id); },
+    estimatedTokens() {
+      if (this.estimateInfo?.estimated_tokens) return this.estimateInfo.estimated_tokens;
+      const tps = (TOKENS_PER_SEC[this.form.model] || TOKENS_PER_SEC["video-pro"])[this.form.resolution];
+      return Math.ceil(tps * (this.form.duration || 0));
+    },
+    estimatedCost() {
+      if (this.estimateInfo?.max_cost_usd != null) return this.estimateInfo.max_cost_usd;
+      const ratePerK = (RATE[this.form.model] || RATE["video-pro"])[this.form.resolution];
+      const markup = this.me?.markup_pct ?? 0.30;
+      return this.estimatedTokens / 1000 * ratePerK * 1.10 * (1 + markup);
+    },
+    enoughBalance() {
+      const avail = this.me?.available_usd ?? this.me?.balance_usd ?? 0;
+      return avail >= this.estimatedCost;
+    },
+  },
+  watch: {
+    form: {
+      handler() { this.scheduleEstimate(); },
+      deep: true,
+    },
+  },
+  methods: {
+    async api(path, opts={}) {
+      const r = await fetch(path, { credentials: "include", headers: {"Content-Type": "application/json"}, ...opts });
+      let body; try { body = await r.json(); } catch { body = {}; }
+      if (!r.ok) throw { status: r.status, body };
+      return body;
+    },
+    errMsg(e) { return e.body?.error?.message || e.body?.detail?.error?.message || e.body?.detail || "请求失败"; },
+    fmt(n, d=4) { return n == null ? "-" : Number(n).toFixed(d); },
+    fmtUsd(n) { return n == null ? "$-" : "$" + Number(n).toFixed(4); },
+    fmtTs(ts) { return ts ? new Date(ts*1000).toLocaleString("zh-CN", {hour12: false}) : "-"; },
+    formatBytes(n) {
+      const size = Number(n || 0);
+      if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(2) + " MB";
+      if (size >= 1024) return (size / 1024).toFixed(1) + " KB";
+      return size + " B";
+    },
+    purposeLabel(p) { return ({ image: "图片", video: "视频", audio: "音频" })[p] || p || "-"; },
+    openUrl(url) { if (url) window.open(url, "_blank", "noopener"); },
+    initials(e) { return (e || "?").split("@")[0].slice(0,2).toUpperCase(); },
+    statusType(s) { return ({queued:"info",running:"primary",succeeded:"success",failed:"danger",cancelled:"warning",expired:"warning"})[s] || "info"; },
+    statusLabel(s) { return ({queued:"排队中",running:"生成中",succeeded:"已完成",failed:"失败",cancelled:"已取消",expired:"已过期"})[s] || s; },
+
+    async login() {
+      this.loginLoading = true;
+      try {
+        const u = await this.api("/auth/login", {method:"POST", body: JSON.stringify(this.loginForm)});
+        this.me = u;
+        await this.enterApp();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loginLoading = false; }
+    },
+    async logout() {
+      await this.api("/auth/logout", {method:"POST"});
+      location.reload();
+    },
+    async checkAuth() {
+      try {
+        const u = await this.api("/auth/me");
+        this.me = u;
+        await this.enterApp();
+      } catch { this.view = "login"; }
+    },
+    async enterApp() {
+      this.view = "app";
+      await this.refreshMe();
+      await this.loadModels();
+      await this.loadUploads();
+      this.switchTab("generate");
+    },
+    async refreshMe() {
+      this.me = await this.api("/v1/me");
+    },
+    async loadModels() {
+      const r = await this.api("/v1/models");
+      this.models = r.data;
+      if (!this.models.find(m => m.id === this.form.model)) this.form.model = this.models[0]?.id;
+    },
+    switchTab(name) {
+      this.tab = name;
+      if (name === "history") this.loadHistory();
+      if (name === "assets")  this.loadUploads();
+      if (name === "docs")    this.loadDocs();
+      if (name === "generate") this.scheduleEstimate();
+    },
+    buildContent() {
+      const content = [];
+      if (this.form.prompt.trim()) content.push({type: "text", text: this.form.prompt.trim()});
+      if (this.selectedUpload?.suggested_content_block) {
+        content.push(this.selectedUpload.suggested_content_block);
+      }
+      return content;
+    },
+    scheduleEstimate() {
+      if (this.estimateTimer) clearTimeout(this.estimateTimer);
+      this.estimateTimer = setTimeout(() => this.loadEstimate(), 350);
+    },
+    async loadEstimate() {
+      if (this.view !== "app") return;
+      try {
+        const body = {
+          model: this.form.model,
+          content: this.buildContent(),
+          resolution: this.form.resolution,
+          ratio: this.form.ratio,
+          duration: Number(this.form.duration) || 5,
+          generate_audio: !!this.form.generate_audio,
+        };
+        this.estimateInfo = await this.api("/v1/videos/estimate", { method: "POST", body: JSON.stringify(body) });
+      } catch (e) {
+        console.warn("estimate failed", e);
+      }
+    },
+    async loadUploads() {
+      this.loading.assets = true;
+      try { this.uploads = (await this.api("/v1/uploads?limit=100")).data; }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.assets = false; }
+    },
+    handleAssetFile(e) {
+      this.uploadForm.file = e.target.files?.[0] || null;
+    },
+    async uploadAsset() {
+      if (!this.uploadForm.file) { ElMessage.warning("请选择要上传的文件"); return; }
+      this.loading.upload = true;
+      try {
+        const fd = new FormData();
+        fd.append("file", this.uploadForm.file);
+        if (this.uploadForm.face_allowlist) {
+          fd.append("face_allowlist", "true");
+          if (this.uploadForm.face_asset_label) fd.append("face_asset_label", this.uploadForm.face_asset_label);
+        }
+        const r = await fetch("/v1/uploads", { method: "POST", credentials: "include", body: fd });
+        let body; try { body = await r.json(); } catch { body = {}; }
+        if (!r.ok) throw { status: r.status, body };
+        this.uploads = [body, ...this.uploads.filter(a => a.id !== body.id)];
+        this.form.upload_id = body.id;
+        this.uploadForm = { file: null, face_allowlist: false, face_asset_label: "" };
+        if (this.$refs.assetFileInput) this.$refs.assetFileInput.value = "";
+        this.scheduleEstimate();
+        ElMessage.success("素材已上传");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.upload = false; }
+    },
+    useUpload(asset) {
+      this.form.upload_id = asset.id;
+      this.scheduleEstimate();
+      this.switchTab("generate");
+    },
+    copyContentBlock(asset) {
+      navigator.clipboard.writeText(JSON.stringify(asset.suggested_content_block, null, 2));
+      ElMessage.success("引用块已复制");
+    },
+    copyText(text) {
+      navigator.clipboard.writeText(text || "");
+      ElMessage.success("已复制");
+    },
+    async loadDocs() {
+      if (this.docsHtml) return;
+      this.loading.docs = true;
+      try {
+        const md = await fetch("/v1/docs/api.md", { credentials: "include" }).then(r => r.text());
+        this.docsHtml = marked.parse(md);
+      } catch (e) {
+        this.docsHtml = "<p style='color:red'>加载文档失败: " + e.message + "</p>";
+      } finally {
+        this.loading.docs = false;
+      }
+    },
+    copyKey() {
+      navigator.clipboard.writeText(this.me.api_key);
+      ElMessage.success("API key 已复制");
+    },
+
+    // ─── Submit ───
+    async submitGen() {
+      if (!this.form.prompt.trim()) { ElMessage.warning("请输入提示词"); return; }
+      this.loading.submit = true;
+      const body = {
+        model: this.form.model,
+        content: this.buildContent(),
+        resolution: this.form.resolution,
+        ratio: this.form.ratio,
+        duration: Number(this.form.duration) || 5,
+        watermark: this.form.watermark,
+      };
+      if (this.form.seed) body.seed = Number(this.form.seed);
+      if (this.form.generate_audio) body.generate_audio = true;
+      try {
+        const r = await this.api("/v1/videos", {method:"POST", body: JSON.stringify(body)});
+        ElMessage.success(`任务已提交，预扣 $${this.fmt(r.held_usd)}`);
+        this.currentTask = r;
+        this.pollTask();
+        this.refreshMe();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.submit = false; }
+    },
+    async pollTask() {
+      if (this.pollTimer) clearTimeout(this.pollTimer);
+      if (!this.currentTask) return;
+      try {
+        const t = await this.api(`/v1/videos/${this.currentTask.id}`);
+        this.currentTask = t;
+        if (["succeeded","failed","cancelled","expired"].includes(t.status)) {
+          this.refreshMe();
+          if (t.status === "succeeded") ElMessage.success("视频已生成");
+          return;
+        }
+      } catch (e) { console.warn(e); }
+      this.pollTimer = setTimeout(() => this.pollTask(), 8000);
+    },
+
+    // ─── History ───
+    async loadHistory() {
+      this.loading.history = true;
+      try { this.history = (await this.api("/v1/videos?limit=50")).data; }
+      catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.history = false; }
+    },
+    async goToTask(vid) {
+      this.switchTab("generate");
+      try {
+        const t = await this.api(`/v1/videos/${vid}`);
+        this.currentTask = t;
+        if (!["succeeded","failed","cancelled","expired"].includes(t.status)) this.pollTask();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+  },
+  async mounted() {
+    await this.checkAuth();
+  },
+};
+
+const app = createApp(App);
+app.config.errorHandler = (err, vm, info) => console.error("Vue error:", err, info);
+app.use(ElementPlus);
+for (const [name, comp] of Object.entries(ElementPlusIconsVue)) {
+  app.component(name, comp);
+}
+app.mount("#app");
+</script>
+
+<style>[v-cloak] { display: none; }</style>
+</body>
+</html>
