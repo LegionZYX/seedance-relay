@@ -203,7 +203,15 @@
   .guide-title { font-size: 18px; font-weight: 800; margin: 0 0 8px; }
   .guide-copy { color: var(--text-muted); line-height: 1.7; font-size: 14px; margin: 0; }
   .guide-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .method-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
+  .method-card { border: 1px solid var(--border); border-radius: 10px; background: #fff; overflow: hidden; }
+  .method-head { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); background: #f8fafc; }
+  .method-title { margin: 0; font-size: 16px; font-weight: 800; }
+  .method-note { margin: 6px 0 0; color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+  .method-card .code-block { border-radius: 0; box-shadow: none; margin: 0; max-height: 360px; }
+  .method-foot { display: flex; justify-content: flex-end; padding: 10px 12px; border-top: 1px solid var(--border); background: #fff; }
   @media (max-width: 760px) { .guide-row { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) { .method-grid { grid-template-columns: 1fr; } }
 
   /* Account */
   .account-hero {
@@ -745,6 +753,27 @@
             </div>
           </div>
 
+          <div class="card card-pad">
+            <div class="card-title"><el-icon><Document /></el-icon> 视频生成方法范例</div>
+            <p class="guide-copy" style="margin-bottom:16px;">
+              下面全部是原生 /v1/videos 请求体写法，客户可以直接复制 JSON 放进命令行、SDK 或自己的后台。
+            </p>
+            <div class="method-grid">
+              <div v-for="item in methodExamples" :key="item.id" class="method-card">
+                <div class="method-head">
+                  <h3 class="method-title">{{ item.title }}</h3>
+                  <p class="method-note">{{ item.note }}</p>
+                </div>
+                <pre class="code-block">{{ item.code }}</pre>
+                <div class="method-foot">
+                  <el-button size="small" @click="copyText(item.code)">
+                    <el-icon><CopyDocument /></el-icon> 复制
+                  </el-button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <el-row :gutter="16">
             <el-col :xs="24" :md="12">
               <div class="card card-pad">
@@ -940,6 +969,178 @@ curl -X POST https://video.example.com/v1/uploads \\
     "duration": 5,
     "extra_body": {"real_person_mode": true}
   }'`,
+      methodExamples: [
+        {
+          id: "text",
+          title: "文生视频",
+          note: "只传 text 块，适合纯提示词生成。",
+          code: `{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "A calm cinematic walk through a narrow old street, soft morning light" }
+  ],
+  "resolution": "720p",
+  "ratio": "16:9",
+  "duration": 5
+}`,
+        },
+        {
+          id: "image-first-frame",
+          title: "图生视频 / 首帧",
+          note: "图片作为 first_frame，模型从这张图开始运动。",
+          code: `{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "The scene slowly comes alive, subtle camera push-in, cinematic" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.jpg" },
+      "role": "first_frame"
+    }
+  ],
+  "resolution": "720p",
+  "ratio": "16:9",
+  "duration": 5
+}`,
+        },
+        {
+          id: "first-last-frame",
+          title: "首尾帧",
+          note: "指定开始图和结束图，生成中间过渡。",
+          code: `{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "A smooth transition from morning to evening, realistic motion" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://cdn.example.com/start.jpg" },
+      "role": "first_frame"
+    },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://cdn.example.com/end.jpg" },
+      "role": "last_frame"
+    }
+  ],
+  "duration": 5,
+  "ratio": "16:9"
+}`,
+        },
+        {
+          id: "multi-image",
+          title: "多图参考",
+          note: "用 reference_image 保持人物、产品、服装或风格一致。",
+          code: `{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "Use the references for character and outfit consistency, walking through a small street" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset_character_reference" },
+      "role": "reference_image"
+    },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://cdn.example.com/street-style.jpg" },
+      "role": "reference_image"
+    }
+  ],
+  "duration": 5,
+  "resolution": "720p"
+}`,
+        },
+        {
+          id: "video-reference",
+          title: "参考视频",
+          note: "用 reference_video 参考运动节奏、镜头或动作。",
+          code: `{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "Keep the motion rhythm, change the visual style to warm cinematic street photography" },
+    {
+      "type": "video_url",
+      "video_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.mp4" },
+      "role": "reference_video"
+    }
+  ],
+  "duration": 5,
+  "ratio": "16:9"
+}`,
+        },
+        {
+          id: "generate-audio",
+          title: "生成同步音频",
+          note: "用 generate_audio=true 让模型一起生成环境声或配乐。",
+          code: `{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "A chef preparing food in a lively kitchen, natural ambient sound" }
+  ],
+  "duration": 5,
+  "generate_audio": true
+}`,
+        },
+        {
+          id: "audio-reference",
+          title: "嵌入 / 参考音频",
+          note: "把 MP3/WAV 放进 audio_url，适合节奏或口播参考。",
+          code: `{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "Create a short presenter-style video matching the provided voice timing" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset_presenter_reference" },
+      "role": "reference_image"
+    },
+    {
+      "type": "audio_url",
+      "audio_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_voice.mp3" },
+      "role": "reference_audio"
+    }
+  ],
+  "duration": 5,
+  "ratio": "9:16"
+}`,
+        },
+        {
+          id: "real-person",
+          title: "真人白名单",
+          note: "加 extra_body.real_person_mode=true，Relay 自动注册 asset://。",
+          code: `{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "The approved person walks through a small street, natural expression, cinematic" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://cdn.example.com/approved-person.jpg" },
+      "role": "reference_image"
+    }
+  ],
+  "duration": 5,
+  "extra_body": { "real_person_mode": true }
+}`,
+        },
+        {
+          id: "nsfw",
+          title: "NSFW 模型",
+          note: "模型名以 /v1/models 返回为准，其它参数保持原生写法。",
+          code: `{
+  "model": "video-pro-nsfw",
+  "content": [
+    { "type": "text", "text": "Your NSFW scene prompt here" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset_xxx" },
+      "role": "reference_image"
+    }
+  ],
+  "resolution": "720p",
+  "ratio": "9:16",
+  "duration": 5
+}`,
+        },
+      ],
     };
   },
   computed: {

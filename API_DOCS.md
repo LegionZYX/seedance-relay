@@ -586,13 +586,13 @@ curl -X POST https://video.example.com/v1/uploads \
 
 ### 9. NSFW / 成人向模型用法
 
-如果你的平台提供 NSFW 或成人向生成能力，通常由管理员给客户分配专门的模型 ID，例如：
+如果平台给当前账号开通了 NSFW 模型，调用方式与普通视频生成相同，只需要使用后台返回的 NSFW 模型 ID。
 
 ```json
 {
   "model": "video-pro-nsfw",
   "content": [
-    { "type": "text", "text": "A private adult-themed scene description that complies with your platform policy" }
+    { "type": "text", "text": "Your NSFW scene prompt here" }
   ],
   "resolution": "720p",
   "ratio": "16:9",
@@ -600,12 +600,30 @@ curl -X POST https://video.example.com/v1/uploads \
 }
 ```
 
-使用规则：
+图像、视频、音频参考也保持原生 `content[]` 写法：
 
-- 具体 `model` 以 `GET /v1/models` 返回为准；如果没有看到 NSFW 模型，说明当前账号未开通。
-- 仅允许成年人、授权素材、合法合规内容。
-- 涉及真人脸、肖像、参考图或参考视频时，仍建议使用 `face_allowlist=true` 或 `extra_body.real_person_mode=true`。
-- 不要上传未授权人物、未成年人、违法、骚扰、胁迫或非自愿内容。
+```json
+{
+  "model": "video-pro-nsfw",
+  "content": [
+    { "type": "text", "text": "Your NSFW image-to-video prompt here" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset_xxx" },
+      "role": "reference_image"
+    }
+  ],
+  "resolution": "720p",
+  "ratio": "9:16",
+  "duration": 5
+}
+```
+
+说明：
+
+- 具体 `model` 以 `GET /v1/models` 返回为准。
+- 如果账号没有看到 NSFW 模型，说明当前账号未开通。
+- 涉及真人脸、肖像、参考图或参考视频时，仍可使用 `face_allowlist=true` 或 `extra_body.real_person_mode=true` 自动转为 `asset://...`。
 - 平台可以给 NSFW 模型配置单独价格、单独并发、单独 RPM 限制。
 
 ### 10. 常用组合清单
@@ -1253,7 +1271,7 @@ A: 调 `GET /v1/me` 看 `available_usd`，调 `GET /v1/pricing` 拿单价。或�
 A: 不可以。每个 API key 绑定唯一账号，余额独立。如需多人共享，请联系管理员。
 
 **Q: 视频版权归谁？**
-A: 生成结果归你（API 调用方）所有。但需遵循平台 ToS 中的合规要求。
+A: 生成结果归你（API 调用方）所有，具体以你的平台条款为准。
 
 **Q: 支持 webhook 通知吗？**
 A: 即将上线。当前请轮询。
