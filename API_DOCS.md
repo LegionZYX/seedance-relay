@@ -1,7 +1,7 @@
-# 8864k Studio Video API 开发文档
+# Example Video Relay Video API 开发文档
 
 > AI 视频生成 API · 用文本/图像/视频/音频生成高质量视频
-> Base URL: **`https://video.8864k.com`**
+> Base URL: **`https://video.example.com`**
 > 版本: v1
 
 ---
@@ -36,7 +36,7 @@
 export KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
 
 # 1) 提交任务
-curl https://video.8864k.com/v1/videos -X POST \
+curl https://video.example.com/v1/videos -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -50,14 +50,14 @@ curl https://video.8864k.com/v1/videos -X POST \
 # { "id": "vid_a3f9c1b2d8e4f7a6", "status": "queued", "estimated_cost_usd": 0.91, "held_usd": 1.31 }
 
 # 2) 轮询状态 (一般 2-10 分钟完成)
-curl https://video.8864k.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
+curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
   -H "Authorization: Bearer $KEY"
 
 # 返回 "status": "succeeded" 后:
-# { "video_url": "https://video.8864k.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content", ... }
+# { "video_url": "https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content", ... }
 
 # 3) 下载视频
-curl -o video.mp4 https://video.8864k.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
+curl -o video.mp4 https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -94,10 +94,10 @@ API key 由平台管理员发放（格式 `sk-` 开头）。**请妥善保管，
 获取实时价格表：
 
 ```bash
-curl https://video.8864k.com/v1/pricing
+curl https://video.example.com/v1/pricing
 
 # 带客户 key 时返回该客户自己的有效价格
-curl https://video.8864k.com/v1/pricing \
+curl https://video.example.com/v1/pricing \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -152,7 +152,7 @@ POST /v1/uploads
 用于把本地图片、视频或音频先上传到你的白标域名，返回 Seedance 可拉取的公网 URL。所有上传都需要 `Authorization: Bearer sk-xxxx`。
 
 ```bash
-curl -X POST https://video.8864k.com/v1/uploads \
+curl -X POST https://video.example.com/v1/uploads \
   -H "Authorization: Bearer $KEY" \
   -F "file=@portrait.jpg;type=image/jpeg"
 ```
@@ -162,14 +162,14 @@ curl -X POST https://video.8864k.com/v1/uploads \
 ```json
 {
   "id": "upl_a1b2c3d4e5f6a7b8",
-  "url": "https://video.8864k.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
+  "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
   "object_key": "uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
   "content_type": "image/jpeg",
   "size_bytes": 123456,
   "purpose": "image",
   "suggested_content_block": {
     "type": "image_url",
-    "image_url": { "url": "https://video.8864k.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg" },
+    "image_url": { "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg" },
     "role": "first_frame"
   }
 }
@@ -188,7 +188,7 @@ curl -X POST https://video.8864k.com/v1/uploads \
 如果客户已经有可公开访问的素材 URL，不想再把文件传到 Relay，可以只登记 URL：
 
 ```bash
-curl -X POST https://video.8864k.com/v1/uploads/from-url \
+curl -X POST https://video.example.com/v1/uploads/from-url \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -203,7 +203,7 @@ curl -X POST https://video.8864k.com/v1/uploads/from-url \
 需要一行参数触发人脸白名单时：
 
 ```bash
-curl -X POST https://video.8864k.com/v1/uploads/from-url \
+curl -X POST https://video.example.com/v1/uploads/from-url \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -217,10 +217,10 @@ curl -X POST https://video.8864k.com/v1/uploads/from-url \
 查看当前客户自己的上传素材：
 
 ```bash
-curl https://video.8864k.com/v1/uploads \
+curl https://video.example.com/v1/uploads \
   -H "Authorization: Bearer $KEY"
 
-curl https://video.8864k.com/v1/uploads/upl_a1b2c3d4e5f6a7b8 \
+curl https://video.example.com/v1/uploads/upl_a1b2c3d4e5f6a7b8 \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -231,7 +231,7 @@ curl https://video.8864k.com/v1/uploads/upl_a1b2c3d4e5f6a7b8 \
   "data": [
     {
       "id": "upl_a1b2c3d4e5f6a7b8",
-      "url": "https://video.8864k.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
+      "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
       "asset_url": "asset://asset-xxxx",
       "purpose": "image",
       "original_filename": "portrait.jpg",
@@ -254,7 +254,7 @@ curl https://video.8864k.com/v1/uploads/upl_a1b2c3d4e5f6a7b8 \
 平台管理员排查素材时走后台接口：
 
 ```bash
-curl "https://video.8864k.com/admin/uploads?user_id=u_xxx&purpose=image" \
+curl "https://video.example.com/admin/uploads?user_id=u_xxx&purpose=image" \
   -H "X-Admin-Key: $ADMIN_KEY"
 ```
 
@@ -302,7 +302,7 @@ FACE_ASSET_SELF_SERVICE=true
 如果平台启用了自助人脸白名单，客户可以在上传时多传一行参数：
 
 ```bash
-curl -X POST https://video.8864k.com/v1/uploads \
+curl -X POST https://video.example.com/v1/uploads \
   -H "Authorization: Bearer $KEY" \
   -F "face_allowlist=true" \
   -F "face_asset_label=actor-a" \
@@ -319,7 +319,7 @@ export BYTEPLUS_ACCESS_KEY_SECRET="your-secret-access-key"
 export MODELARK_ASSET_GROUP_ID="your-asset-group-id"
 
 python create_asset_white_label.py create \
-  --url "https://video.8864k.com/uploads/2026/06/02/upl_xxx.mp4" \
+  --url "https://video.example.com/uploads/2026/06/02/upl_xxx.mp4" \
   --asset-type Video \
   --skip-moderation
 
@@ -345,7 +345,7 @@ POST /v1/videos
 ### 最简请求（纯文本）
 
 ```bash
-curl https://video.8864k.com/v1/videos -X POST \
+curl https://video.example.com/v1/videos -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -359,7 +359,7 @@ curl https://video.8864k.com/v1/videos -X POST \
 真人素材一键白名单开关：
 
 ```bash
-curl https://video.8864k.com/v1/videos -X POST \
+curl https://video.example.com/v1/videos -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -482,7 +482,7 @@ GET /v1/videos/{vid}
 ```
 
 ```bash
-curl https://video.8864k.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
+curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -497,7 +497,7 @@ curl https://video.8864k.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
   "estimated_cost_usd": 1.1888,
   "actual_cost_usd": 1.1896,
   "prompt_text": "A cat playing piano in a jazz bar",
-  "video_url": "https://video.8864k.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content",
+  "video_url": "https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content",
   "created_at": 1778415123,
   "updated_at": 1778415790
 }
@@ -522,7 +522,7 @@ KEY = "sk-xxx"
 def wait_for(vid, max_wait=1800):
     deadline = time.time() + max_wait
     while time.time() < deadline:
-        r = requests.get(f"https://video.8864k.com/v1/videos/{vid}",
+        r = requests.get(f"https://video.example.com/v1/videos/{vid}",
                          headers={"Authorization": f"Bearer {KEY}"})
         info = r.json()
         if info["status"] in ("succeeded", "failed", "cancelled", "expired"):
@@ -544,7 +544,7 @@ GET /v1/videos/{vid}/content
 succeeded 状态的任务直接拉：
 
 ```bash
-curl -o video.mp4 https://video.8864k.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
+curl -o video.mp4 https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -557,7 +557,7 @@ curl -o video.mp4 https://video.8864k.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content
 
 ```html
 <video controls
-       src="https://video.8864k.com/v1/videos/vid_xxx/content?token=...">
+       src="https://video.example.com/v1/videos/vid_xxx/content?token=...">
 </video>
 ```
 
@@ -572,7 +572,7 @@ GET /v1/videos?limit=20&offset=0&status=succeeded
 ```
 
 ```bash
-curl "https://video.8864k.com/v1/videos?limit=10" \
+curl "https://video.example.com/v1/videos?limit=10" \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -603,7 +603,7 @@ DELETE /v1/videos/{vid}
 ```
 
 ```bash
-curl -X DELETE https://video.8864k.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
+curl -X DELETE https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -629,7 +629,7 @@ GET /v1/me
 ```
 
 ```bash
-curl https://video.8864k.com/v1/me \
+curl https://video.example.com/v1/me \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -679,7 +679,7 @@ POST /v1/videos/estimate
 参数跟 `POST /v1/videos` **完全一样**，但**不会真的创建任务**，不消耗任何配额。
 
 ```bash
-curl https://video.8864k.com/v1/videos/estimate -X POST \
+curl https://video.example.com/v1/videos/estimate -X POST \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{
     "model": "video-pro",
@@ -813,7 +813,7 @@ post("/v1/videos", params)  # 真提交
 import time
 import requests
 
-BASE = "https://video.8864k.com"
+BASE = "https://video.example.com"
 KEY  = "sk-xxxxxxxxxxxxxxxxxxxxxxxx"
 HEADERS = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
 
@@ -860,7 +860,7 @@ else:
 ### JavaScript (Node.js / fetch)
 
 ```javascript
-const BASE = "https://video.8864k.com";
+const BASE = "https://video.example.com";
 const KEY  = "sk-xxxxxxxxxxxxxxxxxxxxxxxx";
 
 async function api(path, opts = {}) {
@@ -908,7 +908,7 @@ generateAndDownload("a cat dancing in a jazz bar");
 #!/usr/bin/env bash
 set -e
 KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
-BASE="https://video.8864k.com"
+BASE="https://video.example.com"
 
 # 1) 提交
 VID=$(curl -sS $BASE/v1/videos -X POST \
@@ -941,15 +941,15 @@ echo "✅ output.mp4"
 
 ```bash
 # 登录, 拿到 cookie
-curl -c cookie.txt https://video.8864k.com/auth/login -X POST \
+curl -c cookie.txt https://video.example.com/auth/login -X POST \
   -H "Content-Type: application/json" \
   -d '{"email":"you@example.com","password":"your-password"}'
 
 # 之后所有请求带 cookie 即可, 不用 Bearer
-curl -b cookie.txt https://video.8864k.com/v1/me
+curl -b cookie.txt https://video.example.com/v1/me
 ```
 
-或者直接打开 https://video.8864k.com/ 网页登录，会跳到 `/app/`。
+或者直接打开 https://video.example.com/ 网页登录，会跳到 `/app/`。
 
 ---
 
@@ -1025,8 +1025,8 @@ A: 服务部署在新加坡，全球可访问。延迟取决于你所在地区�
 
 - **充值 / 账号问题**：联系平台管理员
 - **API bug / feature request**：邮箱（待补充）
-- **服务状态**：`GET https://video.8864k.com/health` 应返回 `{"status":"ok"}`
+- **服务状态**：`GET https://video.example.com/health` 应返回 `{"status":"ok"}`
 
 ---
 
-**8864k Studio Video API** · v1 · 文档更新于 2026-05-11
+**Example Video Relay Video API** · v1 · 文档更新于 2026-05-11

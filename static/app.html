@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>8864k Studio · AI 视频生成</title>
+<title>Example Video Relay · AI 视频生成</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -292,7 +292,7 @@
       <div class="login-brand">
         <div class="brand-logo"><el-icon :size="18"><Star /></el-icon></div>
         <div>
-          <div style="font-weight:700">8864k Studio</div>
+          <div style="font-weight:700">Example Video Relay</div>
           <div style="font-size:12px; color:var(--text-muted)">AI 视频生成平台</div>
         </div>
       </div>
@@ -320,7 +320,7 @@
         <div style="display:flex; align-items:center;">
           <div class="brand">
             <div class="brand-logo"><el-icon :size="16"><Star /></el-icon></div>
-            <span class="brand-text">8864k Studio</span>
+            <span class="brand-text">Example Video Relay</span>
           </div>
           <nav class="nav">
             <div :class="['nav-link', tab==='generate' && 'active']" @click="switchTab('generate')">新建视频</div>
@@ -822,7 +822,7 @@
               </el-input>
               <div class="code-block" style="margin-top:18px;">
 <span class="comment"># 创建视频任务</span>
-curl https://video.8864k.com/v1/videos \
+curl https://video.example.com/v1/videos \
   -X POST \
   -H "Authorization: Bearer <span class="string">$KEY</span>" \
   -H "Content-Type: application/json" \
@@ -901,11 +901,11 @@ const App = {
       docsHtml: "",
       guideUploadCurl: `KEY="sk_xxxxxxxxxxxxxxxx"
 
-curl -X POST https://video.yourbrand.com/v1/uploads \\
+curl -X POST https://video.example.com/v1/uploads \\
   -H "Authorization: Bearer $KEY" \\
   -F "file=@portrait.jpg;type=image/jpeg" \\
   -F "face_allowlist=true"`,
-      guideNativeCurl: `curl -X POST https://video.yourbrand.com/v1/videos \\
+      guideNativeCurl: `curl -X POST https://video.example.com/v1/videos \\
   -H "Authorization: Bearer $KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -922,7 +922,7 @@ curl -X POST https://video.yourbrand.com/v1/uploads \\
     "ratio": "16:9",
     "duration": 5
   }'`,
-      guideRealPersonCurl: `curl -X POST https://video.yourbrand.com/v1/videos \\
+      guideRealPersonCurl: `curl -X POST https://video.example.com/v1/videos \\
   -H "Authorization: Bearer $KEY" \\
   -H "Content-Type: application/json" \\
   -d '{

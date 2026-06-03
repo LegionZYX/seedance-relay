@@ -59,7 +59,7 @@ GET /v1/uploads/{id}
 ```bash
 KEY="sk_xxxxxxxxxxxxxxxx"
 
-curl -X POST https://video.yourbrand.com/v1/uploads \
+curl -X POST https://video.example.com/v1/uploads \
   -H "Authorization: Bearer $KEY" \
   -F "file=@portrait.jpg;type=image/jpeg" \
   -F "face_allowlist=true"
@@ -70,7 +70,7 @@ curl -X POST https://video.yourbrand.com/v1/uploads \
 ```json
 {
   "id": "upl_xxx",
-  "url": "https://video.yourbrand.com/uploads/2026/06/03/upl_xxx.jpg",
+  "url": "https://video.example.com/uploads/2026/06/03/upl_xxx.jpg",
   "asset_id": "asset_xxx",
   "asset_url": "asset://asset_xxx",
   "face_asset_whitelisted": true,
@@ -85,7 +85,7 @@ curl -X POST https://video.yourbrand.com/v1/uploads \
 ### 公网 URL 登记
 
 ```bash
-curl -X POST https://video.yourbrand.com/v1/uploads/from-url \
+curl -X POST https://video.example.com/v1/uploads/from-url \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -102,7 +102,7 @@ curl -X POST https://video.yourbrand.com/v1/uploads/from-url \
 ### 字节原生 content[] 生成
 
 ```bash
-curl -X POST https://video.yourbrand.com/v1/videos \
+curl -X POST https://video.example.com/v1/videos \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -132,7 +132,7 @@ curl -X POST https://video.yourbrand.com/v1/videos \
 完整示例：
 
 ```bash
-curl -X POST https://video.yourbrand.com/v1/videos \
+curl -X POST https://video.example.com/v1/videos \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{

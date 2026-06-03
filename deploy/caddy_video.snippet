@@ -1,7 +1,7 @@
 # 把这一段追加到 /etc/caddy/Caddyfile 末尾
 # 然后: caddy reload --config /etc/caddy/Caddyfile
 
-video.8864k.com {
+video.example.com {
     tls {
         protocols tls1.2 tls1.3
     }
@@ -36,7 +36,7 @@ video.8864k.com {
     }
 
     log {
-        output file /var/log/caddy/video-8864k.log {
+        output file /var/log/caddy/video-example.log {
             roll_size 50mb
             roll_keep 10
             roll_keep_for 720h

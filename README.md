@@ -1,9 +1,9 @@
-# Video API — Seedance 视频生成白标反代
+# Example Video Relay API — Seedance 视频生成白标反代
 
 一套**白标 SaaS 系统**：把 BytePlus Seedance 视频生成 API 包装成自己品牌的服务对外出售。
 对客户隐藏底层供应商，内置用户系统、余额预扣、对账、本地视频落地、管理员 / 用户两套 Web 后台。
 
-
+> 示例部署域名为 `https://video.example.com`，服务器地址请替换为 `<SERVER_IP>`，底层模型为 BytePlus Seedance 2.0。
 
 ---
 
@@ -29,7 +29,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| **白标反代** | 客户调你的 `video.8864k.com` API，看不到 BytePlus / Seedance / volces.com 任何字样 |
+| **白标反代** | 客户调你的 `video.example.com` API，看不到 BytePlus / Seedance / volces.com 任何字样 |
 | **模型 ID 映射** | 客户用 `video-pro / video-lite`，底层映射到 `dreamina-seedance-2-0-260128` 等真实 ID |
 | **用户系统** | 邮箱 + bcrypt 密码登录，独立的客户 API key (`sk-xxxx`)，可全 Web 操作 |
 | **每客户独立 BytePlus key** | 每个客户在你 BytePlus 控制台单独申请一把 key，1:1 对账，互不影响 |
@@ -81,7 +81,7 @@
                               ▼  HTTPS (443)
                 ┌─────────────────────────┐
                 │  Caddy (自动 TLS)        │  /etc/caddy/Caddyfile
-                │  video.8864k.com        │
+                │  video.example.com        │
                 └────────────┬────────────┘
                              │ HTTP 127.0.0.1:8002
                              ▼
@@ -160,7 +160,7 @@ vi .env.relay
 ```bash
 UPSTREAM_API_KEY=ark-xxxxxxxxxxxxxxxx        # 你 BytePlus 的全局 key (fallback)
 ADMIN_PASSWORD=your_admin_password           # 首次启动会用它创建 admin 用户
-ADMIN_EMAIL=admin@yourbrand.com
+ADMIN_EMAIL=admin@example.com
 BRAND_NAME=Your Brand
 DB_PATH=./data/relay.sqlite                  # 本地开发用相对路径
 VIDEO_DIR=./data/videos
@@ -179,7 +179,7 @@ uvicorn relay_server:app --host 0.0.0.0 --port 8002 --reload
 
 ## 五、部署到服务器（核心，逐步操作）
 
-> 以全新 Ubuntu 22.04 服务器为例。若部署目标是本仓库当前的服务器 `154.92.16.74`，跳到 [5.7 复用已有服务器更新代码](#57-复用已有服务器只更新代码)。
+> 以全新 Ubuntu 22.04 服务器为例。若部署目标是你自己的已有服务器，跳到 [5.7 复用已有服务器更新代码](#57-复用已有服务器只更新代码)。
 
 ### 5.1 服务器准备
 
@@ -207,11 +207,11 @@ ufw allow 22 && ufw allow 80 && ufw allow 443 && ufw --force enable
 
 ### 5.2 域名解析
 
-在域名服务商把你的子域名（如 `video.yourbrand.com`）的 **A 记录**指到服务器 IP。
+在域名服务商把你的子域名（如 `video.example.com`）的 **A 记录**指到服务器 IP。
 等几分钟 DNS 生效：
 
 ```bash
-dig +short video.yourbrand.com    # 应该返回你的服务器 IP
+dig +short video.example.com    # 应该返回你的服务器 IP
 ```
 
 ### 5.3 上传代码到服务器
@@ -249,7 +249,7 @@ UPSTREAM_API_KEY=ark-xxxxxxxxxxxxxxxx
 UPSTREAM_BASE_URL=https://ark.ap-southeast.bytepluses.com/api/v3
 
 # 你的对外域名
-PUBLIC_DOMAIN=video.yourbrand.com
+PUBLIC_DOMAIN=video.example.com
 BRAND_NAME=Your Brand Studio
 
 # 数据库 + 视频路径（容器内路径，会挂载到宿主机 ./data）
@@ -286,7 +286,7 @@ FACE_ASSET_ALLOWLIST=
 FACE_ASSET_ENFORCE_ROLES=reference_image,reference_video
 
 # Admin 账号（首次启动时自动创建）
-ADMIN_EMAIL=admin@yourbrand.com
+ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=<生成一个强密码>
 ADMIN_KEY=<随机串，供 curl/脚本绕过登录用>
 
@@ -322,7 +322,7 @@ curl http://127.0.0.1:8002/health
 ```bash
 # 把模板里的域名换成你的
 cd /opt/seedance-relay
-sed "s/video\\.8864k\\.com/video.yourbrand.com/g" deploy/caddy_video.snippet \
+sed "s/video.example.com/<YOUR_DOMAIN>/g" deploy/caddy_video.snippet \
   >> /etc/caddy/Caddyfile
 
 # 重载 Caddy（首次会自动申请 Let's Encrypt 证书）
@@ -335,15 +335,15 @@ journalctl -u caddy -f
 公网验证：
 
 ```bash
-curl https://video.yourbrand.com/health
+curl https://video.example.com/health
 # 应返回 200 + JSON
 ```
 
-浏览器打开 `https://video.yourbrand.com/admin/ui/`，用 `ADMIN_EMAIL` + `ADMIN_PASSWORD` 登录。
+浏览器打开 `https://video.example.com/admin/ui/`，用 `ADMIN_EMAIL` + `ADMIN_PASSWORD` 登录。
 
 ### 5.7 复用已有服务器（只更新代码）
 
-如果服务器上已经跑过这套系统（如 `154.92.16.74` 的 `/opt/seedance-relay`），只想更新代码：
+如果你的服务器上已经跑过这套系统（例如 `/opt/seedance-relay`），只想更新代码：
 
 ```bash
 # 本地: 把改动的文件 scp 上去
@@ -366,8 +366,8 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 |---|---|---|
 | `UPSTREAM_API_KEY` | 空 | BytePlus 全局 fallback key |
 | `UPSTREAM_BASE_URL` | `https://ark.ap-southeast.bytepluses.com/api/v3` | BytePlus API 域名 |
-| `PUBLIC_DOMAIN` | `video.8864k.com` | 对外域名（用于生成视频 URL） |
-| `BRAND_NAME` | `8864k Studio` | 品牌名（脱敏替换 / UI 标题） |
+| `PUBLIC_DOMAIN` | `video.example.com` | 对外域名（用于生成视频 URL） |
+| `BRAND_NAME` | `Example Video Relay` | 品牌名（脱敏替换 / UI 标题） |
 | `DB_PATH` | `/data/relay.sqlite` | SQLite 数据库路径 |
 | `VIDEO_DIR` | `/data/videos` | 视频落地目录 |
 | `UPLOAD_DIR` | `/data/uploads` | 上传中转站本地保存目录 |
@@ -390,7 +390,7 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | `FACE_ASSET_SELF_SERVICE` | `false` | 是否允许客户通过 `face_allowlist=true` 自助注册并加入白名单 |
 | `FACE_ASSET_ALLOWLIST` | 空 | 逗号分隔的 `asset://...` 白名单 |
 | `FACE_ASSET_ENFORCE_ROLES` | `reference_image,reference_video` | 哪些 role 必须走人脸白名单 |
-| `ADMIN_EMAIL` | `admin@8864k.com` | 首次创建 admin 用的邮箱 |
+| `ADMIN_EMAIL` | `admin@example.com` | 首次创建 admin 用的邮箱 |
 | `ADMIN_PASSWORD` | 空 | 首次创建 admin 用的密码（启动时生效一次） |
 | `ADMIN_KEY` | 空 | 备用 `X-Admin-Key` 头（脚本/curl 绕登录） |
 | `MARKUP_PCT` | `0.3` | 全局默认加价比例（0.3 = +30%）；单个客户可在后台覆盖 |
@@ -426,15 +426,15 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | 视频 | `video/mp4`, `video/quicktime` | `UPLOAD_MAX_VIDEO_MB=50` |
 | 音频 | `audio/mpeg`, `audio/wav`, `audio/x-wav` | `UPLOAD_MAX_AUDIO_MB=15` |
 
-上传后会返回 `https://your-domain/uploads/YYYY/MM/DD/upl_xxx.ext`，这个 URL 是公开的，目的是让 Seedance 能直接拉取。不要把敏感文件传到中转站。
+上传后会返回 `https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.ext`，这个 URL 是公开的，目的是让 Seedance 能直接拉取。不要把敏感文件传到中转站。
 
 每次上传都会写入当前客户账号的素材记录。客户用自己的 API key 查询时，只会看到自己的素材：
 
 ```bash
-curl https://video.yourbrand.com/v1/uploads \
+curl https://video.example.com/v1/uploads \
   -H "Authorization: Bearer $KEY"
 
-curl https://video.yourbrand.com/v1/uploads/upl_xxx \
+curl https://video.example.com/v1/uploads/upl_xxx \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -463,7 +463,7 @@ FACE_ASSET_ENFORCE_ROLES=reference_image,reference_video
 FACE_ASSET_ALLOWLIST=asset://asset-xxx,asset://asset-yyy
 
 # 方式 2：admin API 写入本地 DB
-curl -X POST https://video.yourbrand.com/admin/face-assets \
+curl -X POST https://video.example.com/admin/face-assets \
   -H "X-Admin-Key: $ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"asset_url":"asset://asset-xxx","asset_type":"image","label":"approved actor"}'
@@ -472,7 +472,7 @@ curl -X POST https://video.yourbrand.com/admin/face-assets \
 查询当前白名单：
 
 ```bash
-curl https://video.yourbrand.com/admin/face-assets \
+curl https://video.example.com/admin/face-assets \
   -H "X-Admin-Key: $ADMIN_KEY"
 ```
 
@@ -492,7 +492,7 @@ FACE_ASSET_SELF_SERVICE=true
 客户只需要在上传时多传一行参数：
 
 ```bash
-curl -X POST https://video.yourbrand.com/v1/uploads \
+curl -X POST https://video.example.com/v1/uploads \
   -H "Authorization: Bearer $KEY" \
   -F "face_allowlist=true" \
   -F "face_asset_label=actor-a" \
@@ -520,13 +520,13 @@ Relay 会在服务端完成：
 后台调价：
 
 ```bash
-curl -X PATCH https://video.yourbrand.com/admin/users/u_xxx \
+curl -X PATCH https://video.example.com/admin/users/u_xxx \
   -H "X-Admin-Key: $ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"markup_pct":0.45}'
 
 # 清空客户独立价格，回到全局 MARKUP_PCT
-curl -X PATCH https://video.yourbrand.com/admin/users/u_xxx \
+curl -X PATCH https://video.example.com/admin/users/u_xxx \
   -H "X-Admin-Key: $ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"markup_pct":null}'
@@ -535,7 +535,7 @@ curl -X PATCH https://video.yourbrand.com/admin/users/u_xxx \
 客户估价与价格表会返回自己的有效价格：
 
 ```bash
-curl https://video.yourbrand.com/v1/pricing \
+curl https://video.example.com/v1/pricing \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -548,7 +548,7 @@ curl https://video.yourbrand.com/v1/pricing \
 1. 客户本地有文件：继续走 multipart 上传。
 
 ```bash
-curl -X POST https://video.yourbrand.com/v1/uploads \
+curl -X POST https://video.example.com/v1/uploads \
   -H "Authorization: Bearer $KEY" \
   -F "file=@portrait.jpg;type=image/jpeg"
 ```
@@ -556,7 +556,7 @@ curl -X POST https://video.yourbrand.com/v1/uploads \
 2. 客户已经有公网 URL：走 URL 入库，不需要把文件再传一遍。
 
 ```bash
-curl -X POST https://video.yourbrand.com/v1/uploads/from-url \
+curl -X POST https://video.example.com/v1/uploads/from-url \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -628,29 +628,29 @@ FACE_ASSET_SELF_SERVICE=true
 KEY="sk-xxxxxxxxxxxxxxxx"   # 客户从 /app/ 账号页复制
 
 # 0) 先把本地素材上传到中转站
-curl -X POST https://video.yourbrand.com/v1/uploads \
+curl -X POST https://video.example.com/v1/uploads \
   -H "Authorization: Bearer $KEY" \
   -F "file=@portrait.jpg;type=image/jpeg"
 # 返回里的 suggested_content_block 可直接放入 /v1/videos 的 content[]
 
 # 1) 预估
-curl -X POST https://video.yourbrand.com/v1/videos/estimate \
+curl -X POST https://video.example.com/v1/videos/estimate \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"model":"video-pro","resolution":"720p","duration":5,
        "content":[{"type":"text","text":"a cat walking"}]}'
 
 # 2) 创建
-curl -X POST https://video.yourbrand.com/v1/videos \
+curl -X POST https://video.example.com/v1/videos \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"model":"video-pro","resolution":"720p","duration":5,
        "content":[{"type":"text","text":"a cat walking"}]}'
 
 # 3) 查任务
-curl https://video.yourbrand.com/v1/videos/vid_xxx \
+curl https://video.example.com/v1/videos/vid_xxx \
   -H "Authorization: Bearer $KEY"
 
 # 4) 下载视频
-curl https://video.yourbrand.com/v1/videos/vid_xxx/content \
+curl https://video.example.com/v1/videos/vid_xxx/content \
   -H "Authorization: Bearer $KEY" -o video.mp4
 ```
 
@@ -662,7 +662,7 @@ export BYTEPLUS_ACCESS_KEY_SECRET="your-secret-access-key"
 export MODELARK_ASSET_GROUP_ID="your-asset-group-id"
 
 python create_asset_white_label.py create \
-  --url "https://video.yourbrand.com/uploads/YYYY/MM/DD/upl_xxx.mp4" \
+  --url "https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.mp4" \
   --asset-type Video \
   --skip-moderation
 
@@ -706,7 +706,7 @@ curl 示例：
 ADMIN_KEY="<.env.relay 里的 ADMIN_KEY>"
 
 # 开一个新客户
-curl -X POST https://video.yourbrand.com/admin/users \
+curl -X POST https://video.example.com/admin/users \
   -H "X-Admin-Key: $ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{
     "email":"newcustomer@example.com",
@@ -730,7 +730,7 @@ curl -X POST https://video.yourbrand.com/admin/users \
 
 ## 八、管理员后台使用
 
-打开 `https://video.yourbrand.com/admin/ui/`，登录后看到 5 个核心 Tab：
+打开 `https://video.example.com/admin/ui/`，登录后看到 5 个核心 Tab：
 
 ### 8.1 概览
 
@@ -759,7 +759,7 @@ KPI 卡：活跃用户数、总任务数、素材数、白名单素材数、已�
 
 ## 九、用户后台使用
 
-客户拿 admin 发的邮箱+密码登录 `https://video.yourbrand.com/`，进入 4 个 Tab：
+客户拿 admin 发的邮箱+密码登录 `https://video.example.com/`，进入 4 个 Tab：
 
 ### 9.1 新建视频
 
@@ -798,7 +798,7 @@ docker logs -f seedance-relay
 docker logs --tail 200 seedance-relay
 
 # Caddy 网关日志（HTTPS 请求 / 证书续签）
-tail -f /var/log/caddy/video-8864k.log     # JSON 格式
+tail -f /var/log/caddy/video-example.log     # JSON 格式
 journalctl -u caddy -f
 ```
 

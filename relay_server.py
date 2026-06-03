@@ -1,5 +1,5 @@
 """
-8864k Video API — BytePlus Seedance 视频生成反代（含管理员/用户后台）
+Example Video Relay API — BytePlus Seedance 视频生成反代（含管理员/用户后台）
 =====================================================================
 • 反代 BytePlus 视频 API，对客户隐藏底层供应商
 • **每个用户独立 BytePlus key**：方便 1:1 跟 BytePlus 后台对账
@@ -12,16 +12,16 @@
 环境变量 (.env.relay):
     UPSTREAM_BASE_URL   default: https://ark.ap-southeast.bytepluses.com/api/v3
     UPSTREAM_API_KEY    fallback BytePlus key (用户没填自己的就用这个)
-    PUBLIC_DOMAIN       default: video.8864k.com
+    PUBLIC_DOMAIN       default: video.example.com
     DB_PATH             default: /data/relay.sqlite
     VIDEO_DIR           default: /data/videos    (落地视频文件)
     UPLOAD_DIR          default: /data/uploads   (上传中转站)
     ASSET_AUTO_REGISTER_UPLOADS  default: false  (服务端自动注册 asset://)
     FACE_ASSET_ENFORCE default: false  (reference 人脸素材必须走白名单 asset://)
     FACE_ASSET_SELF_SERVICE default: false  (客户上传时自助注册并加入人脸白名单)
-    BRAND_NAME          default: 8864k Studio
+    BRAND_NAME          default: Example Video Relay
     MARKUP_PCT          default: 0.3
-    ADMIN_EMAIL         default: admin@8864k.com
+    ADMIN_EMAIL         default: admin@example.com
     ADMIN_PASSWORD      启动时若 admin 用户不存在则用此密码创建
     ADMIN_KEY           备用 X-Admin-Key (脚本/curl 用)
 """
@@ -72,15 +72,15 @@ load_dotenv(Path(__file__).parent / ".env")
 UPSTREAM_API_KEY  = os.getenv("UPSTREAM_API_KEY", os.getenv("ARK_API_KEY", "")).strip()
 UPSTREAM_BASE_URL = os.getenv("UPSTREAM_BASE_URL",
                               "https://ark.ap-southeast.bytepluses.com/api/v3").rstrip("/")
-PUBLIC_DOMAIN  = os.getenv("PUBLIC_DOMAIN", "video.8864k.com")
+PUBLIC_DOMAIN  = os.getenv("PUBLIC_DOMAIN", "video.example.com")
 DB_PATH        = os.getenv("DB_PATH", "/data/relay.sqlite")
 VIDEO_DIR      = Path(os.getenv("VIDEO_DIR", "/data/videos"))
 UPLOAD_DIR     = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
 UPLOAD_PUBLIC_BASE_URL = os.getenv("UPLOAD_PUBLIC_BASE_URL", "").strip().rstrip("/")
 ADMIN_KEY      = os.getenv("ADMIN_KEY", "").strip()
-ADMIN_EMAIL    = os.getenv("ADMIN_EMAIL", "admin@8864k.com").strip().lower()
+ADMIN_EMAIL    = os.getenv("ADMIN_EMAIL", "admin@example.com").strip().lower()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
-BRAND_NAME     = os.getenv("BRAND_NAME", "8864k Studio")
+BRAND_NAME     = os.getenv("BRAND_NAME", "Example Video Relay")
 MARKUP_PCT     = float(os.getenv("MARKUP_PCT", "0.3"))
 UPLOAD_MAX_IMAGE_MB = float(os.getenv("UPLOAD_MAX_IMAGE_MB", os.getenv("WEB_MAX_IMAGE_MB", "10")))
 UPLOAD_MAX_VIDEO_MB = float(os.getenv("UPLOAD_MAX_VIDEO_MB", "50"))
