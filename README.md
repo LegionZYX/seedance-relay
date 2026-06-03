@@ -3,7 +3,7 @@
 一套**白标 SaaS 系统**：把 BytePlus Seedance 视频生成 API 包装成自己品牌的服务对外出售。
 对客户隐藏底层供应商，内置用户系统、余额预扣、对账、本地视频落地、管理员 / 用户两套 Web 后台。
 
-> 当前部署在 [video.8864k.com](https://video.8864k.com)，服务器 `154.92.16.74`，使用 BytePlus Seedance 2.0 作为底层模型。
+
 
 ---
 
