@@ -1,4 +1,4 @@
-# 8864k Video API — Seedance 视频生成白标反代
+# Video API — Seedance 视频生成白标反代
 
 一套**白标 SaaS 系统**：把 BytePlus Seedance 视频生成 API 包装成自己品牌的服务对外出售。
 对客户隐藏底层供应商，内置用户系统、余额预扣、对账、本地视频落地、管理员 / 用户两套 Web 后台。
