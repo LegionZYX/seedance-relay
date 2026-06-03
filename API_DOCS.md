@@ -13,6 +13,7 @@
 - [模型与价格](#模型与价格)
 - [上传中转站（白名单）](#上传中转站白名单)
 - [生成视频（核心 API）](#生成视频核心-api)
+- [视频生成方法范例](#视频生成方法范例)
 - [查询任务状态](#查询任务状态)
 - [下载视频](#下载视频)
 - [列出我的任务](#列出我的任务)
@@ -381,6 +382,247 @@ curl https://video.example.com/v1/videos -X POST \
 `extra_body.real_person_mode=true` 是 Relay 自己识别的开关。请求主体仍然保持字节原生 `content[]`：Relay 会用服务端 IAM AK/SK 自动把图片/视频参考素材注册成 `asset://...`，写入当前客户的素材账本，再替换进上游生成请求。客户仍然只需要 `Authorization: Bearer sk-xxxx`，不需要也拿不到 AK/SK。
 
 如果客户已经通过 `/v1/uploads` 或 `/v1/uploads/from-url` 上传并白名单过同一个 URL，Relay 会复用已有 `asset://...`，不会重复注册。客户只能使用自己账号名下的上传素材 ID；其他客户上传产生的 `asset://...` 即使被复制，也会被 Relay 拒绝。
+
+---
+
+## 视频生成方法范例
+
+本节所有示例都使用同一个端点：
+
+```http
+POST /v1/videos
+```
+
+请求体保持字节原生结构：`model` + `content[]` + 输出参数。`content[]` 里可以组合文本、图片、视频、音频。上传过的素材可直接使用返回的 `suggested_content_block`。
+
+### 1. 文生视频
+
+适合纯文字创意，不需要参考素材。
+
+```bash
+curl https://video.example.com/v1/videos -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "video-pro",
+    "content": [
+      { "type": "text", "text": "A calm cinematic walk through a narrow old street, soft morning light" }
+    ],
+    "resolution": "720p",
+    "ratio": "16:9",
+    "duration": 5
+  }'
+```
+
+### 2. 图生视频（首帧）
+
+适合让一张图片动起来。图片可以是公网 URL、上传中转站 URL、或 `asset://...`。
+
+```json
+{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "The scene slowly comes alive, subtle camera push-in, cinematic" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.jpg" },
+      "role": "first_frame"
+    }
+  ],
+  "resolution": "720p",
+  "ratio": "16:9",
+  "duration": 5
+}
+```
+
+### 3. 首尾帧生成
+
+适合指定开始画面和结束画面，让模型生成中间过渡。
+
+```json
+{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "A smooth transition from morning to evening, realistic motion" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://cdn.example.com/start.jpg" },
+      "role": "first_frame"
+    },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://cdn.example.com/end.jpg" },
+      "role": "last_frame"
+    }
+  ],
+  "duration": 5,
+  "ratio": "16:9"
+}
+```
+
+### 4. 多图参考
+
+适合参考人物、产品、服装、风格或场景。若涉及真人或可识别人物，建议先走白名单素材。
+
+```json
+{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "Use the references for character and outfit consistency, walking through a small street" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset_character_reference" },
+      "role": "reference_image"
+    },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://cdn.example.com/street-style.jpg" },
+      "role": "reference_image"
+    }
+  ],
+  "duration": 5,
+  "resolution": "720p"
+}
+```
+
+### 5. 参考视频生成
+
+适合保留原视频的运动节奏、镜头语言或主体动作。视频参考会按视频参考价格档计费。
+
+```json
+{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "Keep the motion rhythm, change the visual style to warm cinematic street photography" },
+    {
+      "type": "video_url",
+      "video_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.mp4" },
+      "role": "reference_video"
+    }
+  ],
+  "duration": 5,
+  "ratio": "16:9"
+}
+```
+
+### 6. 生成同步音频
+
+如果模型支持原生音频，可以用 `generate_audio=true` 让模型同时生成视频音频。
+
+```json
+{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "A chef preparing food in a lively kitchen, natural ambient sound" }
+  ],
+  "duration": 5,
+  "generate_audio": true
+}
+```
+
+### 7. 嵌入或参考音频
+
+如果你已有音频素材，先上传 MP3/WAV，或使用公网音频 URL，再放入 `audio_url`。常见用途是节奏参考、口播参考或音频驱动画面。
+
+```bash
+curl -X POST https://video.example.com/v1/uploads \
+  -H "Authorization: Bearer $KEY" \
+  -F "file=@voice.mp3;type=audio/mpeg"
+```
+
+```json
+{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "Create a short presenter-style video matching the provided voice timing" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset_presenter_reference" },
+      "role": "reference_image"
+    },
+    {
+      "type": "audio_url",
+      "audio_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_voice.mp3" },
+      "role": "reference_audio"
+    }
+  ],
+  "duration": 5,
+  "ratio": "9:16"
+}
+```
+
+说明：
+
+- 音频格式建议 `mp3` 或 `wav`。
+- 音频文件需要能被上游模型公网拉取。
+- 如果同时传 `audio_url` 和 `generate_audio=true`，通常以你的参考音频意图为主；建议二选一，避免指令冲突。
+
+### 8. 真人 / 人脸参考自动白名单
+
+适合客户只想多传一行参数，就让 Relay 自动注册素材并替换成 `asset://...`。
+
+```json
+{
+  "model": "video-pro",
+  "content": [
+    { "type": "text", "text": "The approved person walks through a small street, natural expression, cinematic" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "https://cdn.example.com/approved-person.jpg" },
+      "role": "reference_image"
+    }
+  ],
+  "duration": 5,
+  "extra_body": { "real_person_mode": true }
+}
+```
+
+要求：
+
+- 平台已配置 `BYTEPLUS_ACCESS_KEY_ID` / `BYTEPLUS_ACCESS_KEY_SECRET` / `MODELARK_ASSET_GROUP_ID`。
+- 平台已开启 `FACE_ASSET_SELF_SERVICE=true`。
+- 客户仍然只使用 Relay API Key，不需要 IAM AK/SK。
+- 客户只能复用自己账号下注册出来的 `asset://...`。
+
+### 9. NSFW / 成人向模型用法
+
+如果你的平台提供 NSFW 或成人向生成能力，通常由管理员给客户分配专门的模型 ID，例如：
+
+```json
+{
+  "model": "video-pro-nsfw",
+  "content": [
+    { "type": "text", "text": "A private adult-themed scene description that complies with your platform policy" }
+  ],
+  "resolution": "720p",
+  "ratio": "16:9",
+  "duration": 5
+}
+```
+
+使用规则：
+
+- 具体 `model` 以 `GET /v1/models` 返回为准；如果没有看到 NSFW 模型，说明当前账号未开通。
+- 仅允许成年人、授权素材、合法合规内容。
+- 涉及真人脸、肖像、参考图或参考视频时，仍建议使用 `face_allowlist=true` 或 `extra_body.real_person_mode=true`。
+- 不要上传未授权人物、未成年人、违法、骚扰、胁迫或非自愿内容。
+- 平台可以给 NSFW 模型配置单独价格、单独并发、单独 RPM 限制。
+
+### 10. 常用组合清单
+
+| 场景 | content[] 组合 | 关键参数 |
+|---|---|---|
+| 纯文生视频 | `text` | `model`, `duration`, `ratio` |
+| 图生视频 | `text + image_url(first_frame)` | 图片 URL 或 `asset://...` |
+| 首尾帧 | `text + first_frame + last_frame` | 两张图比例尽量一致 |
+| 多图角色一致性 | `text + reference_image...` | 真人建议走白名单 |
+| 视频参考 | `text + video_url(reference_video)` | 视频 URL 需公网可拉取 |
+| 自动配乐/环境声 | `text`, `generate_audio=true` | 模型需支持音频 |
+| 音频驱动画面 | `text + image_url + audio_url` | MP3/WAV 上传后引用 |
+| 真人白名单 | `reference_image + real_person_mode` | 服务端 IAM 自动注册 |
+| NSFW 模型 | `text` 或 `text + whitelisted image` | 以账号开通模型为准 |
+
+---
 
 ### 响应
 
