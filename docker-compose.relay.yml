@@ -6,12 +6,37 @@ services:
     container_name: seedance-relay
     restart: unless-stopped
     ports:
-      # 只在 127.0.0.1 上监听，由本机 Caddy 反代到公网，外网无法直连
+      # Bind to localhost only; expose publicly through local Caddy.
       - "127.0.0.1:8002:8002"
     env_file:
       - .env.relay
     volumes:
       - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  seedance-runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime-go
+    container_name: seedance-runtime
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8012:8012"
+    env_file:
+      - .env.relay
+    environment:
+      RUNTIME_ADDR: "0.0.0.0:8012"
+      DB_PATH: "/data/relay.sqlite"
+      CONTROL_PLANE_BASE_URL: "http://seedance-relay:8002"
+    volumes:
+      - ./data:/data
+    depends_on:
+      seedance-relay:
+        condition: service_healthy
     logging:
       driver: json-file
       options:

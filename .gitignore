@@ -11,6 +11,12 @@ uploads/
 *.log
 *.pid
 
+alpha1-evidence/
+alpha1-evidence*/
+alpha1-local-gate/
+alpha1-local-gate*/
+alpha1-local-acceptance.json
+
 __pycache__/
 *.py[cod]
 .pytest_cache/

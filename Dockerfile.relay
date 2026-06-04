@@ -2,19 +2,18 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 系统依赖：curl 用来跑健康检查
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+# System dependency: curl is used by the container healthcheck.
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.relay.txt .
 RUN pip install --no-cache-dir -r requirements.relay.txt
 
-# 业务代码
+# Application code.
 COPY modelark/ ./modelark/
 COPY static/ ./static/
 COPY relay_server.py API_DOCS.md create_asset_white_label.py ./
 
-# 数据卷 (relay.sqlite + 落地视频 + 上传中转站)
+# Runtime data: SQLite, optional local videos, and uploaded relay assets.
 RUN mkdir -p /data /data/videos /data/uploads
 ENV DB_PATH=/data/relay.sqlite
 ENV VIDEO_DIR=/data/videos

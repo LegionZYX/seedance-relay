@@ -1,4 +1,4 @@
-import importlib
+﻿import importlib
 import os
 import sys
 import tempfile
@@ -100,7 +100,7 @@ class SelfServiceFaceFlowTests(unittest.TestCase):
             "/v1/videos",
             headers=self.auth_headers(),
             json={
-                "model": "video-pro",
+                "model": "dreamina-seedance-2-0-260128",
                 "content": [
                     {"type": "text", "text": "Use Image 1 as the face identity reference."},
                     upload_body["suggested_content_block"],

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Example Video Relay · AI 视频生成</title>
+<title>Example Video Relay - AI 视频生成</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -30,7 +30,7 @@
   }
   .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
 
-  /* Element Plus 主色 */
+  /* Element Plus theme */
   .el-button--primary {
     --el-button-bg-color: var(--brand);
     --el-button-border-color: var(--brand);
@@ -268,7 +268,7 @@
   /* Dialog tweaks */
   .el-dialog { border-radius: 14px; }
 
-  /* Markdown 渲染 */
+  /* Markdown rendering */
   .markdown-body { line-height: 1.7; color: #1f2937; font-size: 14.5px; }
   .markdown-body h1 { font-size: 2em; font-weight: 800; margin: 0 0 0.4em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
   .markdown-body h2 { font-size: 1.5em; font-weight: 700; margin: 1.8em 0 0.6em; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
@@ -294,7 +294,7 @@
 
 <div id="app" v-cloak>
 
-  <!-- ═══════════════════════ LOGIN ═══════════════════════ -->
+  <!-- LOGIN -->
   <div v-if="view === 'login'" class="login-wrap">
     <div class="login-card">
       <div class="login-brand">
@@ -316,12 +316,12 @@
         <el-button native-type="submit" type="primary" :loading="loginLoading" size="large" style="width:100%">登录</el-button>
       </el-form>
       <div style="margin-top:28px; padding-top:20px; border-top:1px solid var(--border); font-size:12px; color:var(--text-muted); text-align:center;">
-        没有账号？请联系平台管理员开通
+        没有账号？请联系平台管理员开通。
       </div>
     </div>
   </div>
 
-  <!-- ═══════════════════════ APP ═══════════════════════ -->
+  <!-- APP -->
   <div v-if="view === 'app'">
     <header class="top-header">
       <div class="top-inner">
@@ -366,7 +366,7 @@
 
     <main class="main">
 
-      <!-- ═══════════ GENERATE ═══════════ -->
+      <!-- GENERATE -->
       <section v-if="tab === 'generate'">
         <div class="page-header">
           <h1 class="page-title">新建视频任务</h1>
@@ -385,7 +385,7 @@
                 placeholder="A red lobster wearing a tiny chef hat dances on a neon-lit Tokyo street, cinematic, 35mm film"
               />
               <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color:var(--text-muted);">
-                <span><el-icon :size="12"><InfoFilled /></el-icon> 建议英文，部分模型支持中文/日/西/葡/印尼</span>
+                <span><el-icon :size="12"><InfoFilled /></el-icon> 建议英文，部分模型也支持中文/日语/西语等</span>
                 <span>{{ form.prompt.length }} 字</span>
               </div>
             </div>
@@ -398,7 +398,7 @@
                   <el-option
                     v-for="a in uploads"
                     :key="a.id"
-                    :label="`${a.original_filename || a.id} · ${purposeLabel(a.purpose)}${a.face_asset_whitelisted ? ' · 白名单' : ''}`"
+                    :label="`${a.original_filename || a.id} / ${purposeLabel(a.purpose)}${a.face_asset_whitelisted ? ' / 白名单' : ''}`"
                     :value="a.id"
                   />
                 </el-select>
@@ -413,7 +413,7 @@
                 <div style="min-width:0; flex:1">
                   <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ selectedUpload.original_filename || selectedUpload.id }}</div>
                   <div style="font-size:12px; color:var(--text-muted); margin-top:3px;">
-                    {{ selectedUpload.face_asset_whitelisted ? '已进人脸白名单，生成时会使用 asset:// 引用' : '普通素材，生成时会使用公开 URL 引用' }}
+                    {{ selectedUpload.face_asset_whitelisted ? '已进入人脸白名单，生成时会使用 asset:// 引用' : '普通素材，生成时会使用公开 URL 引用' }}
                   </div>
                 </div>
               </div>
@@ -423,7 +423,7 @@
               <div class="card-title"><el-icon><Setting /></el-icon> 参数配置</div>
 
               <el-form label-position="top">
-                <el-form-item label="模型">
+                <el-form-item label="妯″瀷">
                   <div style="display:flex; flex-wrap:wrap; gap:8px;">
                     <el-tag
                       v-for="m in models"
@@ -479,7 +479,7 @@
                     <el-checkbox v-model="form.generate_audio">
                       <div>
                         <div style="font-weight:500">生成音频</div>
-                        <div style="font-size:11px; color:var(--text-muted)">仅 video-pro / video-1.5-pro</div>
+                        <div style="font-size:11px; color:var(--text-muted)">仅 dreamina-seedance-2-0-260128 / seedance-1-5-pro-251215</div>
                       </div>
                     </el-checkbox>
                   </el-col>
@@ -500,7 +500,7 @@
             <div style="position:sticky; top:88px;">
               <div class="card" style="overflow:visible">
                 <div class="cost-card">
-                  <div class="cost-label">预估费用</div>
+                  <div class="cost-label">预计费用</div>
                   <div class="cost-value">${{ fmt(estimatedCost) }}</div>
                   <div class="cost-tokens">≈ {{ estimatedTokens.toLocaleString() }} tokens</div>
                 </div>
@@ -527,7 +527,7 @@
                     @click="submitGen"
                   ><el-icon><MagicStick /></el-icon> 提交生成</el-button>
                   <p style="font-size:11px; color:var(--text-muted); text-align:center; margin:10px 0 0;">
-                    提交后从余额预扣，任务完成自动结算
+                    提交后从余额预扣，任务完成后自动结算。
                   </p>
                 </div>
               </div>
@@ -535,13 +535,13 @@
           </el-col>
         </el-row>
 
-        <!-- 当前任务展示 -->
+        <!-- Current task display -->
         <div v-if="currentTask" class="card card-pad" style="margin-top:24px">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;">
             <div>
               <div class="mono" style="font-weight:700; font-size:16px;">{{ currentTask.id }}</div>
               <div style="font-size:13px; color:var(--text-muted); margin-top:2px;">
-                {{ currentTask.model }} · {{ currentTask.resolution }} · {{ currentTask.duration }}s · {{ fmtTs(currentTask.created_at) }}
+                {{ currentTask.model }} / {{ currentTask.resolution }} / {{ currentTask.duration }}s / {{ fmtTs(currentTask.created_at) }}
               </div>
             </div>
             <el-tag :type="statusType(currentTask.status)" effect="light">{{ statusLabel(currentTask.status) }}</el-tag>
@@ -556,7 +556,7 @@
               本次花费 <b style="color:var(--text)">${{ fmt(currentTask.actual_cost_usd) }}</b>
             </template>
             <template v-else>
-              预估 ${{ fmt(currentTask.estimated_cost_usd) }} · 已冻结 <b style="color:var(--text)">${{ fmt(currentTask.held_usd || currentTask.estimated_cost_usd) }}</b>
+              预计 ${{ fmt(currentTask.estimated_cost_usd) }} / 已冻结 <b style="color:var(--text)">${{ fmt(currentTask.held_usd || currentTask.estimated_cost_usd) }}</b>
             </template>
           </div>
 
@@ -581,23 +581,23 @@
               <div class="pulse"></div>
               <div>
                 <div style="font-weight:600">{{ currentTask.status === 'queued' ? '排队中' : '正在生成' }}</div>
-                <div style="font-size:12.5px; color:var(--text-muted)">通常需要 2-10 分钟，页面会自动刷新</div>
+                <div style="font-size:12.5px; color:var(--text-muted)">通常需要 2-10 分钟，页面会自动刷新。</div>
               </div>
             </div>
           </template>
         </div>
       </section>
 
-      <!-- ═══════════ HISTORY ═══════════ -->
+      <!-- HISTORY -->
       <section v-if="tab === 'history'">
         <div class="page-header">
           <h1 class="page-title">我的视频</h1>
-          <p class="page-sub">最近的生成任务，点视频可播放</p>
+          <p class="page-sub">最近的生成任务，点击视频可播放。</p>
         </div>
         <div v-loading="loading.history" style="min-height:200px">
           <div v-if="!loading.history && history.length === 0" class="card card-pad" style="text-align:center; padding:60px 24px;">
             <el-icon :size="48" style="color:#cbd5e1"><Film /></el-icon>
-            <p style="color:var(--text-muted); margin-top:14px;">还没有任务，去新建一个吧</p>
+            <p style="color:var(--text-muted); margin-top:14px;">还没有任务，去新建一个吧。</p>
             <el-button type="primary" @click="switchTab('generate')" style="margin-top:8px"><el-icon><Plus /></el-icon> 新建视频</el-button>
           </div>
           <div v-else class="video-grid">
@@ -618,10 +618,10 @@
                   <span style="font-size:11px; color:var(--text-muted); flex-shrink:0">{{ fmtTs(t.created_at) }}</span>
                 </div>
                 <p style="font-size:13.5px; margin:0 0 10px; line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
-                  {{ t.prompt_text || '—' }}
+                  {{ t.prompt_text || '-' }}
                 </p>
                 <div style="display:flex; justify-content:space-between; font-size:11.5px; color:var(--text-muted);">
-                  <span>{{ t.model }} · {{ t.resolution || '-' }} · {{ t.duration || '-' }}s</span>
+                  <span>{{ t.model }} / {{ t.resolution || '-' }} / {{ t.duration || '-' }}s</span>
                   <span class="mono" style="font-weight:600; color:var(--text)">${{ fmt(t.actual_cost_usd ?? t.estimated_cost_usd) }}</span>
                 </div>
               </div>
@@ -630,11 +630,11 @@
         </div>
       </section>
 
-      <!-- ═══════════ DOCS ═══════════ -->
+      <!-- DOCS -->
       <section v-if="tab === 'assets'">
         <div class="page-header">
           <h1 class="page-title">我的素材库</h1>
-          <p class="page-sub">这里显示当前 API key 上传过的素材，其他客户看不到</p>
+          <p class="page-sub">这里显示当前 API key 上传过的素材，其他客户看不到。</p>
         </div>
 
         <div class="card card-pad" style="margin-bottom:20px">
@@ -643,7 +643,7 @@
             <div style="min-width:0">
               <input ref="assetFileInput" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,audio/mpeg,audio/wav" @change="handleAssetFile" />
               <div style="font-size:12px; color:var(--text-muted); margin-top:6px;">
-                支持 JPG / PNG / WebP / MP4 / MOV / MP3 / WAV。公开视频 URL 会给上游模型拉取。
+                支持 JPG / PNG / WebP / MP4 / MOV / MP3 / WAV。公开素材 URL 会作为参考素材交给生成服务读取。
               </div>
             </div>
             <el-button type="primary" :loading="loading.upload" :disabled="!uploadForm.file" @click="uploadAsset">
@@ -663,7 +663,7 @@
         <div v-loading="loading.assets" style="min-height:180px">
           <div v-if="!loading.assets && uploads.length === 0" class="card card-pad" style="text-align:center; padding:56px 24px;">
             <el-icon :size="48" style="color:#cbd5e1"><FolderOpened /></el-icon>
-            <p style="color:var(--text-muted); margin-top:14px;">还没有素材，先上传一张参考图或一段视频</p>
+            <p style="color:var(--text-muted); margin-top:14px;">还没有素材，先上传一张参考图或一段视频。</p>
           </div>
           <div v-else class="asset-grid">
             <div v-for="a in uploads" :key="a.id" :class="['asset-card', form.upload_id === a.id && 'selected']">
@@ -676,7 +676,7 @@
                 <div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start;">
                   <div style="min-width:0">
                     <div style="font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ a.original_filename || a.id }}</div>
-                    <div class="mono" style="font-size:11px; color:var(--text-muted); margin-top:3px">{{ a.id }} · {{ purposeLabel(a.purpose) }} · {{ formatBytes(a.size_bytes) }}</div>
+                    <div class="mono" style="font-size:11px; color:var(--text-muted); margin-top:3px">{{ a.id }} / {{ purposeLabel(a.purpose) }} / {{ formatBytes(a.size_bytes) }}</div>
                   </div>
                   <el-tag :type="a.face_asset_whitelisted ? 'success' : 'info'" size="small" effect="light">
                     {{ a.face_asset_whitelisted ? '白名单' : '普通' }}
@@ -699,7 +699,7 @@
       <section v-if="tab === 'guide'">
         <div class="page-header">
           <h1 class="page-title">操作指南</h1>
-          <p class="page-sub">按字节原生 content[] 调用；真人素材只多加一个 Relay 开关</p>
+          <p class="page-sub">按字节原生 content[] 调用；真人素材只多加一个 Relay 开关。</p>
         </div>
 
         <div class="guide-grid">
@@ -743,7 +743,7 @@
                 <div class="guide-kicker">Real Person</div>
                 <h2 class="guide-title">一行开关自动过白名单</h2>
                 <p class="guide-copy">
-                  只在需要真人/人脸参考时加 extra_body.real_person_mode=true。Relay 会用后台 IAM AK/SK 注册素材，替换成 asset://ID，再转发给上游。
+                  只在需要真人/人脸参考时加 extra_body.real_person_mode=true。Relay 会在服务端处理素材引用，转换成可用于生成的 asset://ID。
                 </p>
                 <div class="guide-actions">
                   <el-button size="small" @click="copyText(guideRealPersonCurl)"><el-icon><CopyDocument /></el-icon> 复制命令</el-button>
@@ -778,7 +778,7 @@
             <el-col :xs="24" :md="12">
               <div class="card card-pad">
                 <div class="card-title"><el-icon><Key /></el-icon> Key 隔离</div>
-                <p class="guide-copy">客户只用 Relay API Key。生成任务走平台大 Key 或后台绑定的客户 ark Key；素材白名单注册只走服务器保存的 IAM AK/SK。</p>
+                <p class="guide-copy">客户只用 Relay API Key。生成、素材处理和计费都由 Relay 按当前账号配置执行，内部密钥不会出现在用户端。</p>
               </div>
             </el-col>
             <el-col :xs="24" :md="12">
@@ -801,7 +801,7 @@
         </div>
       </section>
 
-      <!-- ═══════════ ACCOUNT ═══════════ -->
+      <!-- ACCOUNT -->
       <section v-if="tab === 'account'">
         <div class="page-header">
           <h1 class="page-title">账号设置</h1>
@@ -833,7 +833,7 @@
                     <span class="mono">{{ fmtUsd(me?.lifetime_spent_usd) }}</span>
                   </div>
                 </div>
-                <p style="font-size:12px; color:var(--text-muted); margin:14px 0 0;">需要充值请联系平台管理员</p>
+                <p style="font-size:12px; color:var(--text-muted); margin:14px 0 0;">需要充值请联系平台管理员。</p>
               </div>
             </div>
           </el-col>
@@ -841,14 +841,25 @@
           <el-col :xs="24" :lg="16">
             <div class="card card-pad">
               <div class="card-title"><el-icon><Key /></el-icon> 开发者 API Key</div>
-              <p style="font-size:13px; color:var(--text-muted); margin:0 0 16px;">用 SDK / curl 集成调用</p>
-              <el-input v-model="me.api_key" readonly>
+              <p style="font-size:13px; color:var(--text-muted); margin:0 0 16px;">用于 SDK / curl 集成调用</p>
+              <el-input v-model="me.api_key_masked" readonly>
                 <template #append>
                   <el-button @click="copyKey">
                     <el-icon style="margin-right:4px"><CopyDocument /></el-icon>复制
                   </el-button>
                 </template>
               </el-input>
+              <div style="font-size:12px; color:var(--text-muted); margin-top:8px;">
+                API Key 只在创建或重新生成时显示一次。
+                <span v-if="me?.api_key_last_rotated_at"> / 上次更新 {{ fmtTs(me.api_key_last_rotated_at) }}</span>
+              </div>
+              <div style="display:flex; gap:10px; margin-top:12px;">
+                <el-button type="warning" plain @click="rotateApiKey">重新生成 API Key</el-button>
+              </div>
+              <el-alert v-if="rotatedApiKey" type="warning" :closable="false" show-icon style="margin-top:12px;">
+                <div>新的 API Key 只显示一次，请立即保存。</div>
+                <div class="mono" style="word-break:break-all; margin-top:6px;">{{ rotatedApiKey }}</div>
+              </el-alert>
               <div class="code-block" style="margin-top:18px;">
 <span class="comment"># 创建视频任务</span>
 curl https://video.example.com/v1/videos \
@@ -856,12 +867,24 @@ curl https://video.example.com/v1/videos \
   -H "Authorization: Bearer <span class="string">$KEY</span>" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": <span class="string">"video-pro"</span>,
+    "model": <span class="string">"dreamina-seedance-2-0-260128"</span>,
     "content": [{"type":"text","text":<span class="string">"a cat dancing"</span>}],
     "resolution": <span class="string">"720p"</span>,
     "duration": 5
   }'
               </div>
+            </div>
+            <div class="card card-pad" style="margin-top:18px;">
+              <div class="card-title"><el-icon><Lock /></el-icon> 修改登录密码</div>
+              <el-form label-position="top" :model="passwordForm">
+                <el-form-item label="当前密码">
+                  <el-input v-model="passwordForm.current_password" type="password" show-password autocomplete="current-password" />
+                </el-form-item>
+                <el-form-item label="新密码">
+                  <el-input v-model="passwordForm.new_password" type="password" show-password autocomplete="new-password" minlength="10" placeholder="至少 10 位" />
+                </el-form-item>
+                <el-button type="primary" :loading="loading.password" @click="changePassword">保存新密码</el-button>
+              </el-form>
             </div>
           </el-col>
         </el-row>
@@ -881,33 +904,35 @@ const { createApp } = Vue;
 const { ElMessage } = ElementPlus;
 
 const TOKENS_PER_SEC = {
-  "video-pro":      {"480p":10128, "720p":21780, "1080p":49005},
-  "video-pro-fast": {"480p":10128, "720p":21780, "1080p":49005},
-  "video-1.5-pro":  {"480p": 7652, "720p":16456, "1080p":37027},
+  "dreamina-seedance-2-0-260128":      {"480p":10128, "720p":21780, "1080p":49005},
+  "dreamina-seedance-2-0-fast-260128": {"480p":10128, "720p":21780, "1080p":49005},
+  "seedance-1-5-pro-251215":           {"480p": 7652, "720p":16456, "1080p":37027},
 };
 const RATE = {
-  "video-pro":      {"480p":0.0084, "720p":0.0084, "1080p":0.00924},
-  "video-pro-fast": {"480p":0.0084, "720p":0.0084, "1080p":0.00924},
-  "video-1.5-pro":  {"480p":0.0017, "720p":0.0017, "1080p":0.0017},
-  "video-1080p":    {"480p":0.0014, "720p":0.0014, "1080p":0.0014},
-  "video-720p":     {"480p":0.001,  "720p":0.001,  "1080p":0.001},
-  "video-lite":     {"480p":0.0007, "720p":0.0007, "1080p":0.0007},
-  "video-lite-i2v": {"480p":0.0007, "720p":0.0007, "1080p":0.0007},
+  "dreamina-seedance-2-0-260128":      {"480p":0.0084, "720p":0.0084, "1080p":0.00924},
+  "dreamina-seedance-2-0-fast-260128": {"480p":0.0084, "720p":0.0084, "1080p":0.00924},
+  "seedance-1-5-pro-251215":           {"480p":0.0017, "720p":0.0017, "1080p":0.0017},
+  "seedance-1-0-pro-250528":           {"480p":0.0014, "720p":0.0014, "1080p":0.0014},
+  "seedance-1-0-pro-fast-251015":      {"480p":0.001,  "720p":0.001,  "1080p":0.001},
+  "seedance-1-0-lite-t2v-250428":      {"480p":0.0007, "720p":0.0007, "1080p":0.0007},
+  "seedance-1-0-lite-i2v-250428":      {"480p":0.0007, "720p":0.0007, "1080p":0.0007},
 };
 
 const App = {
   data() {
     return {
-      view: "login",  // 启动默认显示登录, checkAuth 通过则切到 'app'
+      view: "login",  // Start on login; checkAuth switches to app when authenticated.
       tab: "generate",
       me: null,
 
       loginForm: { email: "", password: "" },
       loginLoading: false,
+      passwordForm: { current_password: "", new_password: "" },
+      rotatedApiKey: "",
 
       models: [],
       form: {
-        model: "video-pro",
+        model: "dreamina-seedance-2-0-260128",
         prompt: "",
         resolution: "720p",
         ratio: "16:9",
@@ -926,7 +951,7 @@ const App = {
       history: [],
       uploads: [],
       uploadForm: { file: null, face_allowlist: false, face_asset_label: "" },
-      loading: { submit: false, history: false, assets: false, upload: false, docs: false },
+      loading: { submit: false, history: false, assets: false, upload: false, docs: false, password: false },
       docsHtml: "",
       guideUploadCurl: `KEY="sk_xxxxxxxxxxxxxxxx"
 
@@ -938,9 +963,9 @@ curl -X POST https://video.example.com/v1/uploads \\
   -H "Authorization: Bearer $KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "video-pro",
+    "model": "dreamina-seedance-2-0-260128",
     "content": [
-      {"type": "text", "text": "走在小街上"},
+      {"type": "text", "text": "Walking through a quiet old street"},
       {
         "type": "image_url",
         "image_url": {"url": "asset://asset_xxx"},
@@ -955,7 +980,7 @@ curl -X POST https://video.example.com/v1/uploads \\
   -H "Authorization: Bearer $KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "video-pro",
+    "model": "dreamina-seedance-2-0-260128",
     "content": [
       {"type": "text", "text": "这个人走在小街上"},
       {
@@ -975,7 +1000,7 @@ curl -X POST https://video.example.com/v1/uploads \\
           title: "文生视频",
           note: "只传 text 块，适合纯提示词生成。",
           code: `{
-  "model": "video-pro",
+  "model": "dreamina-seedance-2-0-260128",
   "content": [
     { "type": "text", "text": "A calm cinematic walk through a narrow old street, soft morning light" }
   ],
@@ -989,7 +1014,7 @@ curl -X POST https://video.example.com/v1/uploads \\
           title: "图生视频 / 首帧",
           note: "图片作为 first_frame，模型从这张图开始运动。",
           code: `{
-  "model": "video-pro",
+  "model": "dreamina-seedance-2-0-260128",
   "content": [
     { "type": "text", "text": "The scene slowly comes alive, subtle camera push-in, cinematic" },
     {
@@ -1008,7 +1033,7 @@ curl -X POST https://video.example.com/v1/uploads \\
           title: "首尾帧",
           note: "指定开始图和结束图，生成中间过渡。",
           code: `{
-  "model": "video-pro",
+  "model": "dreamina-seedance-2-0-260128",
   "content": [
     { "type": "text", "text": "A smooth transition from morning to evening, realistic motion" },
     {
@@ -1031,7 +1056,7 @@ curl -X POST https://video.example.com/v1/uploads \\
           title: "多图参考",
           note: "用 reference_image 保持人物、产品、服装或风格一致。",
           code: `{
-  "model": "video-pro",
+  "model": "dreamina-seedance-2-0-260128",
   "content": [
     { "type": "text", "text": "Use the references for character and outfit consistency, walking through a small street" },
     {
@@ -1054,7 +1079,7 @@ curl -X POST https://video.example.com/v1/uploads \\
           title: "参考视频",
           note: "用 reference_video 参考运动节奏、镜头或动作。",
           code: `{
-  "model": "video-pro",
+  "model": "dreamina-seedance-2-0-260128",
   "content": [
     { "type": "text", "text": "Keep the motion rhythm, change the visual style to warm cinematic street photography" },
     {
@@ -1072,7 +1097,7 @@ curl -X POST https://video.example.com/v1/uploads \\
           title: "生成同步音频",
           note: "用 generate_audio=true 让模型一起生成环境声或配乐。",
           code: `{
-  "model": "video-pro",
+  "model": "dreamina-seedance-2-0-260128",
   "content": [
     { "type": "text", "text": "A chef preparing food in a lively kitchen, natural ambient sound" }
   ],
@@ -1085,7 +1110,7 @@ curl -X POST https://video.example.com/v1/uploads \\
           title: "嵌入 / 参考音频",
           note: "把 MP3/WAV 放进 audio_url，适合节奏或口播参考。",
           code: `{
-  "model": "video-pro",
+  "model": "dreamina-seedance-2-0-260128",
   "content": [
     { "type": "text", "text": "Create a short presenter-style video matching the provided voice timing" },
     {
@@ -1108,7 +1133,7 @@ curl -X POST https://video.example.com/v1/uploads \\
           title: "真人白名单",
           note: "加 extra_body.real_person_mode=true，Relay 自动注册 asset://。",
           code: `{
-  "model": "video-pro",
+  "model": "dreamina-seedance-2-0-260128",
   "content": [
     { "type": "text", "text": "The approved person walks through a small street, natural expression, cinematic" },
     {
@@ -1121,25 +1146,6 @@ curl -X POST https://video.example.com/v1/uploads \\
   "extra_body": { "real_person_mode": true }
 }`,
         },
-        {
-          id: "nsfw",
-          title: "NSFW 模型",
-          note: "模型名以 /v1/models 返回为准，其它参数保持原生写法。",
-          code: `{
-  "model": "video-pro-nsfw",
-  "content": [
-    { "type": "text", "text": "Your NSFW scene prompt here" },
-    {
-      "type": "image_url",
-      "image_url": { "url": "asset://asset_xxx" },
-      "role": "reference_image"
-    }
-  ],
-  "resolution": "720p",
-  "ratio": "9:16",
-  "duration": 5
-}`,
-        },
       ],
     };
   },
@@ -1148,14 +1154,14 @@ curl -X POST https://video.example.com/v1/uploads \\
     selectedUpload() { return this.uploads.find(a => a.id === this.form.upload_id); },
     estimatedTokens() {
       if (this.estimateInfo?.estimated_tokens) return this.estimateInfo.estimated_tokens;
-      const tps = (TOKENS_PER_SEC[this.form.model] || TOKENS_PER_SEC["video-pro"])[this.form.resolution];
+      const tps = (TOKENS_PER_SEC[this.form.model] || TOKENS_PER_SEC["dreamina-seedance-2-0-260128"])[this.form.resolution];
       return Math.ceil(tps * (this.form.duration || 0));
     },
     estimatedCost() {
       if (this.estimateInfo?.max_cost_usd != null) return this.estimateInfo.max_cost_usd;
-      const ratePerK = (RATE[this.form.model] || RATE["video-pro"])[this.form.resolution];
-      const markup = this.me?.markup_pct ?? 0.30;
-      return this.estimatedTokens / 1000 * ratePerK * 1.10 * (1 + markup);
+      const ratePerK = (RATE[this.form.model] || RATE["dreamina-seedance-2-0-260128"])[this.form.resolution];
+      const multiplier = this.me?.price_multiplier ?? 1.0;
+      return this.estimatedTokens / 1000 * ratePerK * 1.10 * multiplier;
     },
     enoughBalance() {
       const avail = this.me?.available_usd ?? this.me?.balance_usd ?? 0;
@@ -1175,6 +1181,7 @@ curl -X POST https://video.example.com/v1/uploads \\
       if (!r.ok) throw { status: r.status, body };
       return body;
     },
+    passwordTooShort(value) { return String(value || "").length < 10; },
     errMsg(e) { return e.body?.error?.message || e.body?.detail?.error?.message || e.body?.detail || "请求失败"; },
     fmt(n, d=4) { return n == null ? "-" : Number(n).toFixed(d); },
     fmtUsd(n) { return n == null ? "$-" : "$" + Number(n).toFixed(4); },
@@ -1318,11 +1325,38 @@ curl -X POST https://video.example.com/v1/uploads \\
       }
     },
     copyKey() {
-      navigator.clipboard.writeText(this.me.api_key);
+      if (!this.rotatedApiKey) {
+        ElMessage.warning("API Key 只在重新生成后显示一次，请先重新生成");
+        return;
+      }
+      navigator.clipboard.writeText(this.rotatedApiKey);
       ElMessage.success("API key 已复制");
     },
 
-    // ─── Submit ───
+    // Submit
+    async rotateApiKey() {
+      if (!confirm("重新生成 API Key 后，旧 key 会立即失效。确定继续？")) return;
+      try {
+        const r = await this.api("/v1/me/api-key/rotate", { method: "POST" });
+        this.rotatedApiKey = r.api_key;
+        this.me.api_key_masked = r.api_key_masked;
+        this.me.api_key_last_rotated_at = r.rotated_at;
+        ElMessage.success("新的 API Key 已生成");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+    async changePassword() {
+      if (this.passwordTooShort(this.passwordForm.new_password)) {
+        ElMessage.warning("新密码至少 10 位");
+        return;
+      }
+      this.loading.password = true;
+      try {
+        await this.api("/auth/change-password", { method: "POST", body: JSON.stringify(this.passwordForm) });
+        this.passwordForm = { current_password: "", new_password: "" };
+        ElMessage.success("密码已更新");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.password = false; }
+    },
     async submitGen() {
       if (!this.form.prompt.trim()) { ElMessage.warning("请输入提示词"); return; }
       this.loading.submit = true;
@@ -1360,7 +1394,7 @@ curl -X POST https://video.example.com/v1/uploads \\
       this.pollTimer = setTimeout(() => this.pollTask(), 8000);
     },
 
-    // ─── History ───
+    // History
     async loadHistory() {
       this.loading.history = true;
       try { this.history = (await this.api("/v1/videos?limit=50")).data; }

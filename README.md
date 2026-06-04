@@ -1,7 +1,7 @@
-# Example Video Relay API — Seedance 视频生成白标反代
+# Example Video Relay API — Seedance 视频生成白标 Relay
 
 一套**白标 SaaS 系统**：把 BytePlus Seedance 视频生成 API 包装成自己品牌的服务对外出售。
-对客户隐藏底层供应商，内置用户系统、余额预扣、对账、本地视频落地、管理员 / 用户两套 Web 后台。
+对客户隐藏底层供应商，内置用户系统、余额预扣、对账、视频代理交付、管理员 / 用户两套 Web 后台。
 
 > 示例部署域名为 `https://video.example.com`，服务器地址请替换为 `<SERVER_IP>`，底层模型为 BytePlus Seedance 2.0。
 
@@ -29,45 +29,46 @@
 
 | 能力 | 说明 |
 |---|---|
-| **白标反代** | 客户调你的 `video.example.com` API，看不到 BytePlus / Seedance / volces.com 任何字样 |
-| **模型 ID 映射** | 客户用 `video-pro / video-lite`，底层映射到 `dreamina-seedance-2-0-260128` 等真实 ID |
+| **白标反代** | 客户调你的 `video.example.com` API，不暴露 BytePlus/volces 上游 URL、密钥、endpoint、控制台路径和存储原始地址 |
+| **模型 ID 策略** | 默认使用字节 API 原生 `model id` 执行和展示；管理员可以主动配置模型别名来降低客户解释成本，不配置就保持原生 ID |
 | **用户系统** | 邮箱 + bcrypt 密码登录，独立的客户 API key (`sk-xxxx`)，可全 Web 操作 |
 | **每客户独立 BytePlus key** | 每个客户在你 BytePlus 控制台单独申请一把 key，1:1 对账，互不影响 |
 | **余额预扣 + 自动结算** | 提交任务前先冻结估算上限，任务终态后按真实 token 数实扣并退差额 |
-| **本地视频落地** | 任务成功后异步把视频拉到本地永久保存，绕开 BytePlus 24h 临时 URL 失效问题 |
+| **视频代理交付** | 任务成功后返回 Relay 自有视频 URL，默认不把生成视频永久保存到本地服务器 |
 | **错误信息脱敏** | 上游错误信息中的供应商字样被正则替换为你的品牌名 |
 | **管理员后台** | 浏览器开账号、充值、对账、查任务流水 |
-| **用户后台** | 浏览器生成视频、看历史、播放、查余额、查 API key |
-| **30% Markup** | 默认在 BytePlus 真实价上加价 30% 收客户，可改 |
+| **用户后台** | 浏览器生成视频、看历史、播放、查余额、改密码、轮换自己的 Relay API Key |
+| **客户消费系数** | 后台可给每个客户设置 `price_multiplier`，最低 `1.0`，如 `1.0` / `1.2` / `1.3` |
 
-### 1.2 支持的客户层模型
+### 1.2 支持的模型
 
-| 客户层 ID | 底层 BytePlus 模型 | 用途 |
+| 原生 model id | 用途 | 客户可见能力 |
 |---|---|---|
-| `video-pro` | `dreamina-seedance-2-0-260128` | 高质量 (Seedance 2.0)，支持 480p / 720p / 1080p |
-| `video-pro-fast` | `dreamina-seedance-2-0-fast-260128` | 2.0 快速版 |
-| `video-1.5-pro` | `seedance-1-5-pro-251215` | 中端，支持 draft 草稿模式 |
-| `video-1080p` | `seedance-1-0-pro-250528` | 1080p 专用 |
-| `video-720p` | `seedance-1-0-pro-fast-250528` | 720p 专用，较快 |
-| `video-lite` | `seedance-1-0-lite-t2v-250428` | 纯文本→视频，便宜快速 |
-| `video-lite-i2v` | `seedance-1-0-lite-i2v-250428` | 图片→视频，便宜快速 |
+| `dreamina-seedance-2-0-260128` | 高质量视频生成 | 480p / 720p / 1080p，支持文本、图片、视频、音频参考 |
+| `dreamina-seedance-2-0-fast-260128` | 高质量快速版 | 480p / 720p / 1080p，支持文本、图片、视频、音频参考 |
+| `seedance-1-5-pro-251215` | 中端兼容模型 | 480p / 720p / 1080p，支持文本、图片、视频、音频参考 |
+| `seedance-1-0-pro-250528` | 1080p 专用路线 | 480p / 720p / 1080p，支持文本、图片、视频、音频参考 |
+| `seedance-1-0-pro-fast-251015` | 720p 快速路线 | 480p / 720p / 1080p，支持文本、图片、视频、音频参考 |
+| `seedance-1-0-lite-t2v-250428` | 轻量文本到视频 | 480p / 720p / 1080p，支持文本、图片、视频、音频参考 |
+| `seedance-1-0-lite-i2v-250428` | 轻量图片/视频参考生成 | 必须提供 `image_url` 或 `video_url` 参考 |
 
-> 客户最终能调成功的模型 = 你 BytePlus 账号已激活的模型。未激活的会返回脱敏后的 "upstream not available"。
+> 客户最终能调用的模型由后台 `enabled_models` 控制。默认写入字节原生 `model id`；如果管理员配置 `MODEL_ID_ALIASES_JSON`，也可以给某个客户启用别名。真实上游 URL、账号、endpoint/profile、filter 和 operator notes 仍是 operator-only 配置，不写入公开文档和客户 UI。
+> `enabled_models=null` 表示使用默认模型列表；`enabled_models=[]` 表示该客户暂不启用任何模型。
 
 ### 1.3 计费流程
 
 ```
 客户提交 ─→ relay 估算成本 ─→ 余额检查
                                 ├─不够→ 402 直接拒绝（不打上游，零成本）
-                                └─够 → 冻结 max_cost × (1 + markup)
+                                └─够 → 冻结 max_cost × price_multiplier
                                        ↓
                               转发 BytePlus（用客户专属 key）
                                        ↓
                               客户查询状态 → relay 同步上游
                                        ↓
-                              终态 succeeded → 真实 cost × (1 + markup) 实扣
+                              终态 succeeded → 真实 cost × price_multiplier 实扣
                                               退差额给客户
-                                              异步落地视频到本地
+                                              通过 Relay URL 代理播放/下载
                               终态 failed/cancelled/expired → 全额退回
 ```
 
@@ -95,7 +96,7 @@
                      │              │
                      │              └─ /data 卷
                      │                  ├─ relay.sqlite     (用户/任务/会话)
-                     │                  └─ videos/          (落地视频文件)
+                     │                  └─ videos/          (旧本地视频兼容读取；新任务默认 proxy-only)
                      │
                      ▼ HTTPS, Bearer ark-xxxx
        ┌──────────────────────────────────┐
@@ -290,7 +291,7 @@ ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=<生成一个强密码>
 ADMIN_KEY=<随机串，供 curl/脚本绕过登录用>
 
-# Markup 比例（默认 30%）
+# 全局默认加价兼容项；新客户建议在后台直接设置 price_multiplier
 MARKUP_PCT=0.3
 ```
 
@@ -393,7 +394,7 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | `ADMIN_EMAIL` | `admin@example.com` | 首次创建 admin 用的邮箱 |
 | `ADMIN_PASSWORD` | 空 | 首次创建 admin 用的密码（启动时生效一次） |
 | `ADMIN_KEY` | 空 | 备用 `X-Admin-Key` 头（脚本/curl 绕登录） |
-| `MARKUP_PCT` | `0.3` | 全局默认加价比例（0.3 = +30%）；单个客户可在后台覆盖 |
+| `MARKUP_PCT` | `0.3` | 旧数据兼容用的全局默认加价比例；新客户优先在后台设置 `price_multiplier` |
 
 ---
 
@@ -413,10 +414,10 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | POST | `/v1/videos/estimate` | **提交前估算成本**（不消耗 token） |
 | POST | `/v1/videos` | 创建视频任务 |
 | GET | `/v1/videos/{vid}` | 查任务（自动同步上游） |
-| GET | `/v1/videos/{vid}/content` | 流式下载视频（优先本地） |
+| GET | `/v1/videos/{vid}/content` | 通过 Relay 代理流式播放/下载视频 |
 | DELETE | `/v1/videos/{vid}` | 取消（queued）/ 删除（终态） |
 | GET | `/v1/videos` | 列自己的任务 |
-| GET | `/v1/me` | 自己的余额 + API key |
+| GET | `/v1/me` | 自己的余额 + 脱敏 API Key 元数据 |
 
 上传中转站白名单：
 
@@ -476,7 +477,7 @@ curl https://video.example.com/admin/face-assets \
   -H "X-Admin-Key: $ADMIN_KEY"
 ```
 
-注意：`ASSET_AUTO_REGISTER_UPLOADS` 只是服务端自动注册素材 URL；它不等同于真实人脸授权。真实人脸素材应先按 BytePlus 的授权/验真流程进入可用资产库，再把得到的 `asset://...` 加入这里的白名单。
+注意：`ASSET_AUTO_REGISTER_UPLOADS` 只是服务端自动注册素材 URL；它不是客户内容审核开关。客户仍然只使用 Relay API Key，服务端按当前 BytePlus 资产注册能力把可用素材转成 `asset://...` 并记录到账本。
 
 如果希望客户只用你的 Relay API Key 自助完成上传和入白名单，平台侧打开：
 
@@ -515,7 +516,7 @@ Relay 会在服务端完成：
 1. 平台密钥层：`BYTEPLUS_ACCESS_KEY_ID` / `BYTEPLUS_ACCESS_KEY_SECRET` / 素材组只保存在服务器，用来注册官方 `asset://...`。
 2. 客户账户层：每个客户只拿 Relay 自己发的 `sk-xxx`，这个 key 对应 `users.id`。
 3. 素材账本层：每次 `POST /v1/uploads` 都写入 `uploads.user_id`。客户查询 `GET /v1/uploads` 或 `GET /v1/uploads/{id}` 时，服务端只按当前 API key 的 `user_id` 查询；访问其他客户素材会返回 `404 upload_not_found`。
-4. 客户价格层：全局默认走 `MARKUP_PCT`；后台可以给单个客户设置 `markup_pct` 覆盖。`markup_pct=0.30` 表示 BytePlus 成本上加价 30%。任务创建时会把该客户当时的 `markup_pct` 快照写入 `tasks.markup_pct`，后续结算不受之后改价影响。
+4. 客户价格层：后台可以给单个客户设置 `price_multiplier`，alpha1 最低为 `1.0`。`price_multiplier=1.2` 表示按 BytePlus 成本的 120% 向客户计费。任务创建时会把该客户当时的系数快照写入任务记录，后续结算不受之后改价影响。
 
 后台调价：
 
@@ -523,13 +524,13 @@ Relay 会在服务端完成：
 curl -X PATCH https://video.example.com/admin/users/u_xxx \
   -H "X-Admin-Key: $ADMIN_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"markup_pct":0.45}'
+  -d '{"price_multiplier":1.2}'
 
-# 清空客户独立价格，回到全局 MARKUP_PCT
+# 清空客户独立价格，回到全局默认
 curl -X PATCH https://video.example.com/admin/users/u_xxx \
   -H "X-Admin-Key: $ADMIN_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"markup_pct":null}'
+  -d '{"price_multiplier":null}'
 ```
 
 客户估价与价格表会返回自己的有效价格：
@@ -605,7 +606,7 @@ FACE_ASSET_SELF_SERVICE=true
 
 ```json
 {
-  "model": "video-pro",
+  "model": "dreamina-seedance-2-0-260128",
   "content": [
     { "type": "text", "text": "走在小街上" },
     {
@@ -636,13 +637,13 @@ curl -X POST https://video.example.com/v1/uploads \
 # 1) 预估
 curl -X POST https://video.example.com/v1/videos/estimate \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"model":"video-pro","resolution":"720p","duration":5,
+  -d '{"model":"dreamina-seedance-2-0-260128","resolution":"720p","duration":5,
        "content":[{"type":"text","text":"a cat walking"}]}'
 
 # 2) 创建
 curl -X POST https://video.example.com/v1/videos \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"model":"video-pro","resolution":"720p","duration":5,
+  -d '{"model":"dreamina-seedance-2-0-260128","resolution":"720p","duration":5,
        "content":[{"type":"text","text":"a cat walking"}]}'
 
 # 3) 查任务
@@ -688,9 +689,9 @@ python create_asset_white_label.py create-group \
 | GET | `/admin/config` | 查看平台 IAM / 素材注册配置状态（不返回密钥明文） |
 | GET | `/admin/stats` | 全局 KPI |
 | GET | `/admin/users` | 用户列表 |
-| POST | `/admin/users` | 创建用户（可指定 BytePlus key、初始余额、客户加价率） |
+| POST | `/admin/users` | 创建用户（可指定 BytePlus key、初始余额、客户消费系数） |
 | GET | `/admin/users/{id}` | 用户详情（含最近任务、最近素材 + 累计统计） |
-| PATCH | `/admin/users/{id}` | 改余额 / 客户加价率 / BP key / 密码 / 启停 |
+| PATCH | `/admin/users/{id}` | 改余额 / 客户消费系数 / 可用模型 / BP key / 密码 / 启停 |
 | POST | `/admin/users/{id}/topup` | 充值 |
 | DELETE | `/admin/users/{id}` | 禁用（软删除，保留历史） |
 | GET | `/admin/reconcile` | 按用户对账（与 BytePlus 后台 1:1 比对） |
@@ -711,7 +712,8 @@ curl -X POST https://video.example.com/admin/users \
   -d '{
     "email":"newcustomer@example.com",
     "balance_usd": 50,
-    "markup_pct": 0.30,
+    "price_multiplier": 1.2,
+    "enabled_models": ["dreamina-seedance-2-0-260128", "seedance-1-0-lite-t2v-250428"],
     "byteplus_api_key":"ark-customer-xxxx",
     "byteplus_account_label":"客户公司名"
   }'
@@ -738,9 +740,9 @@ KPI 卡：活跃用户数、总任务数、素材数、白名单素材数、已�
 
 ### 8.2 用户管理
 
-- 点 **"+ 开新账号"**，填邮箱、初始密码（留空自动生成）、初始余额、**BytePlus API key**（你在 BytePlus 控制台为该客户单独申请的）、BytePlus 标签（内部备注）。
+- 点 **"+ 开新账号"**，填邮箱、初始密码（留空自动生成）、初始余额、客户消费系数、可用模型、**BytePlus API key**（你在 BytePlus 控制台为该客户单独申请的）、BytePlus 标签（内部备注）。
 - 创建成功立即弹出：客户 `sk-xxxx` API key + 临时密码。把两条发给客户即可。
-- 每行可点开编辑：改余额 / 一键充值 / 替换 BP key / 重置密码 / 启停 / 看该用户最近 20 个任务和最近 20 个素材。
+- 每行可点开编辑：改余额 / 一键充值 / 改消费系数 / 改可用模型 / 替换 BP key / 重置密码 / 轮换 API Key / 启停 / 看该用户最近 20 个任务和最近 20 个素材。
 
 ### 8.3 素材管理
 
@@ -764,7 +766,7 @@ KPI 卡：活跃用户数、总任务数、素材数、白名单素材数、已�
 ### 9.1 新建视频
 
 完整表单：prompt / 参考素材 / 模型 / 分辨率 / 比例 / 时长 / seed / 是否生成音频 / 是否加水印。
-**右下角实时显示预估成本**（前端调用 `/v1/videos/estimate`，按当前客户自己的 `markup_pct` 返回价格；网络未返回时才用本地公式兜底）。
+**右下角实时显示预估成本**（前端调用 `/v1/videos/estimate`，按当前客户自己的 `price_multiplier` 返回价格；网络未返回时才用本地公式兜底）。
 余额不足时提交按钮自动禁用。
 
 提交后自动跳到任务详情，每 8 秒轮询一次，succeeded 后直接 `<video>` 标签内嵌播放 + 下载按钮。
@@ -781,8 +783,8 @@ KPI 卡：活跃用户数、总任务数、素材数、白名单素材数、已�
 
 ### 9.4 账号
 
-显示余额、user_id、**API Key**（带复制按钮）+ curl 用法示例。
-客户也可以拿 API key 直接走 SDK / curl 集成。
+显示余额、user_id、脱敏后的 **API Key** 信息、改密码、轮换 API Key + curl 用法示例。
+完整 API Key 只在创建账号或重新生成时显示一次；客户可以拿最新 API key 直接走 SDK / curl 集成。
 
 ---
 
@@ -832,11 +834,11 @@ print('ok')
 scp root@<server-ip>:/opt/seedance-relay/data/relay.backup.sqlite \
     ./backups/$(date +%Y%m%d).sqlite
 
-# 备份本地视频
-rsync -av root@<server-ip>:/opt/seedance-relay/data/videos/ ./backups/videos/
+# 备份客户上传素材。生成结果默认 proxy-only，不长期落本地视频文件。
+rsync -av root@<server-ip>:/opt/seedance-relay/data/uploads/ ./backups/uploads/
 ```
 
-### 10.4 改 Markup 比例
+### 10.4 改全局默认加价兼容项
 
 ```bash
 ssh root@<server-ip>
@@ -844,18 +846,26 @@ sed -i 's/^MARKUP_PCT=.*/MARKUP_PCT=0.5/' /opt/seedance-relay/.env.relay
 docker compose -f /opt/seedance-relay/docker-compose.relay.yml restart
 ```
 
-### 10.5 加新模型映射
+单个客户的实际计费优先用后台 `price_multiplier` 调整，最低 `1.0`，例如 `1.2` 表示按上游成本的 120% 计费。
 
-编辑 `relay_server.py` 顶部的 `MODEL_MAP`，新增一行：
+### 10.5 模型 ID 与可选别名
+
+默认不要改字节原生 `model id`。新增模型时，先把原生 ID 加入服务端 model registry，并同步价格和能力字段：
 
 ```python
-MODEL_MAP = {
-    ...
-    "video-new-id": "byteplus-real-model-id-xxx",
-}
+NATIVE_MODEL_IDS = [
+    ...,
+    "byteplus-native-model-id-xxx",
+]
 ```
 
-然后：
+如果管理员希望客户看到更短的名字，可以在 `.env.relay` 配置别名；不配置时就按原生 ID 展示和执行：
+
+```bash
+MODEL_ID_ALIASES_JSON={"customer-short-name":"dreamina-seedance-2-0-260128"}
+```
+
+别名只改变客户请求和 `/v1/models` 里的 `id`，实际转发给字节的 `model` 仍然是原生 ID。改完后：
 
 ```bash
 scp relay_server.py root@<server-ip>:/opt/seedance-relay/
@@ -863,7 +873,7 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
   docker compose -f docker-compose.relay.yml up -d --build"
 ```
 
-如果新模型还要走分档定价，同时编辑 `modelark/pricing.py` 的 `PRICING` 字典。
+如果新模型还要走分档定价，同时编辑价格表里的对应字典。
 
 ### 10.6 紧急重置 admin 密码
 
@@ -891,7 +901,7 @@ c.commit(); print('ok')
 | 域名打不开 / SSL 报错 | `dig +short <domain>` 确认 A 记录；`journalctl -u caddy -n 100` 看证书申请是否被 Let's Encrypt 限流 |
 | 客户提交报 503 `no_upstream_key` | 该用户在 admin 后台没填 BytePlus key 且 `.env.relay` 里也没设 `UPSTREAM_API_KEY` |
 | 客户提交报 502 `upstream_error` | 上游 BytePlus 拒绝。日志看 sanitize 前的真实错误：`docker logs seedance-relay`。常见原因：模型未在 BytePlus 控制台激活、key 已禁用、账户余额不足 |
-| 客户提交报 402 `insufficient_balance` | 余额不够预扣 `max_cost × (1 + markup)`，admin 后台充值 |
+| 客户提交报 402 `insufficient_balance` | 余额不够预扣 `max_cost × price_multiplier`，admin 后台充值 |
 | 任务一直 `queued` 不动 | 客户主动 GET 一次 `/v1/videos/{vid}` 触发同步；或后台脚本批量刷新 |
 | 视频文件占用磁盘大 | `du -sh /opt/seedance-relay/data/videos`；旧视频可以归档到对象存储后删除（同时清 DB 里的 `local_video_path`） |
 | 改了 `static/*.html` 网页没变 | 必须 `--build` 重新构建镜像，仅 `restart` 不生效（HTML 被 COPY 进镜像了） |

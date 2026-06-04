@@ -67,7 +67,7 @@ PRICING: Dict[str, Dict[str, Any]] = {
     "seedance-1-0-lite-t2v-250428":  {"input": 0, "output": 0.0007},
     "seedance-1-0-lite-i2v-250428":  {"input": 0, "output": 0.0007},
     "seedance-1-0-pro-250528":       {"input": 0, "output": 0.0014},
-    "seedance-1-0-pro-fast-250528":  {"input": 0, "output": 0.001},
+    "seedance-1-0-pro-fast-251015":  {"input": 0, "output": 0.001},
 
     # ---- Seedance 1.5 Pro（占位价）----
     "seedance-1-5-pro-251215":       {"input": 0, "output": 0.0017},

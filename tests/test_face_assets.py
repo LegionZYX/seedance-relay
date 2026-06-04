@@ -1,4 +1,4 @@
-import importlib
+﻿import importlib
 import os
 import sys
 import tempfile
@@ -69,7 +69,7 @@ class FaceAssetWhitelistTests(unittest.TestCase):
 
     def video_payload(self, image_url):
         return {
-            "model": "video-pro",
+            "model": "dreamina-seedance-2-0-260128",
             "content": [
                 {"type": "text", "text": "Use Image 1 as a character reference."},
                 {

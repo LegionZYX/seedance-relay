@@ -1,0 +1,22 @@
+FROM golang:1.21-bookworm AS build
+
+WORKDIR /src
+COPY runtime-go/go.mod runtime-go/go.sum ./
+RUN go mod download
+COPY runtime-go/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/seedance-runtime .
+
+FROM gcr.io/distroless/base-debian12
+
+WORKDIR /app
+COPY --from=build /out/seedance-runtime /app/seedance-runtime
+
+ENV DB_PATH=/data/relay.sqlite
+ENV RUNTIME_ADDR=0.0.0.0:8012
+
+EXPOSE 8012
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/app/seedance-runtime", "healthcheck"]
+
+ENTRYPOINT ["/app/seedance-runtime"]

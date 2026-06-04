@@ -106,7 +106,7 @@ curl -X POST https://video.example.com/v1/videos \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "video-pro",
+    "model": "dreamina-seedance-2-0-260128",
     "content": [
       { "type": "text", "text": "这个人走在小街上，电影感，自然光" },
       {
@@ -136,7 +136,7 @@ curl -X POST https://video.example.com/v1/videos \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "video-pro",
+    "model": "dreamina-seedance-2-0-260128",
     "content": [
       { "type": "text", "text": "这个人走在小街上，电影感，自然光" },
       {
@@ -190,7 +190,7 @@ ASSET_AUTO_REGISTER_SKIP_MODERATION=false
 2. 素材组来源：环境变量或自动创建缓存。
 3. 全平台素材账本：客户、文件名、URL、asset ID、白名单状态。
 4. 客户详情里的最近素材。
-5. 客户价格：全局 `MARKUP_PCT` 或单客户 `markup_pct`。
+5. 客户价格：单客户 `price_multiplier`；旧数据可由全局 `MARKUP_PCT` 兼容回填。
 6. 任务价格快照，防止后续改价影响历史任务。
 
 ## 常见错误

@@ -341,6 +341,9 @@
         <div :class="['sb-nav-item', tab==='tasks' && 'active']" @click="switchTab('tasks')">
           <el-icon><List /></el-icon> 任务流水
         </div>
+        <div :class="['sb-nav-item', tab==='audit' && 'active']" @click="switchTab('audit')">
+          <el-icon><View /></el-icon> 审计
+        </div>
         <div :class="['sb-nav-item', tab==='docs' && 'active']" @click="switchTab('docs')">
           <el-icon><Document /></el-icon> API 文档
         </div>
@@ -467,40 +470,26 @@
               <el-table-column label="余额" align="right" width="110">
                 <template #default="{ row }"><span class="mono" style="font-weight:600;">${{ fmt(row.balance_usd) }}</span></template>
               </el-table-column>
-              <el-table-column label="加价率" align="right" width="120">
+              <el-table-column label="消费系数" align="right" width="120">
                 <template #default="{ row }">
                   <el-tag :type="row.pricing_scope === 'customer' ? 'success' : 'info'" size="small" effect="light">
-                    {{ fmtPct(row.effective_markup_pct) }}
+                    {{ (row.price_multiplier || 1).toFixed(2) }}x
                   </el-tag>
                 </template>
               </el-table-column>
               <el-table-column label="客户 API Key (sk-)" min-width="260">
                 <template #default="{ row }">
                   <div class="key-cell" @click.stop>
-                    <span class="mono key-text">{{ revealed[row.id+'_api'] ? row.api_key : maskKey(row.api_key) }}</span>
-                    <el-tooltip :content="revealed[row.id+'_api'] ? '隐藏' : '显示'" placement="top">
-                      <el-icon class="key-action" @click="toggleReveal(row.id+'_api')">
-                        <component :is="revealed[row.id+'_api'] ? 'Hide' : 'View'" />
-                      </el-icon>
-                    </el-tooltip>
-                    <el-tooltip content="复制" placement="top">
-                      <el-icon class="key-action" @click="copyText(row.api_key, '客户 key')"><CopyDocument /></el-icon>
-                    </el-tooltip>
+                    <span class="mono key-text">{{ row.api_key || '—' }}</span>
+                    <el-tag size="small" type="info" effect="plain">masked</el-tag>
                   </div>
                 </template>
               </el-table-column>
               <el-table-column label="BytePlus API Key (ark-)" min-width="260">
                 <template #default="{ row }">
                   <div v-if="row.byteplus_api_key" class="key-cell" @click.stop>
-                    <span class="mono key-text">{{ revealed[row.id+'_bp'] ? row.byteplus_api_key : maskKey(row.byteplus_api_key) }}</span>
-                    <el-tooltip :content="revealed[row.id+'_bp'] ? '隐藏' : '显示'" placement="top">
-                      <el-icon class="key-action" @click="toggleReveal(row.id+'_bp')">
-                        <component :is="revealed[row.id+'_bp'] ? 'Hide' : 'View'" />
-                      </el-icon>
-                    </el-tooltip>
-                    <el-tooltip content="复制" placement="top">
-                      <el-icon class="key-action" @click="copyText(row.byteplus_api_key, 'BytePlus key')"><CopyDocument /></el-icon>
-                    </el-tooltip>
+                    <span class="mono key-text">{{ row.byteplus_api_key }}</span>
+                    <el-tag size="small" type="info" effect="plain">masked</el-tag>
                   </div>
                   <el-tag v-else type="warning" size="small" effect="light">未配（用全局）</el-tag>
                 </template>
@@ -713,6 +702,56 @@
           </div>
         </div>
       </template>
+      <!-- Audit -->
+      <template v-if="tab === 'audit'">
+        <div class="main-bar">
+          <div>
+            <h2>审计事件</h2>
+            <div class="sub">密码、API Key、价格、模型列表和余额变更记录</div>
+          </div>
+          <el-button @click="loadAudit"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <div class="filter-row">
+            <el-select v-model="auditFilters.action" clearable placeholder="事件类型" style="width:260px" @change="loadAudit">
+              <el-option label="倍率变更" value="admin_changed_price_multiplier" />
+              <el-option label="模型列表变更" value="admin_changed_enabled_models" />
+              <el-option label="密码重置" value="admin_reset_password" />
+              <el-option label="客户改密码" value="customer_password_changed" />
+              <el-option label="管理员轮换 API Key" value="admin_rotated_customer_api_key" />
+              <el-option label="客户轮换 API Key" value="customer_api_key_rotated" />
+              <el-option label="余额变更" value="admin_changed_balance" />
+              <el-option label="状态变更" value="admin_changed_status" />
+              <el-option label="上游 Key 变更" value="admin_changed_upstream_key" />
+            </el-select>
+            <el-input v-model="auditFilters.target_id" clearable placeholder="Target user id" style="width:260px" @keyup.enter="loadAudit" />
+            <el-button @click="loadAudit"><el-icon><Search /></el-icon> 查询</el-button>
+          </div>
+          <div class="panel">
+            <el-table :data="auditEvents" v-loading="loading.audit" style="width:100%" stripe>
+              <el-table-column label="时间" width="170">
+                <template #default="{ row }"><span style="font-size:12px; color:var(--text-muted)">{{ fmtTs(row.created_at) }}</span></template>
+              </el-table-column>
+              <el-table-column label="动作" min-width="220">
+                <template #default="{ row }">
+                  <el-tag size="small" effect="light">{{ auditActionLabel(row.action) }}</el-tag>
+                  <div class="mono" style="font-size:11px; color:var(--text-muted); margin-top:4px">{{ row.action }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作者" width="120" prop="actor_type" />
+              <el-table-column label="目标" min-width="210">
+                <template #default="{ row }">
+                  <div>{{ row.target_type || '-' }}</div>
+                  <div class="mono" style="font-size:12px; color:var(--text-muted)">{{ row.target_id || '-' }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="安全元数据" min-width="260" show-overflow-tooltip>
+                <template #default="{ row }"><span class="mono" style="font-size:12px">{{ formatAuditMetadata(row.metadata) }}</span></template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </template>
     </main>
   </div>
 
@@ -730,16 +769,21 @@
         </el-col>
         <el-col :span="12">
           <el-form-item label="初始密码">
-            <el-input v-model="newUserForm.password" placeholder="留空自动生成" />
+            <el-input v-model="newUserForm.password" type="password" show-password autocomplete="new-password" minlength="10" placeholder="留空自动生成；手动填写至少 10 位" />
           </el-form-item>
         </el-col>
       </el-row>
-      <el-form-item label="客户加价率">
-        <el-input-number v-model="newUserForm.markup_pct" :precision="2" :step="0.05" :min="0" :max="10" controls-position="right" style="width:100%" placeholder="留空使用全局 MARKUP_PCT" />
-        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
-          0.30 = 在 BytePlus 成本上加价 30%。留空则使用服务器全局 MARKUP_PCT。
-        </div>
-      </el-form-item>
+      <el-form-item label="消费系数 / Price Multiplier">
+          <el-input-number v-model="newUserForm.price_multiplier" :precision="2" :step="0.1" :min="1" :max="10" controls-position="right" style="width:100%" />
+          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">1.0 = 原价，1.2 = 按上游成本 120% 收费。</div>
+        </el-form-item>
+        <el-form-item label="可用模型">
+          <el-checkbox v-model="newUserForm.enabled_models_default" style="margin-bottom:8px">Use default model list</el-checkbox>
+          <el-select v-model="newUserForm.enabled_models" multiple clearable collapse-tags style="width:100%" :disabled="newUserForm.enabled_models_default" placeholder="No selection = no enabled models">
+            <el-option v-for="m in allModels" :key="m.id" :label="modelOptionLabel(m)" :value="m.id" />
+          </el-select>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">默认使用字节原生 model id；如配置了 MODEL_ID_ALIASES_JSON，这里也可选择别名。</div>
+        </el-form-item>
       <el-form-item label="BytePlus API Key">
         <el-input v-model="newUserForm.byteplus_api_key" placeholder="ark-xxxxxxxxxxxx (从 BytePlus 控制台为该客户单独申请)" />
         <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
@@ -790,7 +834,7 @@
         </div>
       </div>
       <el-alert type="warning" :closable="false" show-icon>
-        <b>这是唯一一次显示密码的机会</b>。关闭后无法再次查看，需要的话只能用 admin 重置。
+        <b>这是唯一一次显示密码和 API Key 的机会</b>。关闭后无法再次查看，需要的话只能用 admin 重置密码或轮换 API Key。
       </el-alert>
     </div>
     <template #footer>
@@ -798,11 +842,30 @@
     </template>
   </el-dialog>
 
+  <!-- ══════════════════ Dialog: Customer key rotated ══════════════════ -->
+  <el-dialog v-model="dialogs.rotatedKey" title="客户 API Key 已轮换" width="520px">
+    <div v-if="rotatedKey" style="display:flex; flex-direction:column; gap:14px">
+      <div style="font-size:14px; color:var(--text-muted)">
+        用户 <b style="color:var(--text)">{{ rotatedKey.email || rotatedKey.id }}</b> 的旧 API Key 已立即失效，现有客户会话也已撤销。
+      </div>
+      <div class="credential-box">
+        <div class="credential-label">新的 API Key (只显示一次)</div>
+        <div class="credential-value">{{ rotatedKey.api_key }}</div>
+      </div>
+      <el-alert type="warning" :closable="false" show-icon>
+        请立即保存并安全交付给客户。关闭后管理端只会显示 masked key。
+      </el-alert>
+    </div>
+    <template #footer>
+      <el-button type="primary" @click="dialogs.rotatedKey = false">知道了</el-button>
+    </template>
+  </el-dialog>
+
   <!-- ═══════════════════ Dialog: Edit user ═══════════════════ -->
   <el-dialog v-model="dialogs.editUser" :title="editing ? (editing.email || editing.id) : '编辑用户'" width="780px" :close-on-click-modal="false">
     <div v-if="editing">
       <div style="font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--text-muted); margin:-8px 0 16px">
-        {{ editing.id }} · API key: {{ editing.api_key.slice(0,12) }}…{{ editing.api_key.slice(-6) }}
+        {{ editing.id }} · masked API key: {{ editing.api_key }}
       </div>
 
       <el-row :gutter="12" style="margin-bottom:18px">
@@ -826,17 +889,16 @@
             </el-form-item>
           </el-col>
         </el-row>
-        <el-form-item label="客户加价率">
-          <div style="display:flex; gap:8px; align-items:center;">
-            <el-input-number v-model="editForm.markup_pct" :precision="2" :step="0.05" :min="0" :max="10" controls-position="right" style="width:220px" />
-            <el-button @click="editForm.markup_pct = null">使用全局</el-button>
-            <el-tag :type="editForm.markup_pct == null ? 'info' : 'success'" effect="light">
-              {{ editForm.markup_pct == null ? `全局 ${fmtPct(editing.effective_markup_pct)}` : fmtPct(editForm.markup_pct) }}
-            </el-tag>
-          </div>
-          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
-            只影响之后新建的任务；已创建任务会使用创建时快照价格结算。
-          </div>
+        <el-form-item label="消费系数 / Price Multiplier">
+          <el-input-number v-model="editForm.price_multiplier" :precision="2" :step="0.1" :min="1" :max="10" controls-position="right" style="width:220px" />
+          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">1.0 = 原价，1.2 = 按上游成本 120% 收费。</div>
+        </el-form-item>
+        <el-form-item label="可用模型">
+          <el-checkbox v-model="editForm.enabled_models_default" style="margin-bottom:8px">Use default model list</el-checkbox>
+          <el-select v-model="editForm.enabled_models" multiple clearable collapse-tags style="width:100%" :disabled="editForm.enabled_models_default" placeholder="No selection = no enabled models">
+            <el-option v-for="m in allModels" :key="m.id" :label="modelOptionLabel(m)" :value="m.id" />
+          </el-select>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">默认使用字节原生 model id；如配置了 MODEL_ID_ALIASES_JSON，这里也可选择别名。</div>
         </el-form-item>
         <el-form-item label="BytePlus API Key (留空不改)">
           <el-input v-model="editForm.byteplus_api_key" :placeholder="editing.byteplus_api_key ? `当前: ${editing.byteplus_api_key} (留空保持)` : '未设置'" />
@@ -848,7 +910,7 @@
           <el-input v-model="editForm.byteplus_account_label" />
         </el-form-item>
         <el-form-item label="新密码 (留空不改)">
-          <el-input v-model="editForm.new_password" placeholder="••••••••" />
+          <el-input v-model="editForm.new_password" type="password" show-password autocomplete="new-password" minlength="10" placeholder="至少 10 位；留空不改" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="editForm.note" type="textarea" :rows="2" />
@@ -917,6 +979,9 @@
     </div>
     <template #footer>
       <el-button @click="dialogs.editUser = false">关闭</el-button>
+      <el-button type="warning" plain :loading="loading.rotateKey" @click="rotateEditingApiKey">
+        <el-icon><Key /></el-icon> 轮换 API Key
+      </el-button>
       <el-button type="primary" :loading="loading.saveUser" @click="saveEditUser">
         <el-icon><Document /></el-icon> 保存
       </el-button>
@@ -947,24 +1012,26 @@ const App = {
       stats: null,
       adminConfig: null,
       users: [],
+      allModels: [],
       uploads: [],
       uploadStats: {},
       uploadFilters: { user_id: "", purpose: "", face_asset_whitelisted: "" },
       reconcile: [],
       tasks: [],
-      loading: { stats: false, config: false, users: false, uploads: false, reconcile: false, tasks: false, newUser: false, saveUser: false, docs: false },
+      auditEvents: [],
+      auditFilters: { action: "", target_id: "" },
+      loading: { stats: false, config: false, users: false, uploads: false, reconcile: false, tasks: false, audit: false, newUser: false, saveUser: false, rotateKey: false, docs: false },
       docsHtml: "",
 
-      dialogs: { newUser: false, editUser: false, created: false },
+      dialogs: { newUser: false, editUser: false, created: false, rotatedKey: false },
       newUserForm: this.emptyNewUser(),
       created: null,
+      rotatedKey: null,
 
       editing: null,
       editForm: {},
       topupAmount: null,
 
-      // 用户列表 key 显隐: { 'u_xxx_api': true, 'u_xxx_bp': false }
-      revealed: {},
     };
   },
   computed: {
@@ -989,13 +1056,14 @@ const App = {
     },
   },
   methods: {
-    emptyNewUser() { return { email: "", password: "", balance_usd: 0, markup_pct: null, byteplus_api_key: "", byteplus_account_label: "", note: "", is_admin: false }; },
+    emptyNewUser() { return { email: "", password: "", balance_usd: 0, price_multiplier: 1.0, enabled_models_default: true, enabled_models: [], byteplus_api_key: "", byteplus_account_label: "", note: "", is_admin: false }; },
     async api(path, opts={}) {
       const r = await fetch(path, { credentials: "include", headers: {"Content-Type": "application/json"}, ...opts });
       let body; try { body = await r.json(); } catch { body = {}; }
       if (!r.ok) throw { status: r.status, body };
       return body;
     },
+    passwordTooShort(value) { return String(value || "").length < 10; },
     errMsg(e) { return e.body?.error?.message || e.body?.detail?.error?.message || e.body?.detail || "请求失败"; },
     fmt(n, d=4) { return n == null ? "-" : Number(n).toFixed(d); },
     fmtUsd(n) { return n == null ? "$-" : "$" + Number(n).toFixed(4); },
@@ -1008,6 +1076,24 @@ const App = {
       return size + " B";
     },
     purposeLabel(p) { return ({ image: "图片", video: "视频", audio: "音频" })[p] || p || "-"; },
+    auditActionLabel(action) {
+      return ({
+        admin_changed_price_multiplier: "倍率变更",
+        admin_changed_enabled_models: "模型列表变更",
+        admin_reset_password: "密码重置",
+        admin_changed_upstream_key: "上游 Key 变更",
+        admin_rotated_customer_api_key: "管理员轮换 API Key",
+        admin_changed_balance: "余额变更",
+        admin_changed_status: "状态变更",
+        customer_password_changed: "客户改密码",
+        customer_api_key_rotated: "客户轮换 API Key",
+      })[action] || action || "-";
+    },
+    formatAuditMetadata(meta) {
+      const obj = meta || {};
+      const entries = Object.entries(obj).filter(([k]) => !/key|password|token|secret/i.test(k));
+      return entries.length ? JSON.stringify(Object.fromEntries(entries)) : "-";
+    },
     openUrl(url) { if (url) window.open(url, "_blank", "noopener"); },
     initials(e) { return (e || "?").split("@")[0].slice(0, 2).toUpperCase(); },
     statusType(s) {
@@ -1017,15 +1103,7 @@ const App = {
       return ({ queued: "排队中", running: "生成中", succeeded: "已完成", failed: "失败", cancelled: "已取消", expired: "已过期" })[s] || s;
     },
 
-    // ─── Key 显隐 / 复制 ───
-    maskKey(k) {
-      if (!k) return "—";
-      if (k.length <= 14) return k.slice(0, 4) + "•••" + k.slice(-3);
-      return k.slice(0, 8) + "•••••••" + k.slice(-5);
-    },
-    toggleReveal(key) {
-      this.revealed = { ...this.revealed, [key]: !this.revealed[key] };
-    },
+    // ─── 复制 ───
     copyText(text, label) {
       navigator.clipboard.writeText(text);
       ElMessage.success(`${label || ""} 已复制`);
@@ -1063,6 +1141,7 @@ const App = {
       if (name === "uploads") this.loadUploads();
       if (name === "reconcile") this.loadReconcile();
       if (name === "tasks") this.loadTasks();
+      if (name === "audit") this.loadAudit();
       if (name === "docs")  this.loadDocs();
     },
 
@@ -1104,6 +1183,13 @@ const App = {
       catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.users = false; }
     },
+    async loadAllModels() {
+      try { this.allModels = (await this.api("/admin/model-options")).data || []; }
+      catch (e) { console.warn("load models failed", e); }
+    },
+    modelOptionLabel(m) {
+      return m?.is_alias ? `${m.id} (alias -> ${m.alias_for})` : `${m.id} (native)`;
+    },
     async loadUploads() {
       this.loading.uploads = true;
       try {
@@ -1132,19 +1218,36 @@ const App = {
       catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.tasks = false; }
     },
+    async loadAudit() {
+      this.loading.audit = true;
+      try {
+        const qs = new URLSearchParams({ limit: "100" });
+        if (this.auditFilters.action) qs.set("action", this.auditFilters.action);
+        if (this.auditFilters.target_id) qs.set("target_id", this.auditFilters.target_id);
+        this.auditEvents = (await this.api(`/admin/audit-events?${qs.toString()}`)).data;
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.audit = false; }
+    },
 
     // ─── New user ───
     openNewUser() {
       this.newUserForm = this.emptyNewUser();
+      this.loadAllModels();
       this.dialogs.newUser = true;
     },
     async createUser() {
       if (!this.newUserForm.email) { ElMessage.error("邮箱必填"); return; }
+      if (this.newUserForm.password && this.passwordTooShort(this.newUserForm.password)) {
+        ElMessage.warning("初始密码至少 10 位；也可以留空自动生成");
+        return;
+      }
       this.loading.newUser = true;
       try {
         const obj = { ...this.newUserForm };
         // 把空字符串变成 null，让后端 API 不下发该字段
         ["password","byteplus_api_key","byteplus_account_label","note"].forEach(k => { if (!obj[k]) obj[k] = null; });
+        obj.enabled_models = obj.enabled_models_default ? null : (obj.enabled_models || []);
+        delete obj.enabled_models_default;
         const r = await this.api("/admin/users", { method: "POST", body: JSON.stringify(obj) });
         this.dialogs.newUser = false;
         this.created = r;
@@ -1157,11 +1260,14 @@ const App = {
     // ─── Edit user ───
     async openEditUser(row) {
       try {
+        await this.loadAllModels();
         const u = await this.api(`/admin/users/${row.id}`);
         this.editing = u;
         this.editForm = {
           balance_usd: u.balance_usd,
-          markup_pct: u.pricing_scope === "customer" ? u.markup_pct : null,
+          price_multiplier: u.price_multiplier || 1.0,
+          enabled_models_default: !!u.enabled_models_default,
+          enabled_models: u.enabled_models || [],
           byteplus_api_key: "",
           byteplus_account_label: u.byteplus_account_label || "",
           new_password: "",
@@ -1185,12 +1291,36 @@ const App = {
         await this.loadUsers();
       } catch (e) { ElMessage.error(this.errMsg(e)); }
     },
+    async rotateEditingApiKey() {
+      if (!this.editing?.id) return;
+      try {
+        await ElMessageBox.confirm(
+          `确认轮换 ${this.editing.email || this.editing.id} 的 API Key？旧 key 会立即失效，现有客户会话也会撤销。`,
+          "确认轮换 API Key",
+          { type: "warning" },
+        );
+      } catch { return; }
+      this.loading.rotateKey = true;
+      try {
+        const r = await this.api(`/admin/users/${this.editing.id}/api-key/rotate`, { method: "POST" });
+        this.rotatedKey = { id: this.editing.id, email: this.editing.email, ...r };
+        this.editing.api_key = r.api_key_masked;
+        this.dialogs.rotatedKey = true;
+        await this.loadUsers();
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.rotateKey = false; }
+    },
     async saveEditUser() {
+      if (this.editForm.new_password && this.passwordTooShort(this.editForm.new_password)) {
+        ElMessage.warning("新密码至少 10 位；留空则不修改");
+        return;
+      }
       this.loading.saveUser = true;
       try {
         const obj = {
           balance_usd: this.editForm.balance_usd,
-          markup_pct: this.editForm.markup_pct,
+          price_multiplier: this.editForm.price_multiplier,
+          enabled_models: this.editForm.enabled_models_default ? null : (this.editForm.enabled_models || []),
           byteplus_account_label: this.editForm.byteplus_account_label || null,
           note: this.editForm.note || null,
           is_active: this.editForm.is_active,

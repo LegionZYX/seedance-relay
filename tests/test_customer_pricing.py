@@ -1,4 +1,4 @@
-import importlib
+﻿import importlib
 import os
 import sys
 import tempfile
@@ -58,7 +58,7 @@ class CustomerPricingTests(unittest.TestCase):
 
     def video_payload(self):
         return {
-            "model": "video-pro",
+            "model": "dreamina-seedance-2-0-260128",
             "content": [{"type": "text", "text": "A quiet street walk."}],
             "resolution": "480p",
             "duration": 5,
@@ -84,7 +84,7 @@ class CustomerPricingTests(unittest.TestCase):
             "/v1/videos",
             headers={"Authorization": f"Bearer {user['api_key']}"},
             json={
-                "model": "video-pro",
+                "model": "dreamina-seedance-2-0-260128",
                 "content": [
                     {"type": "text", "text": "A person walks through a small street."},
                     {
@@ -142,7 +142,7 @@ class CustomerPricingTests(unittest.TestCase):
             "/v1/videos",
             headers={"Authorization": f"Bearer {created.json()['api_key']}"},
             json={
-                "model": "video-pro-fast",
+                "model": "dreamina-seedance-2-0-fast-260128",
                 "content": [
                     {"type": "text", "text": "A product shot with reference materials."},
                     {
@@ -193,7 +193,7 @@ class CustomerPricingTests(unittest.TestCase):
             "/v1/videos",
             headers={"Authorization": f"Bearer {user['api_key']}"},
             json={
-                "model": "video-pro",
+                "model": "dreamina-seedance-2-0-260128",
                 "content": [
                     {"type": "text", "text": "The portrait walks through a small street."},
                     {
@@ -237,7 +237,7 @@ class CustomerPricingTests(unittest.TestCase):
             "/v1/videos",
             headers={"Authorization": f"Bearer {user['api_key']}"},
             json={
-                "model": "video-pro",
+                "model": "dreamina-seedance-2-0-260128",
                 "prompt": "A portrait walks through a small street.",
                 "duration": 5,
             },
@@ -283,7 +283,7 @@ class CustomerPricingTests(unittest.TestCase):
             "/v1/videos",
             headers={"Authorization": f"Bearer {caller['api_key']}"},
             json={
-                "model": "video-pro",
+                "model": "dreamina-seedance-2-0-260128",
                 "content": [
                     {"type": "text", "text": "Use the uploaded portrait."},
                     {

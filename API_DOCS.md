@@ -1,1292 +1,389 @@
-# Example Video Relay Video API 开发文档
+# Example Video Relay API
 
-> AI 视频生成 API · 用文本/图像/视频/音频生成高质量视频
-> Base URL: **`https://video.example.com`**
-> 版本: v1
+面向签约客户的 Seedance 视频生成 API 文档。
 
----
+Base URL:
 
-## 目录
+```text
+https://video.example.com
+```
 
-- [快速开始（5 分钟跑通）](#快速开始5-分钟跑通)
-- [认证](#认证)
-- [模型与价格](#模型与价格)
-- [上传中转站（白名单）](#上传中转站白名单)
-- [生成视频（核心 API）](#生成视频核心-api)
-- [视频生成方法范例](#视频生成方法范例)
-- [查询任务状态](#查询任务状态)
-- [下载视频](#下载视频)
-- [列出我的任务](#列出我的任务)
-- [取消 / 删除任务](#取消--删除任务)
-- [账户信息与余额](#账户信息与余额)
-- [提交前预估费用](#提交前预估费用可选)
-- [完整请求体参考](#完整请求体参考)
-- [错误码](#错误码)
-- [SDK 与代码示例](#sdk-与代码示例)
-- [限制与注意事项](#限制与注意事项)
-- [FAQ](#faq)
+## 1. 快速开始
 
----
-
-## 快速开始（5 分钟跑通）
-
-整个流程就 3 步：**提交 → 轮询 → 下载**。
+完整流程是：提交任务、轮询状态、通过 Relay URL 播放或下载视频。
 
 ```bash
-# 你的 API key (admin 发给你的)
-export KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+export KEY="sk_your_relay_api_key"
 
-# 1) 提交任务
-curl https://video.example.com/v1/videos -X POST \
+curl https://video.example.com/v1/videos \
+  -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "video-pro",
-    "content": [{"type":"text","text":"a red lobster wearing a chef hat dances on a neon Tokyo street, cinematic"}],
+    "model": "dreamina-seedance-2-0-260128",
+    "content": [
+      {"type": "text", "text": "cinematic product launch video, clean studio light"}
+    ],
     "resolution": "720p",
-    "duration": 5
+    "ratio": "16:9",
+    "duration": 5,
+    "generate_audio": false
   }'
-
-# 返回:
-# { "id": "vid_a3f9c1b2d8e4f7a6", "status": "queued", "estimated_cost_usd": 0.91, "held_usd": 1.31 }
-
-# 2) 轮询状态 (一般 2-10 分钟完成)
-curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
-  -H "Authorization: Bearer $KEY"
-
-# 返回 "status": "succeeded" 后:
-# { "video_url": "https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content", ... }
-
-# 3) 下载视频
-curl -o video.mp4 https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
-  -H "Authorization: Bearer $KEY"
 ```
 
----
+成功响应示例：
 
-## 认证
-
-所有 `/v1/*` 端点要求 HTTP header：
-
+```json
+{
+  "id": "vid_a3f9c1b2d8e4f7a6",
+  "status": "queued",
+  "model": "dreamina-seedance-2-0-260128",
+  "estimated_cost_usd": 1.188,
+  "held_usd": 1.3068,
+  "price_multiplier": 1.0
+}
 ```
-Authorization: Bearer sk-xxxxxxxxxxxxxxxxxxxxxxxx
-```
 
-API key 由平台管理员发放（格式 `sk-` 开头）。**请妥善保管，泄露会被冒用扣费**。
-
-如果需要在网页上让你的最终用户操作，也可以用 cookie session 登录（见 [网页登录](#网页登录可选)）。
-
----
-
-## 模型与价格
-
-我们提供 **7 个视频生成模型**，按 token 计费：
-
-| 模型 ID | 适用场景 | 推荐场景 |
-|---|---|---|
-| **`video-pro`** | 最高质量 + 支持原生音频 | 商用宣传片、产品演示 |
-| **`video-pro-fast`** | Pro 版本的快速档 | 同质量更快出片 |
-| **`video-1.5-pro`** | 中端 + 草稿模式 | 先出草稿再确认正片，省钱 |
-| **`video-1080p`** | 1080p 专用 | 高清横竖屏 |
-| **`video-720p`** | 720p 快速档 | 大批量制作 |
-| **`video-lite`** | 文生视频极速版 | 纯文本 → 短视频 |
-| **`video-lite-i2v`** | 图生视频极速版 | 单图驱动 → 短视频 |
-
-获取实时价格表：
+轮询任务：
 
 ```bash
-curl https://video.example.com/v1/pricing
+curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
+  -H "Authorization: Bearer $KEY"
+```
 
-# 带客户 key 时返回该客户自己的有效价格
+任务成功后，响应里的 `video_url` 只会是 Relay 域名：
+
+```json
+{
+  "id": "vid_a3f9c1b2d8e4f7a6",
+  "status": "succeeded",
+  "video_url": "https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content"
+}
+```
+
+播放或下载：
+
+```bash
+curl -L -o video.mp4 \
+  https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
+  -H "Authorization: Bearer $KEY"
+```
+
+## 2. 鉴权
+
+除公开模型列表外，客户接口都使用 Relay API Key：
+
+```text
+Authorization: Bearer sk-your-relay-api-key
+```
+
+`GET /v1/models` 不带 Key 时返回默认公开模型列表；带 Key 时返回该客户实际可用的模型列表。
+
+客户可以在自己的账号页面轮换 API Key。新 Key 只在创建或轮换时显示一次，之后只显示 `api_key_masked`。
+
+## 3. 模型
+
+默认使用字节 API 原生 `model id`。如果管理员主动配置了别名并给你的账号启用，`/v1/models` 会返回别名，你也可以直接用别名提交；否则请按原生 ID 调用。
+
+```bash
+curl https://video.example.com/v1/models
+```
+
+响应示例：
+
+```json
+{
+  "data": [
+    {
+      "id": "dreamina-seedance-2-0-260128",
+      "description": "High quality video generation",
+      "supported_resolutions": ["480p", "720p", "1080p"],
+      "supported_ratios": ["16:9", "9:16", "1:1"],
+      "duration_seconds": {"min": 2, "max": 15},
+      "capabilities": {
+        "supports_audio": true,
+        "supports_reference_image": true,
+        "supports_reference_video": true,
+        "supports_reference_audio": true
+      }
+    }
+  ]
+}
+```
+
+当前公开模型 ID：
+
+| Model ID | 说明 |
+|---|---|
+| `dreamina-seedance-2-0-260128` | 高质量视频生成 |
+| `dreamina-seedance-2-0-fast-260128` | 高质量快速生成 |
+| `seedance-1-5-pro-251215` | Seedance 1.5 pro 兼容模型 |
+| `seedance-1-0-pro-250528` | 1080p 视频生成 |
+| `seedance-1-0-pro-fast-251015` | 720p 快速生成 |
+| `seedance-1-0-lite-t2v-250428` | 轻量文生视频 |
+| `seedance-1-0-lite-i2v-250428` | 轻量图生视频 |
+
+你的实际可用模型由账号的 `enabled_models` 决定。提交未启用模型会返回 `model_not_enabled`，不会进入上游生成，也不会扣费。
+
+## 4. 价格与余额
+
+```bash
 curl https://video.example.com/v1/pricing \
   -H "Authorization: Bearer $KEY"
 ```
 
-返回每个模型 / 每个分辨率 / 是否含视频参考 的 USD 单价 + tokens-per-second 估算：
+响应示例：
 
 ```json
 {
-  "markup_pct": 0.3,
-  "pricing_scope": "global",
+  "price_multiplier": 1.3,
+  "pricing_scope": "customer",
+  "buffer_pct": 0.1,
   "pricing": {
-    "video-pro": {
-      "480p":  { "tokens_per_second": 10128, "price_no_video_ref_usd_per_1k": 0.01092, "price_with_video_ref_usd_per_1k": 0.006708 },
-      "720p":  { "tokens_per_second": 21780, "price_no_video_ref_usd_per_1k": 0.01092, "price_with_video_ref_usd_per_1k": 0.006708 },
-      "1080p": { "tokens_per_second": 49005, "price_no_video_ref_usd_per_1k": 0.012012, "price_with_video_ref_usd_per_1k": 0.007332 }
-    },
-    "...": "..."
-  },
-  "buffer_pct": 0.10
-}
-```
-
-`pricing_scope=customer` 表示该客户使用后台单独配置的 `markup_pct`；`pricing_scope=global` 表示使用服务器全局 `MARKUP_PCT`。
-
-**价格规则**：
-
-```
-tokens   = tokens_per_second[resolution] × duration
-cost_usd = tokens / 1000 × price_per_1k_tokens
-max_cost = cost_usd × (1 + 0.10)   ← 提交时实际预扣的金额（含 10% 缓冲）
-```
-
-**含视频参考 vs 无视频参考**：当 `content[]` 数组中包含 `type=video_url` 的输入，按 `price_with_video_ref_usd_per_1k` 档计费（**便宜约 40%**）。否则按 `price_no_video_ref_usd_per_1k`。
-
-**典型成本对照**：
-
-| 配置 | 实际 USD |
-|---|---|
-| `video-pro` / 480p / 5 秒 / 文本 | ~$0.55 |
-| `video-pro` / 720p / 5 秒 / 文本 | ~$1.19 |
-| `video-pro` / 1080p / 5 秒 / 文本 | ~$2.62 |
-| `video-pro` / 720p / 5 秒 / 含视频参考 | ~$0.73 |
-| `video-pro` / 1080p / 5 秒 / 含视频参考 | ~$1.60 |
-
----
-
-## 上传中转站（白名单）
-
-```
-POST /v1/uploads
-```
-
-用于把本地图片、视频或音频先上传到你的白标域名，返回 Seedance 可拉取的公网 URL。所有上传都需要 `Authorization: Bearer sk-xxxx`。
-
-```bash
-curl -X POST https://video.example.com/v1/uploads \
-  -H "Authorization: Bearer $KEY" \
-  -F "file=@portrait.jpg;type=image/jpeg"
-```
-
-响应：
-
-```json
-{
-  "id": "upl_a1b2c3d4e5f6a7b8",
-  "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
-  "object_key": "uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
-  "content_type": "image/jpeg",
-  "size_bytes": 123456,
-  "purpose": "image",
-  "suggested_content_block": {
-    "type": "image_url",
-    "image_url": { "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg" },
-    "role": "first_frame"
+    "dreamina-seedance-2-0-260128": {
+      "720p": {
+        "tokens_per_second": 21780,
+        "price_no_video_ref_usd_per_1k": 0.01092,
+        "price_with_video_ref_usd_per_1k": 0.006708
+      }
+    }
   }
 }
 ```
 
-白名单：
+`pricing_scope=customer` 表示你的账号使用后台单独配置的 `price_multiplier`；`pricing_scope=global` 表示使用服务器全局默认价格。旧版本响应里可能带兼容字段 `markup_pct`，新接入请忽略它，只读取 `price_multiplier`。
 
-| 类型 | MIME | 默认上限 |
-|---|---|---|
-| 图片 | `image/jpeg`, `image/png`, `image/webp` | 10 MB |
-| 视频 | `video/mp4`, `video/quicktime` | 50 MB |
-| 音频 | `audio/mpeg`, `audio/wav`, `audio/x-wav` | 15 MB |
+计费规则：
 
-返回的 `suggested_content_block` 可以直接放进 `POST /v1/videos` 的 `content[]`。
-
-如果客户已经有可公开访问的素材 URL，不想再把文件传到 Relay，可以只登记 URL：
-
-```bash
-curl -X POST https://video.example.com/v1/uploads/from-url \
-  -H "Authorization: Bearer $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://cdn.example.com/portrait.jpg",
-    "content_type": "image/jpeg",
-    "original_filename": "portrait.jpg"
-  }'
+```text
+estimated_cost = upstream_estimate * price_multiplier
+held_usd       = upstream_max_cost * price_multiplier
+final_cost     = upstream_actual_cost * task_price_multiplier_snapshot
 ```
 
-`from-url` 不会下载或探测客户 URL，只根据 `content_type` 或 URL 后缀判断素材类型，然后写入当前 API key 自己的素材账本。返回结构与 `/v1/uploads` 一致，`object_key` 会是 `external/upl_xxx`。
+任务创建时会快照当时的 `price_multiplier`，之后管理员再改倍率，不影响已创建任务的最终结算。
 
-需要一行参数触发人脸白名单时：
-
-```bash
-curl -X POST https://video.example.com/v1/uploads/from-url \
-  -H "Authorization: Bearer $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://cdn.example.com/portrait.jpg",
-    "content_type": "image/jpeg",
-    "face_allowlist": true,
-    "face_asset_label": "actor-a"
-  }'
-```
-
-查看当前客户自己的上传素材：
-
-```bash
-curl https://video.example.com/v1/uploads \
-  -H "Authorization: Bearer $KEY"
-
-curl https://video.example.com/v1/uploads/upl_a1b2c3d4e5f6a7b8 \
-  -H "Authorization: Bearer $KEY"
-```
-
-列表响应：
-
-```json
-{
-  "data": [
-    {
-      "id": "upl_a1b2c3d4e5f6a7b8",
-      "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
-      "asset_url": "asset://asset-xxxx",
-      "purpose": "image",
-      "original_filename": "portrait.jpg",
-      "face_asset_whitelisted": true,
-      "suggested_content_block": {
-        "type": "image_url",
-        "image_url": { "url": "asset://asset-xxxx" },
-        "role": "reference_image"
-      }
-    }
-  ],
-  "limit": 50,
-  "offset": 0,
-  "total": 1
-}
-```
-
-这两个查询接口不会接受客户传入 `user_id`；服务端只根据 `Authorization: Bearer sk-xxxx` 找当前用户，并只返回该用户自己的上传记录。访问其他客户的素材 ID 会返回 `404 upload_not_found`。
-
-平台管理员排查素材时走后台接口：
-
-```bash
-curl "https://video.example.com/admin/uploads?user_id=u_xxx&purpose=image" \
-  -H "X-Admin-Key: $ADMIN_KEY"
-```
-
-`/admin/uploads` 会返回全平台上传账本、素材归属客户、白名单状态和聚合统计；`/admin/users/{id}` 也会带最近 20 个素材。
-
-平台 IAM / 素材注册状态可以看 `/admin/config`；它只返回是否配置，不返回 AK/SK/GroupId 明文。
-
-如果平台管理员打开了服务端自动注册开关，响应会额外包含：
-
-```json
-{
-  "asset_id": "asset-xxxx",
-  "asset_url": "asset://asset-xxxx",
-  "asset_status": "created"
-}
-```
-
-此时 `suggested_content_block` 会自动使用 `asset://...`，用户端仍然不需要任何 AK/SK/GroupId。
-
-### 人脸 reference 白名单
-
-如果平台启用了人脸白名单，`role=reference_image` / `role=reference_video` 的人脸或角色参考素材必须使用服务端批准的 `asset://...`：
-
-```json
-{
-  "type": "image_url",
-  "image_url": { "url": "asset://asset-approved-id" },
-  "role": "reference_image"
-}
-```
-
-普通公网 URL 会被拒绝，未登记的 `asset://...` 也会被拒绝。白名单由管理员在服务端维护，用户不需要 AK/SK/GroupId。
-
-平台侧最简配置：
-
-```bash
-BYTEPLUS_ACCESS_KEY_ID=your-server-ak
-BYTEPLUS_ACCESS_KEY_SECRET=your-server-sk
-MODELARK_ASSET_AUTO_CREATE_GROUP=true
-FACE_ASSET_SELF_SERVICE=true
-```
-
-`MODELARK_ASSET_GROUP_ID` 可以留空。Relay 会在第一次素材注册时调用 Python 素材接口 `CreateAssetGroup`，把返回的 GroupId 缓存到 SQLite；后续客户上传不需要再次建组。
-
-如果平台启用了自助人脸白名单，客户可以在上传时多传一行参数：
-
-```bash
-curl -X POST https://video.example.com/v1/uploads \
-  -H "Authorization: Bearer $KEY" \
-  -F "face_allowlist=true" \
-  -F "face_asset_label=actor-a" \
-  -F "file=@portrait.jpg;type=image/jpeg"
-```
-
-响应会包含 `asset_url` 和 `face_asset_whitelisted=true`，并且 `suggested_content_block` 会自动使用这个 `asset://...`。图片上传会返回 `role=reference_image`，可直接放进 `POST /v1/videos`。
-
-如果没有打开自动注册，管理员也可以在服务器上手动把 reference video 注册成 provider 的 `asset://...`：
-
-```bash
-export BYTEPLUS_ACCESS_KEY_ID="your-access-key-id"
-export BYTEPLUS_ACCESS_KEY_SECRET="your-secret-access-key"
-export MODELARK_ASSET_GROUP_ID="your-asset-group-id"
-
-python create_asset_white_label.py create \
-  --url "https://video.example.com/uploads/2026/06/02/upl_xxx.mp4" \
-  --asset-type Video \
-  --skip-moderation
-
-python create_asset_white_label.py wait --asset-id "asset-xxxx"
-```
-
-如果还没有 GroupId，可以先手动创建：
-
-```bash
-python create_asset_white_label.py create-group \
-  --name "relay-face-assets" \
-  --description "Relay self-service face asset whitelist"
-```
-
----
-
-## 生成视频（核心 API）
-
-```
-POST /v1/videos
-```
-
-### 最简请求（纯文本）
-
-```bash
-curl https://video.example.com/v1/videos -X POST \
-  -H "Authorization: Bearer $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "video-pro",
-    "content": [{"type": "text", "text": "A cat playing piano in a jazz bar"}],
-    "resolution": "720p",
-    "duration": 5
-  }'
-```
-
-真人素材一键白名单开关：
-
-```bash
-curl https://video.example.com/v1/videos -X POST \
-  -H "Authorization: Bearer $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "video-pro",
-    "content": [
-      {"type": "text", "text": "A portrait walks through a small street"},
-      {
-        "type": "image_url",
-        "image_url": {"url": "https://cdn.example.com/portrait.jpg"},
-        "role": "reference_image"
-      }
-    ],
-    "ratio": "16:9",
-    "duration": 5,
-    "extra_body": {"real_person_mode": true}
-  }'
-```
-
-`extra_body.real_person_mode=true` 是 Relay 自己识别的开关。请求主体仍然保持字节原生 `content[]`：Relay 会用服务端 IAM AK/SK 自动把图片/视频参考素材注册成 `asset://...`，写入当前客户的素材账本，再替换进上游生成请求。客户仍然只需要 `Authorization: Bearer sk-xxxx`，不需要也拿不到 AK/SK。
-
-如果客户已经通过 `/v1/uploads` 或 `/v1/uploads/from-url` 上传并白名单过同一个 URL，Relay 会复用已有 `asset://...`，不会重复注册。客户只能使用自己账号名下的上传素材 ID；其他客户上传产生的 `asset://...` 即使被复制，也会被 Relay 拒绝。
-
----
-
-## 视频生成方法范例
-
-本节所有示例都使用同一个端点：
-
-```http
-POST /v1/videos
-```
-
-请求体保持字节原生结构：`model` + `content[]` + 输出参数。`content[]` 里可以组合文本、图片、视频、音频。上传过的素材可直接使用返回的 `suggested_content_block`。
-
-### 1. 文生视频
-
-适合纯文字创意，不需要参考素材。
-
-```bash
-curl https://video.example.com/v1/videos -X POST \
-  -H "Authorization: Bearer $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "video-pro",
-    "content": [
-      { "type": "text", "text": "A calm cinematic walk through a narrow old street, soft morning light" }
-    ],
-    "resolution": "720p",
-    "ratio": "16:9",
-    "duration": 5
-  }'
-```
-
-### 2. 图生视频（首帧）
-
-适合让一张图片动起来。图片可以是公网 URL、上传中转站 URL、或 `asset://...`。
-
-```json
-{
-  "model": "video-pro",
-  "content": [
-    { "type": "text", "text": "The scene slowly comes alive, subtle camera push-in, cinematic" },
-    {
-      "type": "image_url",
-      "image_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.jpg" },
-      "role": "first_frame"
-    }
-  ],
-  "resolution": "720p",
-  "ratio": "16:9",
-  "duration": 5
-}
-```
-
-### 3. 首尾帧生成
-
-适合指定开始画面和结束画面，让模型生成中间过渡。
-
-```json
-{
-  "model": "video-pro",
-  "content": [
-    { "type": "text", "text": "A smooth transition from morning to evening, realistic motion" },
-    {
-      "type": "image_url",
-      "image_url": { "url": "https://cdn.example.com/start.jpg" },
-      "role": "first_frame"
-    },
-    {
-      "type": "image_url",
-      "image_url": { "url": "https://cdn.example.com/end.jpg" },
-      "role": "last_frame"
-    }
-  ],
-  "duration": 5,
-  "ratio": "16:9"
-}
-```
-
-### 4. 多图参考
-
-适合参考人物、产品、服装、风格或场景。若涉及真人或可识别人物，建议先走白名单素材。
-
-```json
-{
-  "model": "video-pro",
-  "content": [
-    { "type": "text", "text": "Use the references for character and outfit consistency, walking through a small street" },
-    {
-      "type": "image_url",
-      "image_url": { "url": "asset://asset_character_reference" },
-      "role": "reference_image"
-    },
-    {
-      "type": "image_url",
-      "image_url": { "url": "https://cdn.example.com/street-style.jpg" },
-      "role": "reference_image"
-    }
-  ],
-  "duration": 5,
-  "resolution": "720p"
-}
-```
-
-### 5. 参考视频生成
-
-适合保留原视频的运动节奏、镜头语言或主体动作。视频参考会按视频参考价格档计费。
-
-```json
-{
-  "model": "video-pro",
-  "content": [
-    { "type": "text", "text": "Keep the motion rhythm, change the visual style to warm cinematic street photography" },
-    {
-      "type": "video_url",
-      "video_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.mp4" },
-      "role": "reference_video"
-    }
-  ],
-  "duration": 5,
-  "ratio": "16:9"
-}
-```
-
-### 6. 生成同步音频
-
-如果模型支持原生音频，可以用 `generate_audio=true` 让模型同时生成视频音频。
-
-```json
-{
-  "model": "video-pro",
-  "content": [
-    { "type": "text", "text": "A chef preparing food in a lively kitchen, natural ambient sound" }
-  ],
-  "duration": 5,
-  "generate_audio": true
-}
-```
-
-### 7. 嵌入或参考音频
-
-如果你已有音频素材，先上传 MP3/WAV，或使用公网音频 URL，再放入 `audio_url`。常见用途是节奏参考、口播参考或音频驱动画面。
-
-```bash
-curl -X POST https://video.example.com/v1/uploads \
-  -H "Authorization: Bearer $KEY" \
-  -F "file=@voice.mp3;type=audio/mpeg"
-```
-
-```json
-{
-  "model": "video-pro",
-  "content": [
-    { "type": "text", "text": "Create a short presenter-style video matching the provided voice timing" },
-    {
-      "type": "image_url",
-      "image_url": { "url": "asset://asset_presenter_reference" },
-      "role": "reference_image"
-    },
-    {
-      "type": "audio_url",
-      "audio_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_voice.mp3" },
-      "role": "reference_audio"
-    }
-  ],
-  "duration": 5,
-  "ratio": "9:16"
-}
-```
-
-说明：
-
-- 音频格式建议 `mp3` 或 `wav`。
-- 音频文件需要能被上游模型公网拉取。
-- 如果同时传 `audio_url` 和 `generate_audio=true`，通常以你的参考音频意图为主；建议二选一，避免指令冲突。
-
-### 8. 真人 / 人脸参考自动白名单
-
-适合客户只想多传一行参数，就让 Relay 自动注册素材并替换成 `asset://...`。
-
-```json
-{
-  "model": "video-pro",
-  "content": [
-    { "type": "text", "text": "The approved person walks through a small street, natural expression, cinematic" },
-    {
-      "type": "image_url",
-      "image_url": { "url": "https://cdn.example.com/approved-person.jpg" },
-      "role": "reference_image"
-    }
-  ],
-  "duration": 5,
-  "extra_body": { "real_person_mode": true }
-}
-```
-
-要求：
-
-- 平台已配置 `BYTEPLUS_ACCESS_KEY_ID` / `BYTEPLUS_ACCESS_KEY_SECRET` / `MODELARK_ASSET_GROUP_ID`。
-- 平台已开启 `FACE_ASSET_SELF_SERVICE=true`。
-- 客户仍然只使用 Relay API Key，不需要 IAM AK/SK。
-- 客户只能复用自己账号下注册出来的 `asset://...`。
-
-### 9. NSFW / 成人向模型用法
-
-如果平台给当前账号开通了 NSFW 模型，调用方式与普通视频生成相同，只需要使用后台返回的 NSFW 模型 ID。
-
-```json
-{
-  "model": "video-pro-nsfw",
-  "content": [
-    { "type": "text", "text": "Your NSFW scene prompt here" }
-  ],
-  "resolution": "720p",
-  "ratio": "16:9",
-  "duration": 5
-}
-```
-
-图像、视频、音频参考也保持原生 `content[]` 写法：
-
-```json
-{
-  "model": "video-pro-nsfw",
-  "content": [
-    { "type": "text", "text": "Your NSFW image-to-video prompt here" },
-    {
-      "type": "image_url",
-      "image_url": { "url": "asset://asset_xxx" },
-      "role": "reference_image"
-    }
-  ],
-  "resolution": "720p",
-  "ratio": "9:16",
-  "duration": 5
-}
-```
-
-说明：
-
-- 具体 `model` 以 `GET /v1/models` 返回为准。
-- 如果账号没有看到 NSFW 模型，说明当前账号未开通。
-- 涉及真人脸、肖像、参考图或参考视频时，仍可使用 `face_allowlist=true` 或 `extra_body.real_person_mode=true` 自动转为 `asset://...`。
-- 平台可以给 NSFW 模型配置单独价格、单独并发、单独 RPM 限制。
-
-### 10. 常用组合清单
-
-| 场景 | content[] 组合 | 关键参数 |
-|---|---|---|
-| 纯文生视频 | `text` | `model`, `duration`, `ratio` |
-| 图生视频 | `text + image_url(first_frame)` | 图片 URL 或 `asset://...` |
-| 首尾帧 | `text + first_frame + last_frame` | 两张图比例尽量一致 |
-| 多图角色一致性 | `text + reference_image...` | 真人建议走白名单 |
-| 视频参考 | `text + video_url(reference_video)` | 视频 URL 需公网可拉取 |
-| 自动配乐/环境声 | `text`, `generate_audio=true` | 模型需支持音频 |
-| 音频驱动画面 | `text + image_url + audio_url` | MP3/WAV 上传后引用 |
-| 真人白名单 | `reference_image + real_person_mode` | 服务端 IAM 自动注册 |
-| NSFW 模型 | `text` 或 `text + whitelisted image` | 以账号开通模型为准 |
-
----
-
-### 响应
-
-```json
-{
-  "id": "vid_a3f9c1b2d8e4f7a6",
-  "model": "video-pro",
-  "status": "queued",
-  "estimated_cost_usd": 1.1888,
-  "held_usd": 1.3077,
-  "created_at": 1778415123
-}
-```
-
-| 字段 | 含义 |
-|---|---|
-| `id` | 任务 ID（`vid_` 开头），用于查询、下载、取消 |
-| `status` | 初始一律 `queued`，后续通过查询 API 看进度 |
-| `estimated_cost_usd` | 预估真实成本（最终结算大概率 ≤ 这个） |
-| `held_usd` | **本次从余额预扣的金额**（含 10% 缓冲）。任务完成后多扣的会退回。|
-| `created_at` | Unix 时间戳（秒） |
-
-### 完整参数
-
-| 参数 | 类型 | 默认 | 说明 |
-|---|---|---|---|
-| `model` | string | 必填 | 见 [模型列表](#模型与价格) |
-| `content` | object[] | 必填 | 输入素材数组，见 [content 块](#content-块结构) |
-| `resolution` | `480p` / `720p` / `1080p` | `720p` | 输出视频分辨率 |
-| `ratio` | string | `16:9` | 画面比例，可选 `16:9` `9:16` `1:1` `4:3` `3:4` `21:9` `adaptive` |
-| `duration` | integer (秒) | `5` | 视频时长，范围 `2-15` |
-| `seed` | integer | 随机 | 控制生成随机性，传同一个 seed 重现相同结果 |
-| `watermark` | boolean | `false` | 是否打官方水印 |
-| `generate_audio` | boolean | 自动 | 是否生成同步音频（仅 `video-pro` 系列支持） |
-
-### content 块结构
-
-`content[]` 数组可包含以下类型的块（按需组合）：
-
-#### 文本块
-```json
-{ "type": "text", "text": "A serene mountain landscape at sunset, cinematic" }
-```
-
-#### 图像块
-```json
-{
-  "type": "image_url",
-  "image_url": { "url": "https://your-cdn.com/reference.jpg" },
-  "role": "first_frame"
-}
-```
-
-`role` 可选值：
-- `first_frame` — 用作视频首帧
-- `last_frame` — 用作视频末帧（要配合首帧使用）
-- `reference_image` — 多张图作为风格/主体参考
-
-`image_url.url` 也支持 **base64**: `data:image/png;base64,...`
-
-#### 视频块（仅 `video-pro` / `video-pro-fast` 支持）
-```json
-{
-  "type": "video_url",
-  "video_url": { "url": "https://your-cdn.com/reference.mp4" },
-  "role": "reference_video"
-}
-```
-
-带视频块时，本笔任务自动按 `with_video_ref` 档计费（更便宜）。
-
-#### 音频块（仅 `video-pro` / `video-pro-fast` 支持）
-```json
-{
-  "type": "audio_url",
-  "audio_url": { "url": "https://your-cdn.com/voice.mp3" },
-  "role": "reference_audio"
-}
-```
-
-### 输入组合速查
-
-| 想要的效果 | content[] 怎么搭 |
-|---|---|
-| 纯文本生成视频 | `[text]` |
-| 一张图驱动视频（首帧） | `[text, image(first_frame)]` |
-| 首尾帧渐变 | `[text, image(first_frame), image(last_frame)]` |
-| 多图参考（构图/风格） | `[text, image(reference_image), image(reference_image), ...]` |
-| 视频转风格 | `[text, video(reference_video)]` |
-| 唇形同步 | `[text, image, audio]` |
-| 全要素（图+视频+音频） | `[text, image, video, audio]` |
-
----
-
-## 查询任务状态
-
-```
-GET /v1/videos/{vid}
-```
-
-```bash
-curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
-  -H "Authorization: Bearer $KEY"
-```
-
-```json
-{
-  "id": "vid_a3f9c1b2d8e4f7a6",
-  "model": "video-pro",
-  "status": "succeeded",
-  "resolution": "720p",
-  "duration": 5,
-  "completion_tokens": 108900,
-  "estimated_cost_usd": 1.1888,
-  "actual_cost_usd": 1.1896,
-  "prompt_text": "A cat playing piano in a jazz bar",
-  "video_url": "https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content",
-  "created_at": 1778415123,
-  "updated_at": 1778415790
-}
-```
-
-### 状态枚举
-
-| status | 含义 | 终态？ |
-|---|---|---|
-| `queued` | 排队中（系统正在分配资源） | 否 |
-| `running` | 生成中 | 否 |
-| `succeeded` | 已完成，可下载 | ✅ |
-| `failed` | 失败（看 `error.message`），**不计费** | ✅ |
-| `cancelled` | 已取消（`queued` 阶段被 DELETE），**不计费** | ✅ |
-| `expired` | 超时作废，**不计费** | ✅ |
-
-### 推荐轮询策略
-
-```python
-import time, requests
-KEY = "sk-xxx"
-def wait_for(vid, max_wait=1800):
-    deadline = time.time() + max_wait
-    while time.time() < deadline:
-        r = requests.get(f"https://video.example.com/v1/videos/{vid}",
-                         headers={"Authorization": f"Bearer {KEY}"})
-        info = r.json()
-        if info["status"] in ("succeeded", "failed", "cancelled", "expired"):
-            return info
-        time.sleep(15)   # 15 秒查一次足够
-    raise TimeoutError("Task didn't finish within 30 min")
-```
-
-⚠️ **不要轮询太频繁**（如每秒一次），15-30 秒一次足以。
-
----
-
-## 下载视频
-
-```
-GET /v1/videos/{vid}/content
-```
-
-succeeded 状态的任务直接拉：
-
-```bash
-curl -o video.mp4 https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
-  -H "Authorization: Bearer $KEY"
-```
-
-- 返回 `video/mp4` 二进制流
-- **下载链接永不过期**（任务记录长期保留）
-- 已经 succeeded 的任务，无论多久后都能下载
-- 支持 HTTP Range 请求（断点续传 / 视频拖动播放）
-
-也可以在浏览器 `<video>` 标签里直接播放：
-
-```html
-<video controls
-       src="https://video.example.com/v1/videos/vid_xxx/content?token=...">
-</video>
-```
-
-⚠️ 浏览器嵌入会受 Bearer auth 限制，需要服务端代理或在 query string 带 token（暂不支持，推荐用后端拉视频后转给前端）。
-
----
-
-## 列出我的任务
-
-```
-GET /v1/videos?limit=20&offset=0&status=succeeded
-```
-
-```bash
-curl "https://video.example.com/v1/videos?limit=10" \
-  -H "Authorization: Bearer $KEY"
-```
-
-```json
-{
-  "data": [
-    { "id": "vid_xxx", "status": "succeeded", "model": "video-pro", "actual_cost_usd": 1.19, "video_url": "...", ... },
-    ...
-  ],
-  "total": 47,
-  "limit": 10,
-  "offset": 0
-}
-```
-
-| Query | 默认 | 说明 |
-|---|---|---|
-| `limit` | 20 | 每页条数（最大 100） |
-| `offset` | 0 | 分页偏移 |
-| `status` | – | 按状态筛选（`queued/running/succeeded/failed/cancelled/expired`） |
-
----
-
-## 取消 / 删除任务
-
-```
-DELETE /v1/videos/{vid}
-```
-
-```bash
-curl -X DELETE https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
-  -H "Authorization: Bearer $KEY"
-```
-
-| 任务当前状态 | DELETE 行为 |
-|---|---|
-| `queued` | 取消任务，**预扣金额全额退回** |
-| `running` | **不允许**取消（任务已在算力上运行） |
-| `succeeded` / `failed` / `expired` | 删除你这边的记录 |
-| `cancelled` | 不允许（已经取消过了） |
-
-返回：
-
-```json
-{ "id": "vid_a3f9c1b2d8e4f7a6", "status": "deleted" }
-```
-
----
-
-## 账户信息与余额
-
-```
-GET /v1/me
-```
+查看账号：
 
 ```bash
 curl https://video.example.com/v1/me \
   -H "Authorization: Bearer $KEY"
 ```
 
+响应示例：
+
 ```json
 {
-  "id": "u_xxxxxxxx",
-  "email": "you@example.com",
-  "api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
-  "available_usd":     8.81,
-  "held_usd":          1.31,
-  "total_usd":        10.12,
-  "pending_tasks":     1,
-  "completed_tasks":  47,
-  "lifetime_spent_usd": 56.34,
-  "balance_usd":       8.81
+  "email": "customer@example.com",
+  "balance_usd": 100.0,
+  "price_multiplier": 1.3,
+  "api_key_masked": "sk-abc...xyz"
 }
 ```
 
-| 字段 | 说明 |
-|---|---|
-| **`available_usd`** | 可立即使用的余额（提交新任务时判断这个值） |
-| **`held_usd`** | 当前**进行中任务**的预扣总额（任务完成后会退多扣的部分） |
-| **`total_usd`** | `available_usd + held_usd`（充值后剩多少） |
-| `pending_tasks` | 进行中（尚未结算）任务数 |
-| `completed_tasks` | 已结算任务数 |
-| `lifetime_spent_usd` | 累计实际扣费总额 |
-| `balance_usd` | = `available_usd`（兼容字段） |
-
-### 提交任务前需要保证 `available_usd ≥ max_cost`
-
-任务一旦提交：
-- 立即从 `available_usd` 扣 `held_usd`
-- 任务终态时：
-  - **succeeded** → 按实际成本结算，多扣的退回到 `available_usd`
-  - **failed / cancelled / expired** → `held_usd` 全额退回 `available_usd`
-
----
-
-## 提交前预估费用（可选）
-
-如果你想在用户点击"生成"前显示**精确的预扣金额**：
-
-```
-POST /v1/videos/estimate
-```
-
-参数跟 `POST /v1/videos` **完全一样**，但**不会真的创建任务**，不消耗任何配额。
+## 5. 提交前预估
 
 ```bash
-curl https://video.example.com/v1/videos/estimate -X POST \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+curl https://video.example.com/v1/videos/estimate \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
   -d '{
-    "model": "video-pro",
-    "resolution": "1080p",
-    "duration": 8,
-    "content": [{"type":"text","text":"a cat"}]
+    "model": "dreamina-seedance-2-0-260128",
+    "content": [{"type": "text", "text": "short brand video"}],
+    "resolution": "720p",
+    "duration": 5
   }'
 ```
 
-```json
-{
-  "model": "video-pro",
-  "resolution": "1080p",
-  "duration": 8,
-  "has_video_ref": false,
-  "estimated_tokens": 392040,
-  "estimated_cost_usd": 4.7092,
-  "max_cost_usd": 5.1801,
-  "balance_usd": 1.4470,
-  "can_afford": false,
-  "shortage_usd": 3.7331
-}
-```
-
-典型使用流程：
-
-```python
-est = post("/v1/videos/estimate", params)
-if not est["can_afford"]:
-    return show_error(f"余额不足，需要再充 ${est['shortage_usd']}")
-if est["max_cost_usd"] > USER_DEFINED_LIMIT:
-    require_user_confirmation(f"本笔最多 ${est['max_cost_usd']:.2f}, 确认？")
-post("/v1/videos", params)  # 真提交
-```
-
----
-
-## 完整请求体参考
-
-```jsonc
-{
-  // 必填字段
-  "model": "video-pro",
-  "content": [
-    { "type": "text", "text": "Your prompt here" },
-    { "type": "image_url", "image_url": { "url": "https://..." }, "role": "first_frame" },
-    { "type": "video_url", "video_url": { "url": "https://..." }, "role": "reference_video" },
-    { "type": "audio_url", "audio_url": { "url": "https://..." }, "role": "reference_audio" }
-  ],
-
-  // 可选: 视频规格
-  "resolution": "720p",       // 480p | 720p | 1080p
-  "ratio": "16:9",            // 16:9 | 9:16 | 1:1 | 4:3 | 3:4 | 21:9 | adaptive
-  "duration": 5,              // 秒, 范围 2-15
-
-  // 可选: 生成控制
-  "seed": 42,                 // -1 或不传 = 随机
-  "watermark": false,         // 加官方水印
-  "generate_audio": true      // 自动生成同步音频 (仅 video-pro 系列)
-}
-```
-
-### 媒体输入限制
-
-| 输入类型 | 格式 | 单个大小 | 总请求体 |
-|---|---|---|---|
-| **图像** | jpeg / png / webp / bmp / tiff / gif / heic / heif | ≤ 30 MB | ≤ 64 MB |
-| **视频** | mp4 / mov (H.264/H.265/AVC/HEVC) | ≤ 50 MB | ≤ 64 MB |
-| **音频** | wav / mp3 | ≤ 15 MB | ≤ 64 MB |
-
-- 图像分辨率：宽高 300-6000 px，比例 0.4-2.5
-- 视频分辨率：480p / 720p / 1080p，时长 2-15 秒，FPS 24-60
-- 音频时长：单段 2-15 秒，总长 ≤ 15 秒
-
-**Base64 编码大文件不推荐**，请用公网 URL。
-
----
-
-## 错误码
-
-所有错误统一格式：
+响应示例：
 
 ```json
 {
-  "detail": {
-    "error": {
-      "code": "error_code",
-      "message": "Human-readable message"
-    }
-  }
+  "estimated_cost_usd": 1.188,
+  "max_cost_usd": 1.3068,
+  "price_multiplier": 1.0,
+  "pricing_scope": "customer"
 }
 ```
 
-| HTTP | code | 含义 / 处理 |
-|---|---|---|
-| **401** | `missing_auth` | 没传 `Authorization: Bearer ...` 或 key 失效 |
-| **401** | `invalid_credentials` | 登录密码错误（仅网页登录） |
-| **402** | `insufficient_balance` | 余额不足，response 含 `needed_usd / balance_usd / shortage_usd` |
-| **400** | `invalid_model` | 模型名错，response 含 `available` 模型列表 |
-| **400** | – | 参数无效（如 `duration` 超出范围） |
-| **404** | `not_found` | 任务 ID 不存在 / 不属于你 |
-| **409** | `cannot_delete` | 试图删除 `running` 状态的任务 |
-| **409** | `not_ready` | 任务还没 succeeded，无法下载 |
-| **502** | `upstream_error` | 后端服务暂时异常，请稍后重试 |
-| **503** | `no_upstream_key` | 服务配置异常，联系管理员 |
+## 6. 生成视频
 
-### 402 余额不足示例
+```text
+POST /v1/videos
+```
+
+请求体字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---:|---:|---|
+| `model` | string | 是 | `/v1/models` 返回的模型 ID |
+| `content` | array | 是 | 原生内容块数组 |
+| `resolution` | string | 否 | `480p`、`720p`、`1080p` |
+| `ratio` | string | 否 | `16:9`、`9:16`、`1:1` 等 |
+| `duration` | integer | 否 | 秒数，按模型能力限制 |
+| `seed` | integer | 否 | 随机种子 |
+| `generate_audio` | boolean | 否 | 是否生成音频 |
+| `watermark` | boolean | 否 | 是否带水印 |
+
+`content[]` 示例：
 
 ```json
-{
-  "detail": {
-    "error": {
-      "code": "insufficient_balance",
-      "message": "This request needs $1.3081 reserved, but balance is $0.5000",
-      "needed_usd": 1.3081,
-      "balance_usd": 0.5000
-    }
-  }
-}
+[
+  {"type": "text", "text": "clean commercial video"},
+  {"type": "image_url", "image_url": {"url": "https://video.example.com/uploads/upl_123.jpg"}, "role": "first_frame"},
+  {"type": "video_url", "video_url": {"url": "https://video.example.com/uploads/upl_456.mp4"}, "role": "reference_video"}
+]
 ```
 
-客户端建议：拿到 402 后弹窗提示用户充值，附带 `needed_usd` 信息。
+Relay 会校验结构、模型能力、素材归属和余额。Relay 不做额外的提示词内容限制；上游生成是否成功仍取决于上游模型和账号配置。
 
----
+## 7. 查询任务
 
-## SDK 与代码示例
-
-### Python
-
-```python
-import time
-import requests
-
-BASE = "https://video.example.com"
-KEY  = "sk-xxxxxxxxxxxxxxxxxxxxxxxx"
-HEADERS = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
-
-def generate_video(prompt, model="video-pro", resolution="720p", duration=5, **opts):
-    body = {"model": model, "resolution": resolution, "duration": duration,
-            "content": [{"type": "text", "text": prompt}], **opts}
-    r = requests.post(f"{BASE}/v1/videos", json=body, headers=HEADERS)
-    if r.status_code == 402:
-        err = r.json()["detail"]["error"]
-        raise RuntimeError(f"余额不足，需要 ${err['needed_usd']}")
-    r.raise_for_status()
-    return r.json()
-
-def wait_for(vid, interval=15, timeout=1800):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        r = requests.get(f"{BASE}/v1/videos/{vid}", headers=HEADERS)
-        r.raise_for_status()
-        info = r.json()
-        if info["status"] in ("succeeded", "failed", "cancelled", "expired"):
-            return info
-        time.sleep(interval)
-    raise TimeoutError(f"Task {vid} not finished in {timeout}s")
-
-def download(vid, path):
-    with requests.get(f"{BASE}/v1/videos/{vid}/content", headers=HEADERS, stream=True) as r:
-        r.raise_for_status()
-        with open(path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=65536):
-                f.write(chunk)
-
-# 用法
-task = generate_video("a red lobster dancing in Tokyo", resolution="720p", duration=5)
-print(f"任务 {task['id']} 已提交, 预扣 ${task['held_usd']}")
-
-info = wait_for(task["id"])
-if info["status"] == "succeeded":
-    download(info["id"], "output.mp4")
-    print(f"成功! 实际花费 ${info['actual_cost_usd']}")
-else:
-    print(f"任务 {info['status']}: {info.get('error', {}).get('message', '')}")
-```
-
-### JavaScript (Node.js / fetch)
-
-```javascript
-const BASE = "https://video.example.com";
-const KEY  = "sk-xxxxxxxxxxxxxxxxxxxxxxxx";
-
-async function api(path, opts = {}) {
-  const r = await fetch(`${BASE}${path}`, {
-    headers: { "Authorization": `Bearer ${KEY}`, "Content-Type": "application/json" },
-    ...opts,
-  });
-  if (!r.ok) throw Object.assign(new Error(r.statusText), { status: r.status, body: await r.json() });
-  return r.json();
-}
-
-async function generateAndDownload(prompt) {
-  const task = await api("/v1/videos", {
-    method: "POST",
-    body: JSON.stringify({
-      model: "video-pro",
-      content: [{ type: "text", text: prompt }],
-      resolution: "720p",
-      duration: 5,
-    }),
-  });
-  console.log(`Task ${task.id} queued, held $${task.held_usd}`);
-
-  let info;
-  while (true) {
-    info = await api(`/v1/videos/${task.id}`);
-    if (["succeeded", "failed", "cancelled", "expired"].includes(info.status)) break;
-    await new Promise(r => setTimeout(r, 15000));
-  }
-  if (info.status !== "succeeded") throw new Error(`Task ${info.status}`);
-
-  const r = await fetch(`${BASE}/v1/videos/${info.id}/content`,
-                       { headers: { "Authorization": `Bearer ${KEY}` } });
-  const buf = await r.arrayBuffer();
-  require("fs").writeFileSync("output.mp4", Buffer.from(buf));
-  console.log(`Done! Actual cost $${info.actual_cost_usd}`);
-}
-
-generateAndDownload("a cat dancing in a jazz bar");
-```
-
-### Shell / curl
+查询单个任务：
 
 ```bash
-#!/usr/bin/env bash
-set -e
-KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
-BASE="https://video.example.com"
-
-# 1) 提交
-VID=$(curl -sS $BASE/v1/videos -X POST \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"model":"video-pro","content":[{"type":"text","text":"a panda chef cooking ramen"}],"resolution":"720p","duration":5}' \
-  | jq -r .id)
-echo "Task: $VID"
-
-# 2) 轮询
-while true; do
-  STATUS=$(curl -sS $BASE/v1/videos/$VID -H "Authorization: Bearer $KEY" | jq -r .status)
-  echo "Status: $STATUS"
-  case "$STATUS" in
-    succeeded) break ;;
-    failed|cancelled|expired) echo "Task $STATUS, exit."; exit 1 ;;
-  esac
-  sleep 15
-done
-
-# 3) 下载
-curl -o output.mp4 $BASE/v1/videos/$VID/content -H "Authorization: Bearer $KEY"
-echo "✅ output.mp4"
+curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
+  -H "Authorization: Bearer $KEY"
 ```
 
----
-
-## 网页登录（可选）
-
-如果不想用 API key 而是用浏览器登录（适合最终用户操作 UI）：
+列出自己的任务：
 
 ```bash
-# 登录, 拿到 cookie
-curl -c cookie.txt https://video.example.com/auth/login -X POST \
+curl "https://video.example.com/v1/videos?limit=20&offset=0&status=succeeded" \
+  -H "Authorization: Bearer $KEY"
+```
+
+客户只能看到自己的任务。任务响应不会返回上游临时视频 URL。
+
+## 8. 视频内容代理
+
+```text
+GET  /v1/videos/{id}/content
+HEAD /v1/videos/{id}/content
+```
+
+视频内容通过 Relay 代理返回，支持浏览器播放需要的 `Range`：
+
+```bash
+curl -I https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
+  -H "Authorization: Bearer $KEY"
+
+curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
+  -H "Authorization: Bearer $KEY" \
+  -H "Range: bytes=0-1048575" \
+  -o part.mp4
+```
+
+正常情况下，`Range` 请求会返回 `206 Partial Content`、`Content-Range`、`Content-Length` 和视频 `Content-Type`。
+
+## 9. 上传素材
+
+上传本地文件：
+
+```bash
+curl https://video.example.com/v1/uploads \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -F "file=@reference.jpg;type=image/jpeg"
+```
+
+响应示例：
+
+```json
+{
+  "id": "upl_a1b2c3d4e5f6a7b8",
+  "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
+  "content_type": "image/jpeg",
+  "size_bytes": 123456,
+  "purpose": "image",
+  "suggested_content_block": {
+    "type": "image_url",
+    "image_url": {
+      "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg"
+    },
+    "role": "first_frame"
+  }
+}
+```
+
+从 URL 导入素材：
+
+```bash
+curl https://video.example.com/v1/uploads/from-url \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
-  -d '{"email":"you@example.com","password":"your-password"}'
-
-# 之后所有请求带 cookie 即可, 不用 Bearer
-curl -b cookie.txt https://video.example.com/v1/me
+  -d '{"url": "https://example.com/reference.jpg", "purpose": "image"}'
 ```
 
-或者直接打开 https://video.example.com/ 网页登录，会跳到 `/app/`。
+## 10. 账号自助
 
----
+修改登录密码：
 
-## 限制与注意事项
+```bash
+curl https://video.example.com/auth/change-password \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"current_password": "old-password", "new_password": "new-secure-password"}'
+```
 
-### 速率与配额
-- **没有官方 RPM/TPM 限制**，但**单笔最大 1080p × 15s** 视频耗时较长（≤ 30 分钟）
-- 单账号同时**最多 5 个并行任务**（防止系统过载）。超过会被排队
-- 提交超过 3 个 1080p 任务建议错开时间
+轮换自己的 Relay API Key：
 
-### 任务时长
-| 模型 / 规格 | 一般耗时 |
-|---|---|
-| `video-lite` / `video-720p` / 480p / 5s | 1-2 分钟 |
-| `video-pro` / 720p / 5s | 5-10 分钟 |
-| `video-pro` / 1080p / 5s | 10-15 分钟 |
-| `video-pro` / 1080p / 15s | 20-30 分钟 |
+```bash
+curl https://video.example.com/v1/me/api-key/rotate \
+  -X POST \
+  -H "Authorization: Bearer $KEY"
+```
 
-### 内容限制
-- 不接受违反法律法规或社会道德的 prompt（暴力 / 色情 / 政治敏感等）
-- 涉及真实人脸的图片输入需特别说明（避免肖像权问题）
-- 提交内容你保留版权，但生成结果遵循平台 ToS
+响应示例：
 
-### 数据存储
-- **任务元数据永久保留**（每个 `vid_xxx` 在你账号下可永久查询）
-- **生成的视频文件永久保留**（不像传统 OSS 24h 过期）
-- 你可以随时 DELETE 自己的任务记录
+```json
+{
+  "api_key": "<new_relay_key_shown_once>",
+  "api_key_masked": "sk-new...shown",
+  "rotated_at": 1760000000,
+  "shown_once": true,
+  "previous_key_status": "disabled"
+}
+```
 
-### Webhook（即将上线）
-将支持在任务终态时回调你指定的 URL，避免轮询。如有需要联系管理员。
+旧 Key 会立即失效。
 
----
+## 11. 常见错误
 
-## FAQ
+错误响应格式：
 
-**Q: API 是同步还是异步？**
-A: **异步**。`POST /v1/videos` 立即返回 `vid_xxx`，后续轮询状态。SD 2.0 系列一笔 5-30 分钟正常。
+```json
+{
+  "detail": {
+    "error": {
+      "code": "model_not_enabled",
+      "message": "model is not enabled for this customer"
+    }
+  }
+}
+```
 
-**Q: 同一个 prompt 生成的视频每次都不同吗？**
-A: 默认是。如果你想**复现相同结果**，传一个固定 `seed`（如 `42`）。注意：相同 seed 也不保证 100% 一致，模型本身有微小随机性。
+| HTTP | Code | 说明 |
+|---:|---|---|
+| 400 | `invalid_content_block` / `invalid_content_role` | `content[]` 块类型或角色不被支持 |
+| 400 | `unsupported_resolution` / `unsupported_ratio` / `unsupported_duration` | 参数超出当前模型能力 |
+| 401 | `missing_auth` | API Key 缺失或无效 |
+| 403 | `model_not_enabled` | 模型未对该客户启用 |
+| 403 | `forbidden` | 无权访问该任务或素材 |
+| 402 | `insufficient_balance` | 余额不足以预扣本次任务 |
+| 404 | `not_found` | 任务或素材不存在 |
+| 405 | `method_not_allowed` | 请求方法不支持 |
+| 409 | `not_ready` | 视频任务尚未成功，暂不能读取内容 |
+| 502 | `upstream_error` | 上游任务创建失败，响应只保留安全的请求标识和摘要 |
+| 502 | `proxy_error` / `proxy_range_unsupported` | 视频代理读取失败或上游不支持本次 Range 读取 |
 
-**Q: 怎么让生成的视频更"真实"？**
-A:
-- 描述具体（"a man in red jacket walking" 比 "a person" 好）
-- 加入摄影术语（"cinematic", "35mm film", "shallow depth of field"）
-- 用 `video-pro` 模型 + 1080p
-- 提供高质量参考图 / 视频 / 音频
+## 12. 安全边界
 
-**Q: 余额不够会发生什么？**
-A: 提交时立刻返回 `402 insufficient_balance`。**不会发起任何后端处理**，不消耗任何资源。补充余额后即可重试。
-
-**Q: 任务失败会扣费吗？**
-A: **不会**。`failed / cancelled / expired` 状态全额退回 `held_usd`。
-
-**Q: 怎么估算我账户能跑多少视频？**
-A: 调 `GET /v1/me` 看 `available_usd`，调 `GET /v1/pricing` 拿单价。或直接调 `POST /v1/videos/estimate` 看 `can_afford`。
-
-**Q: 多个 API key 可以共享余额吗？**
-A: 不可以。每个 API key 绑定唯一账号，余额独立。如需多人共享，请联系管理员。
-
-**Q: 视频版权归谁？**
-A: 生成结果归你（API 调用方）所有，具体以你的平台条款为准。
-
-**Q: 支持 webhook 通知吗？**
-A: 即将上线。当前请轮询。
-
-**Q: 国内能直接访问吗？**
-A: 服务部署在新加坡，全球可访问。延迟取决于你所在地区到 Cloudflare 边缘节点的距离。
-
----
-
-## 联系支持
-
-- **充值 / 账号问题**：联系平台管理员
-- **API bug / feature request**：邮箱（待补充）
-- **服务状态**：`GET https://video.example.com/health` 应返回 `{"status":"ok"}`
-
----
-
-**Example Video Relay Video API** · v1 · 文档更新于 2026-05-11
+- 不要把 API Key 写入前端源码、共享文档、截图或工单。
+- 客户响应只返回 Relay 域名的视频 URL。
+- 任务列表、任务详情、视频内容和素材列表都按客户隔离。
+- 公开文档不包含上游 URL、账号标签、内部路由、策略配置、密钥或内部运维备注。
+- 生成结果默认不永久保存在 Relay 服务器；视频内容通过 Relay 代理读取上游结果。

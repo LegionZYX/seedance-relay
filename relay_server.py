@@ -40,7 +40,7 @@ import bcrypt
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional, AsyncIterator, List, Tuple
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, quote
 
 import httpx
 from fastapi import (
@@ -76,8 +76,11 @@ PUBLIC_DOMAIN  = os.getenv("PUBLIC_DOMAIN", "video.example.com")
 DB_PATH        = os.getenv("DB_PATH", "/data/relay.sqlite")
 VIDEO_DIR      = Path(os.getenv("VIDEO_DIR", "/data/videos"))
 UPLOAD_DIR     = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
+VIDEO_PERSIST_MODE = os.getenv("VIDEO_PERSIST_MODE", "proxy_only").strip().lower() or "proxy_only"
 UPLOAD_PUBLIC_BASE_URL = os.getenv("UPLOAD_PUBLIC_BASE_URL", "").strip().rstrip("/")
+PRICE_MULTIPLIER_BACKFILL_SETTING = "migration.price_multiplier_backfill.v1"
 ADMIN_KEY      = os.getenv("ADMIN_KEY", "").strip()
+RUNTIME_INTERNAL_TOKEN = os.getenv("RUNTIME_INTERNAL_TOKEN", "").strip()
 ADMIN_EMAIL    = os.getenv("ADMIN_EMAIL", "admin@example.com").strip().lower()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "").strip()
 BRAND_NAME     = os.getenv("BRAND_NAME", "Example Video Relay")
@@ -126,6 +129,8 @@ FACE_ASSET_SELF_SERVICE = os.getenv("FACE_ASSET_SELF_SERVICE", "false").strip().
 )
 
 SESSION_TTL_SECS = 7 * 86400        # 登录后 7 天有效
+LOGIN_MAX_FAILED_ATTEMPTS = int(os.getenv("LOGIN_MAX_FAILED_ATTEMPTS", "5"))
+LOGIN_LOCK_SECONDS = int(os.getenv("LOGIN_LOCK_SECONDS", "900"))
 
 VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -142,18 +147,136 @@ ALLOWED_UPLOAD_TYPES = {
 }
 
 # ─── 模型映射 ────────────────────────────────────────────────────
-MODEL_MAP = {
-    "video-pro":      "dreamina-seedance-2-0-260128",
-    "video-pro-fast": "dreamina-seedance-2-0-fast-260128",
-    "video-1.5-pro":  "seedance-1-5-pro-251215",
-    "video-1080p":    "seedance-1-0-pro-250528",
-    "video-720p":     "seedance-1-0-pro-fast-250528",
-    "video-lite":     "seedance-1-0-lite-t2v-250428",
-    "video-lite-i2v": "seedance-1-0-lite-i2v-250428",
+NATIVE_MODEL_IDS = [
+    "dreamina-seedance-2-0-260128",
+    "dreamina-seedance-2-0-fast-260128",
+    "seedance-1-5-pro-251215",
+    "seedance-1-0-pro-250528",
+    "seedance-1-0-pro-fast-251015",
+    "seedance-1-0-lite-t2v-250428",
+    "seedance-1-0-lite-i2v-250428",
+]
+
+
+def _load_model_aliases() -> dict[str, str]:
+    raw = os.getenv("MODEL_ID_ALIASES_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception as exc:
+        print(f"Invalid MODEL_ID_ALIASES_JSON: {exc}")
+        return {}
+    if not isinstance(parsed, dict):
+        print("Invalid MODEL_ID_ALIASES_JSON: expected object mapping alias to native model id")
+        return {}
+    native = set(NATIVE_MODEL_IDS)
+    aliases: dict[str, str] = {}
+    for alias, upstream_id in parsed.items():
+        alias = str(alias).strip()
+        upstream_id = str(upstream_id).strip()
+        if not alias or not upstream_id:
+            continue
+        if alias in native:
+            print(f"Ignored MODEL_ID_ALIASES_JSON alias {alias!r}: alias conflicts with native model id")
+            continue
+        if upstream_id not in native:
+            print(f"Ignored MODEL_ID_ALIASES_JSON alias {alias!r}: unknown native model id {upstream_id!r}")
+            continue
+        aliases[alias] = upstream_id
+    return aliases
+
+
+MODEL_ALIASES = _load_model_aliases()
+MODEL_MAP = {model_id: model_id for model_id in NATIVE_MODEL_IDS}
+MODEL_MAP.update(MODEL_ALIASES)
+DEFAULT_SUPPORTED_RESOLUTIONS = ["480p", "720p", "1080p"]
+DEFAULT_SUPPORTED_RATIOS = ["16:9", "9:16", "1:1"]
+DEFAULT_DURATION_SECONDS = {"min": 2, "max": 15}
+MODEL_REGISTRY = {
+    "dreamina-seedance-2-0-260128": {
+        "description": "High quality video generation",
+        "upstream_model_or_endpoint": "dreamina-seedance-2-0-260128",
+        "profile": "standard",
+        "enabled_by_default": True,
+    },
+    "dreamina-seedance-2-0-fast-260128": {
+        "description": "Fast high quality video generation",
+        "upstream_model_or_endpoint": "dreamina-seedance-2-0-fast-260128",
+        "profile": "standard",
+        "enabled_by_default": True,
+    },
+    "seedance-1-5-pro-251215": {
+        "description": "Seedance 1.5 pro compatible model",
+        "upstream_model_or_endpoint": "seedance-1-5-pro-251215",
+        "profile": "standard",
+        "enabled_by_default": True,
+    },
+    "seedance-1-0-pro-250528": {
+        "description": "1080p video generation",
+        "upstream_model_or_endpoint": "seedance-1-0-pro-250528",
+        "profile": "standard",
+        "enabled_by_default": True,
+    },
+    "seedance-1-0-pro-fast-251015": {
+        "description": "720p video generation",
+        "upstream_model_or_endpoint": "seedance-1-0-pro-fast-251015",
+        "profile": "standard",
+        "enabled_by_default": True,
+    },
+    "seedance-1-0-lite-t2v-250428": {
+        "description": "Lite text-to-video generation",
+        "upstream_model_or_endpoint": "seedance-1-0-lite-t2v-250428",
+        "profile": "standard",
+        "enabled_by_default": True,
+    },
+    "seedance-1-0-lite-i2v-250428": {
+        "description": "Lite image-to-video generation",
+        "upstream_model_or_endpoint": "seedance-1-0-lite-i2v-250428",
+        "profile": "standard",
+        "enabled_by_default": True,
+        "requires_visual_reference": True,
+    },
+}
+for _model_id, _model_spec in MODEL_REGISTRY.items():
+    _model_spec.setdefault("supported_resolutions", list(DEFAULT_SUPPORTED_RESOLUTIONS))
+    _model_spec.setdefault("supported_ratios", list(DEFAULT_SUPPORTED_RATIOS))
+    _model_spec.setdefault("duration_seconds", dict(DEFAULT_DURATION_SECONDS))
+    _model_spec.setdefault("supports_audio", True)
+    _model_spec.setdefault("supports_reference_image", True)
+    _model_spec.setdefault("supports_reference_video", True)
+    _model_spec.setdefault("supports_reference_audio", True)
+    _model_spec.setdefault("max_reference_images", 9)
+    _model_spec.setdefault("max_reference_videos", 3)
+    _model_spec.setdefault("max_reference_audios", 3)
+for _alias_id, _upstream_id in MODEL_ALIASES.items():
+    _base_spec = MODEL_REGISTRY[_upstream_id]
+    _alias_spec = dict(_base_spec)
+    _alias_spec["upstream_model_or_endpoint"] = _upstream_id
+    _alias_spec["alias_for"] = _upstream_id
+    MODEL_REGISTRY[_alias_id] = _alias_spec
+ALLOWED_CONTENT_BLOCK_TYPES = {"text", "image_url", "video_url", "audio_url"}
+CONTENT_BLOCK_LIMITS = {
+    "image_url": ("too_many_reference_images", 9),
+    "video_url": ("too_many_reference_videos", 3),
+    "audio_url": ("too_many_reference_audios", 3),
+}
+ALLOWED_CONTENT_ROLES = {
+    "first_frame",
+    "last_frame",
+    "reference_image",
+    "reference_video",
+    "reference_audio",
+}
+VISUAL_REFERENCE_REQUIRED_MODELS = {
+    model_id
+    for model_id, model_spec in MODEL_REGISTRY.items()
+    if model_spec.get("requires_visual_reference")
 }
 
 # ─── 错误信息脱敏 ────────────────────────────────────────────────
 SENSITIVE_PATTERNS = [
+    (re.compile(r"https?://[^\s\"']*(?:byteplus|bytepluses|volces)[^\s\"']*", re.I), PUBLIC_DOMAIN),
     (re.compile(r"\bByte[\s\-]?Plus\b", re.I), BRAND_NAME),
     (re.compile(r"\bModelArk\b", re.I),         BRAND_NAME),
     (re.compile(r"\bdreamina[\w\-]*", re.I),    "video-pro"),
@@ -170,6 +293,74 @@ def sanitize(text: Optional[str]) -> str:
     for pat, repl in SENSITIVE_PATTERNS:
         text = pat.sub(repl, text)
     return text
+
+
+def _sanitize_log_text(text: Optional[str]) -> str:
+    if not text:
+        return text or ""
+    text = re.sub(r"https?://[^\s\"']+", "<redacted-url>", text)
+    text = re.sub(r"\bx-admin-key\s*:\s*[A-Za-z0-9._~+/=-]+", "X-Admin-Key: <redacted>", text, flags=re.I)
+    text = re.sub(r"\badmin[_-]?key\s*=\s*[A-Za-z0-9._~+/=-]+", "ADMIN_KEY=<redacted>", text, flags=re.I)
+    text = re.sub(r"\bauthorization\s*:\s*bearer\s+[A-Za-z0-9._~+/=-]+", "Authorization: Bearer <redacted>", text, flags=re.I)
+    text = re.sub(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", text, flags=re.I)
+    text = re.sub(r"\brelay_session=[^;\s]+", "relay_session=<redacted>", text, flags=re.I)
+    text = re.sub(r"\bsk[-_][A-Za-z0-9][A-Za-z0-9_-]{8,}\b", "<redacted-relay-key>", text)
+    text = re.sub(r"\bark[\.\-][\w\.\-]+", "<redacted-upstream-key>", text, flags=re.I)
+    return sanitize(text)
+
+
+AUDIT_SECRET_KEYWORDS = (
+    "password",
+    "api_key",
+    "admin_key",
+    "x_admin_key",
+    "relay_key",
+    "upstream_key",
+    "byteplus_key",
+    "token",
+    "session",
+    "authorization",
+    "cookie",
+    "credential",
+    "secret",
+)
+
+
+def _audit_key_has_secret_name(key: str, value=None) -> bool:
+    lowered_key = key.lower()
+    normalized_key = re.sub(r"[^a-z0-9]+", "_", lowered_key).strip("_")
+    if isinstance(value, bool) and normalized_key.endswith("_changed"):
+        return False
+    return any(
+        word in lowered_key or word in normalized_key
+        for word in AUDIT_SECRET_KEYWORDS
+    )
+
+
+def _sanitize_audit_metadata(value, key: str = ""):
+    if _audit_key_has_secret_name(key, value):
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _sanitize_audit_metadata(item_value, str(item_key))
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_audit_metadata(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_log_text(value)
+    return value
+
+
+def _upstream_request_id(headers) -> Optional[str]:
+    for key in ("x-request-id", "x-tt-logid", "x-tt-trace-id", "request-id"):
+        try:
+            value = headers.get(key)
+        except Exception:
+            value = None
+        if value:
+            return sanitize(str(value))[:128]
+    return None
 
 
 def _record_get(record, key: str, default=None):
@@ -193,21 +384,267 @@ def _effective_markup_pct(user_or_task=None) -> float:
 
 
 def _pricing_scope(user_or_task=None) -> str:
-    return "customer" if _record_get(user_or_task, "markup_pct") is not None else "global"
+    return "customer" if (
+        _record_get(user_or_task, "price_multiplier") is not None
+        or _record_get(user_or_task, "markup_pct") is not None
+    ) else "global"
+
+
+def _effective_price_multiplier(user_or_task=None) -> float:
+    value = _record_get(user_or_task, "price_multiplier")
+    if value not in (None, ""):
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            pass
+    return round(1 + _effective_markup_pct(user_or_task), 6)
 
 
 def _with_markup(amount: float, markup_pct: float) -> float:
     return round(float(amount or 0) * (1 + markup_pct), 6)
 
 
-def _request_content_blocks(req: CreateVideoRequest | EstimateRequest, *, required: bool = False) -> list[ContentBlock]:
-    blocks = list(req.content or [])
+def _with_multiplier(amount: float, price_multiplier: float) -> float:
+    return round(float(amount or 0) * price_multiplier, 6)
+
+
+def _masked_secret(value: Optional[str], *, prefix: int = 8, suffix: int = 4) -> Optional[str]:
+    if value is None:
+        return None
+    value = str(value)
+    if not value:
+        return value
+    if len(value) <= prefix + suffix:
+        return "***"
+    return f"{value[:prefix]}...{value[-suffix:]}"
+
+
+def _generate_api_key() -> str:
+    return "sk-" + secrets.token_urlsafe(32)
+
+
+def _customer_key_metadata(user: dict) -> dict:
+    return {
+        "api_key_masked": _masked_secret(_record_get(user, "api_key"), prefix=6, suffix=6),
+        "api_key_last_rotated_at": _record_get(user, "api_key_last_rotated_at"),
+    }
+
+
+def _enabled_models_for_user(user: Optional[dict]) -> list[str]:
+    raw = _record_get(user, "enabled_models")
+    if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+        return list(NATIVE_MODEL_IDS)
+    if isinstance(raw, list):
+        items = raw
+    else:
+        try:
+            items = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(items, list):
+        return []
+    allowed = []
+    for item in items:
+        model = str(item).strip()
+        if model in MODEL_MAP and model not in allowed:
+            allowed.append(model)
+    return allowed
+
+
+def _serialize_enabled_models(models: Optional[list[str]]) -> Optional[str]:
+    if models is None:
+        return None
+    allowed = []
+    for item in models:
+        model = str(item).strip()
+        if model not in MODEL_MAP:
+            raise HTTPException(400, {"error": {
+                "code": "invalid_model",
+                "message": f"Unknown model '{model}'",
+            }})
+        if model not in allowed:
+            allowed.append(model)
+    return json.dumps(allowed)
+
+
+def _enabled_models_uses_default(user: Optional[dict]) -> bool:
+    raw = _record_get(user, "enabled_models")
+    return raw is None or (isinstance(raw, str) and raw.strip() == "")
+
+
+def _ensure_model_enabled(client_model: str, user: dict) -> None:
+    if client_model not in _enabled_models_for_user(user):
+        raise HTTPException(403, {"error": {
+            "code": "model_not_enabled",
+            "message": "This model is not enabled for this customer",
+            "model": client_model,
+        }})
+
+
+def _model_public_info(client_model: str) -> dict:
+    spec = MODEL_REGISTRY[client_model]
+    return {
+        "id": client_model,
+        "description": spec.get("description", ""),
+        "supported_resolutions": list(spec["supported_resolutions"]),
+        "supported_ratios": list(spec["supported_ratios"]),
+        "duration_seconds": dict(spec["duration_seconds"]),
+        "capabilities": {
+            "supports_audio": bool(spec["supports_audio"]),
+            "supports_reference_image": bool(spec["supports_reference_image"]),
+            "supports_reference_video": bool(spec["supports_reference_video"]),
+            "supports_reference_audio": bool(spec["supports_reference_audio"]),
+        },
+    }
+
+
+def _admin_model_option_info(client_model: str) -> dict:
+    item = _model_public_info(client_model)
+    alias_for = MODEL_REGISTRY[client_model].get("alias_for")
+    item["is_alias"] = bool(alias_for)
+    item["alias_for"] = alias_for
+    return item
+
+
+def _validate_model_parameters(client_model: str, req: CreateVideoRequest | EstimateRequest) -> None:
+    spec = MODEL_REGISTRY[client_model]
+    resolution = req.resolution or "720p"
+    if resolution not in spec["supported_resolutions"]:
+        raise HTTPException(400, {"error": {
+            "code": "unsupported_resolution",
+            "message": f"Resolution '{resolution}' is not supported by this model",
+            "model": client_model,
+            "supported_resolutions": spec["supported_resolutions"],
+        }})
+
+    ratio = _request_ratio(req)
+    if ratio not in spec["supported_ratios"]:
+        raise HTTPException(400, {"error": {
+            "code": "unsupported_ratio",
+            "message": f"Ratio '{ratio}' is not supported by this model",
+            "model": client_model,
+            "supported_ratios": spec["supported_ratios"],
+        }})
+
+    duration = req.duration if req.duration is not None else 5
+    duration_range = spec["duration_seconds"]
+    if duration < duration_range["min"] or duration > duration_range["max"]:
+        raise HTTPException(400, {"error": {
+            "code": "unsupported_duration",
+            "message": f"Duration '{duration}' is not supported by this model",
+            "model": client_model,
+            "duration_seconds": duration_range,
+        }})
+
+    if _request_generate_audio(req) and not spec["supports_audio"]:
+        raise HTTPException(400, {"error": {
+            "code": "unsupported_audio",
+            "message": "This model does not support generate_audio",
+            "model": client_model,
+        }})
+
+
+def _validate_model_content_requirements(client_model: str, content: list[ContentBlock]) -> None:
+    if client_model not in VISUAL_REFERENCE_REQUIRED_MODELS:
+        return
+    if any(block.type in {"image_url", "video_url"} for block in content):
+        return
+    raise HTTPException(400, {"error": {
+        "code": "visual_reference_required",
+        "message": "This model requires at least one image_url or video_url content block",
+        "model": client_model,
+    }})
+
+
+def _audit_event(action: str, *, actor_user_id: Optional[str], actor_type: str,
+                 target_type: Optional[str] = None, target_id: Optional[str] = None,
+                 metadata: Optional[dict] = None) -> None:
+    db = get_db()
+    db.execute(
+        """INSERT INTO audit_events
+           (id, actor_user_id, actor_type, action, target_type, target_id,
+            metadata_json, created_at)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (
+            "aud_" + secrets.token_hex(12),
+            actor_user_id,
+            actor_type,
+            action,
+            target_type,
+            target_id,
+            json.dumps(_sanitize_audit_metadata(metadata or {}), ensure_ascii=True),
+            int(time.time()),
+        ),
+    )
+
+
+def _reserve_balance_if_available(user_id: str, amount: float) -> bool:
+    db = get_db()
+    try:
+        cur = db.execute(
+            "UPDATE users SET balance_usd = balance_usd - ? "
+            "WHERE id=? AND balance_usd >= ?",
+            (amount, user_id, amount),
+        )
+        return cur.rowcount > 0
+    finally:
+        db.close()
+
+
+def _refund_reserved_balance(user_id: str, amount: float) -> None:
+    db = get_db()
+    try:
+        db.execute(
+            "UPDATE users SET balance_usd = balance_usd + ? WHERE id=?",
+            (amount, user_id),
+        )
+    finally:
+        db.close()
+
+
+async def _cancel_upstream_task(upstream_task_id: Optional[str], bp_key: Optional[str]) -> None:
+    if not upstream_task_id or not bp_key:
+        return
+    try:
+        await http.delete(
+            f"{UPSTREAM_BASE_URL}/contents/generations/tasks/{quote(upstream_task_id, safe='')}",
+            headers=upstream_headers(bp_key),
+            timeout=30,
+        )
+    except Exception:
+        pass
+
+
+def _validate_content_blocks(blocks: list[ContentBlock], *, required: bool = False) -> list[ContentBlock]:
     if required and not blocks:
         raise HTTPException(400, {"error": {
             "code": "missing_content",
             "message": "Provide BytePlus-native content[] blocks",
         }})
+    for block in blocks:
+        if block.type not in ALLOWED_CONTENT_BLOCK_TYPES:
+            raise HTTPException(400, {"error": {
+                "code": "invalid_content_block",
+                "message": f"Unsupported content block type '{block.type}'",
+            }})
+        role = (block.role or "").strip()
+        if role and role not in ALLOWED_CONTENT_ROLES:
+            raise HTTPException(400, {"error": {
+                "code": "invalid_content_role",
+                "message": f"Unsupported content role '{role}'",
+            }})
+    for block_type, (code, limit) in CONTENT_BLOCK_LIMITS.items():
+        count = sum(1 for block in blocks if block.type == block_type)
+        if count > limit:
+            raise HTTPException(400, {"error": {
+                "code": code,
+                "message": f"Too many {block_type} content blocks; maximum is {limit}",
+            }})
     return blocks
+
+
+def _request_content_blocks(req: Any, *, required: bool = False) -> list[ContentBlock]:
+    return _validate_content_blocks(list(req.content or []), required=required)
 
 
 def _request_ratio(req: CreateVideoRequest | EstimateRequest) -> str:
@@ -232,12 +669,18 @@ CREATE TABLE IF NOT EXISTS users (
     email                    TEXT UNIQUE,
     balance_usd              REAL NOT NULL DEFAULT 0,
     markup_pct               REAL,
+    price_multiplier         REAL NOT NULL DEFAULT 1.0,
+    enabled_models           TEXT,
     is_active                INTEGER NOT NULL DEFAULT 1,
     is_admin                 INTEGER NOT NULL DEFAULT 0,
     password_hash            TEXT,
     byteplus_api_key         TEXT,
     byteplus_account_label   TEXT,
     note                     TEXT,
+    api_key_last_rotated_at  INTEGER,
+    password_changed_at      INTEGER,
+    failed_login_count       INTEGER NOT NULL DEFAULT 0,
+    locked_until             INTEGER,
     created_at               INTEGER NOT NULL
 );
 
@@ -256,6 +699,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     actual_cost_usd          REAL,
     upstream_actual_cost_usd REAL,
     markup_pct               REAL,
+    price_multiplier         REAL,
     completion_tokens        INTEGER,
     settled                  INTEGER NOT NULL DEFAULT 0,
     cached_video_url         TEXT,
@@ -310,6 +754,17 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at     INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS audit_events (
+    id             TEXT PRIMARY KEY,
+    actor_user_id  TEXT,
+    actor_type     TEXT NOT NULL,
+    action         TEXT NOT NULL,
+    target_type    TEXT,
+    target_id      TEXT,
+    metadata_json  TEXT,
+    created_at     INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_user      ON tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_upstream  ON tasks(upstream_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status    ON tasks(status);
@@ -326,8 +781,15 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN byteplus_account_label TEXT",
     "ALTER TABLE users ADD COLUMN note TEXT",
     "ALTER TABLE users ADD COLUMN markup_pct REAL",
+    "ALTER TABLE users ADD COLUMN price_multiplier REAL NOT NULL DEFAULT 1.0",
+    "ALTER TABLE users ADD COLUMN enabled_models TEXT",
+    "ALTER TABLE users ADD COLUMN api_key_last_rotated_at INTEGER",
+    "ALTER TABLE users ADD COLUMN password_changed_at INTEGER",
+    "ALTER TABLE users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN locked_until INTEGER",
     "ALTER TABLE tasks ADD COLUMN upstream_actual_cost_usd REAL",
     "ALTER TABLE tasks ADD COLUMN markup_pct REAL",
+    "ALTER TABLE tasks ADD COLUMN price_multiplier REAL",
     "ALTER TABLE tasks ADD COLUMN completion_tokens INTEGER",
     "ALTER TABLE tasks ADD COLUMN local_video_path TEXT",
     "ALTER TABLE tasks ADD COLUMN prompt_text TEXT",
@@ -341,12 +803,35 @@ def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(SCHEMA)
     for m in MIGRATIONS:
         try:
             conn.execute(m)
         except sqlite3.OperationalError:
             pass   # 已存在
+    backfilled = conn.execute(
+        "SELECT value FROM settings WHERE key=?",
+        (PRICE_MULTIPLIER_BACKFILL_SETTING,),
+    ).fetchone()
+    if not backfilled:
+        conn.execute(
+            "UPDATE users SET price_multiplier = 1 + markup_pct "
+            "WHERE markup_pct IS NOT NULL AND (price_multiplier IS NULL OR price_multiplier = 1.0)"
+        )
+        conn.execute(
+            "UPDATE users SET price_multiplier = ? "
+            "WHERE markup_pct IS NULL AND (price_multiplier IS NULL OR price_multiplier = 1.0)",
+            (1 + MARKUP_PCT,),
+        )
+        conn.execute(
+            "UPDATE tasks SET price_multiplier = 1 + markup_pct "
+            "WHERE markup_pct IS NOT NULL AND price_multiplier IS NULL"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?,?,?)",
+            (PRICE_MULTIPLIER_BACKFILL_SETTING, "done", int(time.time())),
+        )
     return conn
 
 
@@ -429,18 +914,31 @@ def ensure_admin_user():
 
 
 # ─── Auth dependencies ──────────────────────────────────────────
+def _bearer_token_from_authorization(authorization: Optional[str]) -> Optional[str]:
+    raw = (authorization or "").strip()
+    if not raw or not raw.lower().startswith("bearer "):
+        return None
+    token = raw[len("Bearer "):].strip()
+    return token or None
+
+
 def auth_user(authorization: Optional[str] = Header(None),
               relay_session: Optional[str] = Cookie(None)) -> dict:
     """普通用户鉴权: Bearer token (API) 或 session cookie (Web)。"""
     # 1) Bearer
-    if authorization and authorization.lower().startswith("bearer "):
-        api_key = authorization.split(" ", 1)[1].strip()
+    if authorization:
+        api_key = _bearer_token_from_authorization(authorization)
+        if not api_key:
+            raise HTTPException(401, {"error": {"code": "missing_auth",
+                                                "message": "Authentication required"}})
         db = get_db()
         u = db.execute(
             "SELECT * FROM users WHERE api_key=? AND is_active=1", (api_key,)
         ).fetchone()
         if u:
             return dict(u)
+        raise HTTPException(401, {"error": {"code": "missing_auth",
+                                            "message": "Authentication required"}})
     # 2) Session cookie
     sess = lookup_session(relay_session)
     if sess:
@@ -457,7 +955,9 @@ def optional_auth_user(authorization: Optional[str] = Header(None),
                        relay_session: Optional[str] = Cookie(None)) -> Optional[dict]:
     try:
         return auth_user(authorization, relay_session)
-    except HTTPException:
+    except HTTPException as exc:
+        if authorization or relay_session:
+            raise exc
         return None
 
 
@@ -514,6 +1014,56 @@ if STATIC_DIR.is_dir():
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 
+def _host_without_port(value: str) -> str:
+    value = (value or "").strip().lower()
+    if not value:
+        return ""
+    if "://" in value:
+        value = urlparse(value).netloc
+    if value.startswith("["):
+        return value.split("]", 1)[0].lstrip("[")
+    return value.split(":", 1)[0]
+
+
+def _public_domain_host() -> str:
+    value = PUBLIC_DOMAIN.strip()
+    if value.startswith(("http://", "https://")):
+        return _host_without_port(value)
+    return _host_without_port(value)
+
+
+def _same_origin_write_allowed(request: Request) -> bool:
+    source = request.headers.get("origin") or request.headers.get("referer") or ""
+    if not source:
+        return False
+    source_host = _host_without_port(source)
+    allowed = {
+        _host_without_port(request.headers.get("host", "")),
+        _public_domain_host(),
+    }
+    allowed.discard("")
+    return source_host in allowed
+
+
+@app.middleware("http")
+async def csrf_origin_guard(request: Request, call_next):
+    if request.method.upper() in {"POST", "PATCH", "DELETE"}:
+        has_cookie_session = bool(request.cookies.get("relay_session"))
+        auth = request.headers.get("authorization", "")
+        has_bearer = _bearer_token_from_authorization(auth) is not None
+        has_admin_key = bool(request.headers.get("x-admin-key"))
+        if has_cookie_session and not has_bearer and not has_admin_key:
+            if not _same_origin_write_allowed(request):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": {"error": {
+                        "code": "csrf_origin_mismatch",
+                        "message": "Cookie-authenticated write requests require same-origin Origin or Referer",
+                    }}},
+                )
+    return await call_next(request)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "brand": BRAND_NAME, "models": list(MODEL_MAP.keys())}
@@ -553,17 +1103,30 @@ class EstimateRequest(BaseModel):
     extra_body: Optional[dict[str, Any]] = None
 
 
+class RuntimePrepareVideoContentRequest(BaseModel):
+    user_id: str
+    content: List[ContentBlock]
+    extra_body: Optional[dict[str, Any]] = None
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=10)
+
+
 class CreateUserRequest(BaseModel):
     email: str
-    password: Optional[str] = None      # 不传就生成临时密码并返回
+    password: Optional[str] = Field(None, min_length=10)  # 不传就生成临时密码并返回
     balance_usd: float = 0.0
     markup_pct: Optional[float] = Field(None, ge=0, le=10)
-    api_key: Optional[str] = None       # 客户 API key, 不传就自动生成 sk-xxx
+    price_multiplier: Optional[float] = Field(None, ge=1, le=10)
+    enabled_models: Optional[List[str]] = None
+    api_key: Optional[str] = None       # legacy: reject manual values; server generates sk-...
     byteplus_api_key: Optional[str] = None
     byteplus_account_label: Optional[str] = None
     note: Optional[str] = None
@@ -578,12 +1141,14 @@ class TopupReq(BaseModel):
 class UpdateUserReq(BaseModel):
     balance_usd: Optional[float] = None
     markup_pct: Optional[float] = Field(None, ge=0, le=10)
-    api_key: Optional[str] = None       # 客户 API key (留空不改)
+    price_multiplier: Optional[float] = Field(None, ge=1, le=10)
+    enabled_models: Optional[List[str]] = None
+    api_key: Optional[str] = None       # legacy: reject manual edits; use rotate endpoint
     byteplus_api_key: Optional[str] = None
     byteplus_account_label: Optional[str] = None
     is_active: Optional[bool] = None
     note: Optional[str] = None
-    new_password: Optional[str] = None
+    new_password: Optional[str] = Field(None, min_length=10)
 
 
 class FaceAssetReq(BaseModel):
@@ -769,6 +1334,80 @@ def _format_task(t: dict, error: Optional[str] = None) -> dict:
     return out
 
 
+def _apply_terminal_task_refresh_once(
+    db: sqlite3.Connection,
+    *,
+    task_id: str,
+    user_id: str,
+    status: str,
+    actual_cost_usd: float,
+    upstream_actual_cost_usd: float,
+    completion_tokens: Optional[int],
+    cached_video_url: Optional[str],
+    cached_video_url_until: int,
+    updated_at: int,
+    refund_usd: float,
+) -> dict:
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        cursor = db.execute(
+            """UPDATE tasks
+              SET status=?, actual_cost_usd=?,
+                  upstream_actual_cost_usd=?, completion_tokens=?,
+                  settled=1,
+                  cached_video_url=?, cached_video_url_until=?, updated_at=?
+              WHERE id=? AND user_id=? AND settled=0""",
+            (
+                status,
+                actual_cost_usd,
+                upstream_actual_cost_usd,
+                completion_tokens,
+                cached_video_url,
+                cached_video_url_until,
+                updated_at,
+                task_id,
+                user_id,
+            ),
+        )
+        if cursor.rowcount > 0 and refund_usd > 0:
+            db.execute(
+                "UPDATE users SET balance_usd = balance_usd + ? WHERE id = ?",
+                (refund_usd, user_id),
+            )
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+
+    row = db.execute("SELECT * FROM tasks WHERE id=? AND user_id=?", (task_id, user_id)).fetchone()
+    return dict(row) if row else {}
+
+
+def _cancel_task_once(
+    db: sqlite3.Connection,
+    *,
+    task_id: str,
+    user_id: str,
+    held_usd: float,
+    updated_at: int,
+) -> None:
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        cursor = db.execute(
+            "UPDATE tasks SET status='cancelled', settled=1, updated_at=? WHERE id=? AND user_id=? AND settled=0",
+            (updated_at, task_id, user_id),
+        )
+        if cursor.rowcount > 0 and held_usd > 0:
+            db.execute(
+                "UPDATE users SET balance_usd = balance_usd + ? WHERE id=?",
+                (held_usd, user_id),
+            )
+        db.execute("COMMIT")
+    except Exception:
+        db.execute("ROLLBACK")
+        raise
+
+
 async def _refresh_task(task_id: str, user_id: str) -> dict:
     db = get_db()
     t = db.execute("SELECT * FROM tasks WHERE id=? AND user_id=?",
@@ -781,7 +1420,7 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
         return t
 
     # 用提交时使用的 BytePlus key 来查询(因为 task 是用那把 key 创建的)
-    user_row = db.execute("SELECT byteplus_api_key, markup_pct FROM users WHERE id=?",
+    user_row = db.execute("SELECT byteplus_api_key, markup_pct, price_multiplier FROM users WHERE id=?",
                           (user_id,)).fetchone()
     bp_key = user_row["byteplus_api_key"] if user_row else None
 
@@ -809,27 +1448,31 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
         if new_status == "succeeded":
             upstream_cost = actual_video_cost(
                 info, has_video_ref=bool(t["has_video_ref"]))
-            markup_pct = _effective_markup_pct(t if t.get("markup_pct") is not None else user_row)
-            actual_to_user = upstream_cost * (1 + markup_pct)
+            price_multiplier = _effective_price_multiplier(
+                t if t.get("price_multiplier") is not None else user_row
+            )
+            actual_to_user = upstream_cost * price_multiplier
         else:
             upstream_cost = 0.0
             actual_to_user = 0.0
         actual_cost_usd = round(actual_to_user, 6)
         upstream_cost = round(upstream_cost or 0.0, 6)
         refund = max(0.0, (t["held_usd"] or 0) - actual_to_user)
-        if refund > 0:
-            db.execute("UPDATE users SET balance_usd = balance_usd + ? WHERE id = ?",
-                       (refund, user_id))
-        db.execute("""UPDATE tasks
-                      SET status=?, actual_cost_usd=?,
-                          upstream_actual_cost_usd=?, completion_tokens=?,
-                          settled=1,
-                          cached_video_url=?, cached_video_url_until=?, updated_at=?
-                      WHERE id=?""",
-                   (new_status, actual_cost_usd, upstream_cost,
-                    completion_tokens, cached_url, cached_until, now, task_id))
+        t = _apply_terminal_task_refresh_once(
+            db,
+            task_id=task_id,
+            user_id=user_id,
+            status=new_status,
+            actual_cost_usd=actual_cost_usd,
+            upstream_actual_cost_usd=upstream_cost,
+            completion_tokens=completion_tokens,
+            cached_video_url=cached_url,
+            cached_video_url_until=cached_until,
+            updated_at=now,
+            refund_usd=refund,
+        )
         # 任务成功后异步把视频拉到本地
-        if new_status == "succeeded" and cached_url:
+        if new_status == "succeeded" and cached_url and VIDEO_PERSIST_MODE != "proxy_only":
             asyncio.create_task(_persist_video(task_id, cached_url))
     else:
         db.execute("""UPDATE tasks SET status=?, cached_video_url=?,
@@ -862,7 +1505,7 @@ async def _persist_video(task_id: str, url: str) -> None:
                    (str(out), task_id))
         print(f"Persisted video {task_id} -> {out} ({out.stat().st_size} bytes)")
     except Exception as e:
-        print(f"Failed to persist video {task_id}: {e}")
+        print(f"Failed to persist video {task_id}: {_sanitize_log_text(str(e))}")
 
 
 def _public_url_for_object_key(object_key: str) -> str:
@@ -1290,15 +1933,67 @@ def _materialize_real_person_assets(content: list[ContentBlock], user: dict) -> 
     return materialized
 
 
+@app.post("/internal/runtime/prepare-video-content")
+async def internal_prepare_video_content(
+    req: RuntimePrepareVideoContentRequest,
+    x_runtime_token: Optional[str] = Header(None, alias="X-Runtime-Token"),
+):
+    if not RUNTIME_INTERNAL_TOKEN or x_runtime_token != RUNTIME_INTERNAL_TOKEN:
+        raise HTTPException(403, {"error": {
+            "code": "forbidden",
+            "message": "Runtime internal token is invalid",
+        }})
+
+    db = get_db()
+    try:
+        user = db.execute(
+            "SELECT * FROM users WHERE id=? AND is_active=1",
+            (req.user_id,),
+        ).fetchone()
+    finally:
+        db.close()
+    if not user:
+        raise HTTPException(404, {"error": {
+            "code": "user_not_found",
+            "message": "User was not found",
+        }})
+
+    content = _request_content_blocks(req, required=True)
+    if bool((req.extra_body or {}).get("real_person_mode")):
+        content = _materialize_real_person_assets(content, dict(user))
+    content = _validate_content_blocks(content, required=True)
+    _validate_customer_asset_access(content, req.user_id)
+    _validate_face_asset_allowlist(content)
+    return {"content": [block.model_dump(exclude_none=True) for block in content]}
+
+
 # ─── /auth/* (Web 登录) ──────────────────────────────────────────
 @app.post("/auth/login")
 async def auth_login(req: LoginRequest, response: Response):
     db = get_db()
+    now = int(time.time())
     u = db.execute("SELECT * FROM users WHERE email=? AND is_active=1",
                    (req.email.strip().lower(),)).fetchone()
+    if u and u["locked_until"] and int(u["locked_until"]) > now:
+        raise HTTPException(423, {"error": {
+            "code": "account_locked",
+            "message": "Account is temporarily locked after repeated failed login attempts",
+            "locked_until": int(u["locked_until"]),
+        }})
     if not u or not verify_password(req.password, u["password_hash"]):
+        if u:
+            failed_count = int(u["failed_login_count"] or 0) + 1
+            locked_until = None
+            if failed_count >= max(1, LOGIN_MAX_FAILED_ATTEMPTS):
+                locked_until = now + max(60, LOGIN_LOCK_SECONDS)
+            db.execute(
+                "UPDATE users SET failed_login_count=?, locked_until=? WHERE id=?",
+                (failed_count, locked_until, u["id"]),
+            )
         raise HTTPException(401, {"error": {"code": "invalid_credentials",
                                             "message": "邮箱或密码错误"}})
+    if (u["failed_login_count"] or 0) or u["locked_until"]:
+        db.execute("UPDATE users SET failed_login_count=0, locked_until=NULL WHERE id=?", (u["id"],))
     token = create_session(u["id"])
     response.set_cookie(
         "relay_session", token,
@@ -1321,12 +2016,51 @@ async def auth_logout(response: Response,
 
 @app.get("/auth/me")
 async def auth_me(user=Depends(auth_user)):
-    return {"id": user["id"], "email": user.get("email"),
-            "is_admin": bool(user.get("is_admin")),
-            "balance_usd": user["balance_usd"],
-            "markup_pct": _effective_markup_pct(user),
-            "pricing_scope": _pricing_scope(user),
-            "api_key": user["api_key"]}
+    return {
+        "id": user["id"],
+        "email": user.get("email"),
+        "is_admin": bool(user.get("is_admin")),
+        "balance_usd": user["balance_usd"],
+        "markup_pct": _effective_markup_pct(user),
+        "price_multiplier": _effective_price_multiplier(user),
+        "pricing_scope": _pricing_scope(user),
+        **_customer_key_metadata(user),
+    }
+
+
+@app.post("/auth/change-password")
+async def change_password(req: ChangePasswordRequest,
+                          user=Depends(auth_user),
+                          relay_session: Optional[str] = Cookie(None)):
+    db = get_db()
+    row = db.execute("SELECT password_hash FROM users WHERE id=?", (user["id"],)).fetchone()
+    if not row or not verify_password(req.current_password, row["password_hash"]):
+        raise HTTPException(400, {"error": {
+            "code": "invalid_current_password",
+            "message": "Current password is incorrect",
+        }})
+    if verify_password(req.new_password, row["password_hash"]):
+        raise HTTPException(400, {"error": {
+            "code": "password_reused",
+            "message": "New password must be different from the current password",
+        }})
+    now = int(time.time())
+    db.execute(
+        "UPDATE users SET password_hash=?, password_changed_at=? WHERE id=?",
+        (hash_password(req.new_password), now, user["id"]),
+    )
+    if relay_session:
+        db.execute("DELETE FROM sessions WHERE user_id=? AND token<>?", (user["id"], relay_session))
+    else:
+        db.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
+    _audit_event(
+        "customer_password_changed",
+        actor_user_id=user["id"],
+        actor_type="customer",
+        target_type="user",
+        target_id=user["id"],
+    )
+    return {"ok": True}
 
 
 # ─── /v1/* 客户 API ──────────────────────────────────────────────
@@ -1340,9 +2074,12 @@ async def estimate_video_endpoint(req: EstimateRequest, user=Depends(auth_user))
         raise HTTPException(400, {"error": {
             "code": "invalid_model",
             "message": f"Unknown model '{req.model}'. Available: {list(MODEL_MAP.keys())}"
-        }})
+    }})
+    _ensure_model_enabled(client_model, user)
     real_model = MODEL_MAP[client_model]
     content = _request_content_blocks(req)
+    _validate_model_parameters(client_model, req)
+    _validate_model_content_requirements(client_model, content)
     _validate_customer_asset_access(content, user["id"])
     _validate_face_asset_allowlist(content)
     has_vref = any(b.type == "video_url" for b in content)
@@ -1357,9 +2094,10 @@ async def estimate_video_endpoint(req: EstimateRequest, user=Depends(auth_user))
         generate_audio=_request_generate_audio(req),
     )
     markup_pct = _effective_markup_pct(user)
+    price_multiplier = _effective_price_multiplier(user)
     # 注意: 客户看到的价格已经包含 markup
-    est_cost = _with_markup(est.estimated_cost_usd, markup_pct)
-    max_cost = _with_markup(est.max_cost_usd, markup_pct)
+    est_cost = _with_multiplier(est.estimated_cost_usd, price_multiplier)
+    max_cost = _with_multiplier(est.max_cost_usd, price_multiplier)
     shortage = max(0.0, max_cost - user["balance_usd"])
     return {
         "model":             client_model,
@@ -1375,6 +2113,7 @@ async def estimate_video_endpoint(req: EstimateRequest, user=Depends(auth_user))
         "upstream_estimated_cost_usd": round(est.estimated_cost_usd, 6),
         "upstream_max_cost_usd": round(est.max_cost_usd, 6),
         "markup_pct":        markup_pct,
+        "price_multiplier":  price_multiplier,
         "pricing_scope":     _pricing_scope(user),
         "balance_usd":       user["balance_usd"],
         "can_afford":        shortage == 0,
@@ -1388,6 +2127,7 @@ async def get_pricing(user=Depends(optional_auth_user)):
     from modelark.estimator import TOKENS_PER_SEC_OVERRIDE, _strip_date
     from modelark import get_output_rate
     markup_pct = _effective_markup_pct(user)
+    price_multiplier = _effective_price_multiplier(user)
     pricing = {}
     for client_model, real_model in MODEL_MAP.items():
         base = _strip_date(real_model)
@@ -1398,8 +2138,8 @@ async def get_pricing(user=Depends(optional_auth_user)):
             with_ref_rate = get_output_rate(real_model, res, has_video_ref=True)
             entry = {
                 "tokens_per_second":        tps.get(res),
-                "price_no_video_ref_usd_per_1k":   _with_markup(no_ref_rate, markup_pct),
-                "price_with_video_ref_usd_per_1k": _with_markup(with_ref_rate, markup_pct),
+                "price_no_video_ref_usd_per_1k":   _with_multiplier(no_ref_rate, price_multiplier),
+                "price_with_video_ref_usd_per_1k": _with_multiplier(with_ref_rate, price_multiplier),
                 "upstream_price_no_video_ref_usd_per_1k": round(no_ref_rate, 6),
                 "upstream_price_with_video_ref_usd_per_1k": round(with_ref_rate, 6),
             }
@@ -1408,6 +2148,7 @@ async def get_pricing(user=Depends(optional_auth_user)):
     return {
         "pricing": pricing,
         "markup_pct": markup_pct,
+        "price_multiplier": price_multiplier,
         "pricing_scope": _pricing_scope(user),
         "buffer_pct": 0.10,
         "formula": (
@@ -1620,11 +2361,14 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
         raise HTTPException(400, {"error": {
             "code": "invalid_model",
             "message": f"Unknown model '{req.model}'. Available: {list(MODEL_MAP.keys())}"
-        }})
+    }})
+    _ensure_model_enabled(client_model, user)
     real_model = MODEL_MAP[client_model]
     content = _request_content_blocks(req, required=True)
+    _validate_model_parameters(client_model, req)
     if _real_person_mode(req):
         content = _materialize_real_person_assets(content, user)
+    _validate_model_content_requirements(client_model, content)
     _validate_customer_asset_access(content, user["id"])
     _validate_face_asset_allowlist(content)
 
@@ -1638,8 +2382,9 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
         generate_audio=_request_generate_audio(req),
     )
     markup_pct = _effective_markup_pct(user)
-    estimated_to_user = _with_markup(est.estimated_cost_usd, markup_pct)
-    your_max_cost = _with_markup(est.max_cost_usd, markup_pct)
+    price_multiplier = _effective_price_multiplier(user)
+    estimated_to_user = _with_multiplier(est.estimated_cost_usd, price_multiplier)
+    your_max_cost = _with_multiplier(est.max_cost_usd, price_multiplier)
 
     if user["balance_usd"] < your_max_cost:
         raise HTTPException(402, {"error": {
@@ -1667,18 +2412,36 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
     if req.generate_audio is not None:
         payload["generate_audio"] = _request_generate_audio(req)
 
-    r = await http.post(f"{UPSTREAM_BASE_URL}/contents/generations/tasks",
-                        json=payload, headers=upstream_headers(bp_key), timeout=60)
-    if r.status_code != 200:
-        body = ""
-        try: body = r.text
-        except Exception: pass
+    if not _reserve_balance_if_available(user["id"], your_max_cost):
+        raise HTTPException(402, {"error": {
+            "code": "insufficient_balance",
+            "message": f"This request needs ${your_max_cost:.4f} reserved, "
+                       "but the available balance changed before submission",
+            "needed_usd": your_max_cost, "balance_usd": user["balance_usd"],
+        }})
+
+    try:
+        r = await http.post(f"{UPSTREAM_BASE_URL}/contents/generations/tasks",
+                            json=payload, headers=upstream_headers(bp_key), timeout=60)
+    except Exception:
+        _refund_reserved_balance(user["id"], your_max_cost)
         raise HTTPException(502, {"error": {
             "code": "upstream_error",
-            "message": sanitize(body)[:300] or f"upstream returned {r.status_code}",
+            "message": "upstream request failed",
         }})
+    if r.status_code != 200:
+        _refund_reserved_balance(user["id"], your_max_cost)
+        error = {
+            "code": "upstream_error",
+            "message": "upstream returned an error",
+        }
+        request_id = _upstream_request_id(getattr(r, "headers", {}))
+        if request_id:
+            error["request_id"] = request_id
+        raise HTTPException(502, {"error": error})
     upstream_id = (r.json() or {}).get("id")
     if not upstream_id:
+        _refund_reserved_balance(user["id"], your_max_cost)
         raise HTTPException(502, {"error": {"code": "upstream_error",
                                             "message": "no task id returned"}})
 
@@ -1687,25 +2450,34 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
     prompt_text = next(
         (b.text for b in content if b.type == "text" and b.text), "")[:500]
     db = get_db()
-    db.execute("UPDATE users SET balance_usd = balance_usd - ? WHERE id=?",
-               (your_max_cost, user["id"]))
-    db.execute("""INSERT INTO tasks
-        (id, user_id, upstream_task_id, upstream_model, client_model,
-         resolution, duration, has_video_ref, status,
-         estimated_cost_usd, held_usd, markup_pct, prompt_text, request_payload,
-         created_at, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (our_id, user["id"], upstream_id, real_model, client_model,
-         req.resolution, req.duration, int(has_vref), "queued",
-         estimated_to_user, your_max_cost, markup_pct,
-         prompt_text, json.dumps(payload, ensure_ascii=False)[:5000],
-         now, now))
+    try:
+        db.execute("""INSERT INTO tasks
+            (id, user_id, upstream_task_id, upstream_model, client_model,
+             resolution, duration, has_video_ref, status,
+             estimated_cost_usd, held_usd, markup_pct, price_multiplier, prompt_text, request_payload,
+             created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (our_id, user["id"], upstream_id, real_model, client_model,
+             req.resolution, req.duration, int(has_vref), "queued",
+             estimated_to_user, your_max_cost, markup_pct, price_multiplier,
+             prompt_text, json.dumps(payload, ensure_ascii=False)[:5000],
+             now, now))
+    except Exception:
+        await _cancel_upstream_task(upstream_id, bp_key)
+        _refund_reserved_balance(user["id"], your_max_cost)
+        raise HTTPException(500, {"error": {
+            "code": "task_recording_failed",
+            "message": "upstream task was created but could not be recorded locally",
+        }})
+    finally:
+        db.close()
 
     return {
         "id": our_id, "model": client_model, "status": "queued",
         "estimated_cost_usd": estimated_to_user,
         "upstream_estimated_cost_usd": round(est.estimated_cost_usd, 6),
         "markup_pct": markup_pct,
+        "price_multiplier": price_multiplier,
         "pricing_scope": _pricing_scope(user),
         "held_usd": your_max_cost,
         "created_at": now,
@@ -1719,7 +2491,7 @@ async def get_video(vid: str, user=Depends(auth_user)):
 
 
 @app.get("/v1/videos/{vid}/content")
-async def stream_video(vid: str, user=Depends(auth_user)):
+async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
     db = get_db()
     t = db.execute("SELECT * FROM tasks WHERE id=? AND user_id=?",
                    (vid, user["id"])).fetchone()
@@ -1746,15 +2518,88 @@ async def stream_video(vid: str, user=Depends(auth_user)):
         raise HTTPException(404, {"error": {"code": "video_unavailable",
                                             "message": "video URL no longer available"}})
 
+    range_header = request.headers.get("range")
+    upstream_headers_for_content = {"Range": range_header} if range_header else None
+    upstream_cm = http.stream(
+        "GET",
+        cached_url,
+        headers=upstream_headers_for_content,
+        timeout=300,
+    )
+    upstream = await upstream_cm.__aenter__()
+    if upstream.status_code < 200 or upstream.status_code >= 300:
+        await upstream_cm.__aexit__(None, None, None)
+        raise HTTPException(502, {"error": {"code": "proxy_error",
+                                            "message": "upstream video unavailable"}})
+    if range_header and upstream.status_code != 206:
+        await upstream_cm.__aexit__(None, None, None)
+        raise HTTPException(502, {"error": {"code": "proxy_range_unsupported",
+                                            "message": "upstream video did not return partial content"}})
+    status_code = 206 if upstream.status_code == 206 else 200
+    response_headers = {
+        "Content-Disposition": f'inline; filename="{vid}.mp4"',
+        "Cache-Control": "private, max-age=3600",
+        "Accept-Ranges": upstream.headers.get("accept-ranges", "bytes"),
+    }
+    for header in ("content-length", "content-range"):
+        if upstream.headers.get(header):
+            response_headers[header.title()] = upstream.headers[header]
+    media_type = upstream.headers.get("content-type", "video/mp4").split(";", 1)[0]
+
     async def gen() -> AsyncIterator[bytes]:
-        async with http.stream("GET", cached_url, timeout=300) as upstream:
+        try:
             async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
                 yield chunk
+        finally:
+            await upstream_cm.__aexit__(None, None, None)
 
     return StreamingResponse(
-        gen(), media_type="video/mp4",
-        headers={"Content-Disposition": f'inline; filename="{vid}.mp4"',
-                 "Cache-Control": "private, max-age=3600"})
+        gen(), media_type=media_type, status_code=status_code, headers=response_headers)
+
+
+@app.head("/v1/videos/{vid}/content")
+async def head_video_content(request: Request, vid: str, user=Depends(auth_user)):
+    db = get_db()
+    t = db.execute("SELECT * FROM tasks WHERE id=? AND user_id=?",
+                   (vid, user["id"])).fetchone()
+    if not t:
+        raise HTTPException(404, {"error": {"code": "not_found",
+                                            "message": "video not found"}})
+    t = dict(t)
+    t = await _refresh_task(vid, user["id"])
+    if t["status"] != "succeeded":
+        raise HTTPException(409, {"error": {"code": "not_ready",
+                                            "message": f"video status: {t['status']}"}})
+    cached_url = t.get("cached_video_url")
+    if not cached_url:
+        raise HTTPException(404, {"error": {"code": "video_unavailable",
+                                            "message": "video URL no longer available"}})
+
+    range_header = request.headers.get("range")
+    upstream_headers_for_content = {"Range": range_header} if range_header else None
+    async with http.stream(
+        "HEAD",
+        cached_url,
+        headers=upstream_headers_for_content,
+        timeout=300,
+    ) as upstream:
+        if upstream.status_code < 200 or upstream.status_code >= 300:
+            raise HTTPException(502, {"error": {"code": "proxy_error",
+                                                "message": "upstream video unavailable"}})
+        if range_header and upstream.status_code != 206:
+            raise HTTPException(502, {"error": {"code": "proxy_range_unsupported",
+                                                "message": "upstream video did not return partial content"}})
+        status_code = 206 if upstream.status_code == 206 else 200
+        response_headers = {
+            "Content-Disposition": f'inline; filename="{vid}.mp4"',
+            "Cache-Control": "private, max-age=3600",
+            "Accept-Ranges": upstream.headers.get("accept-ranges", "bytes"),
+        }
+        for header in ("content-length", "content-range"):
+            if upstream.headers.get(header):
+                response_headers[header.title()] = upstream.headers[header]
+        media_type = upstream.headers.get("content-type", "video/mp4").split(";", 1)[0]
+        return Response(status_code=status_code, headers=response_headers, media_type=media_type)
 
 
 @app.delete("/v1/videos/{vid}")
@@ -1773,15 +2618,24 @@ async def delete_video(vid: str, user=Depends(auth_user)):
     r = await http.delete(f"{UPSTREAM_BASE_URL}/contents/generations/tasks/{t['upstream_task_id']}",
                           headers=upstream_headers(bp_key), timeout=30)
     if r.status_code not in (200, 204):
-        raise HTTPException(409, {"error": {"code": "cannot_delete",
-                                            "message": sanitize(r.text)[:200]}})
+        error = {
+            "code": "cannot_delete",
+            "message": "upstream could not delete the task",
+        }
+        request_id = _upstream_request_id(getattr(r, "headers", {}))
+        if request_id:
+            error["request_id"] = request_id
+        raise HTTPException(409, {"error": error})
 
     now = int(time.time())
     if not t["settled"]:
-        db.execute("UPDATE users SET balance_usd = balance_usd + ? WHERE id=?",
-                   (t["held_usd"] or 0, user["id"]))
-        db.execute("UPDATE tasks SET status='cancelled', settled=1, updated_at=? WHERE id=?",
-                   (now, vid))
+        _cancel_task_once(
+            db,
+            task_id=vid,
+            user_id=user["id"],
+            held_usd=t["held_usd"] or 0,
+            updated_at=now,
+        )
     return {"id": vid, "status": "deleted"}
 
 
@@ -1821,7 +2675,7 @@ async def me(user=Depends(auth_user)):
     return {
         "id":                  user["id"],
         "email":               user.get("email"),
-        "api_key":             user["api_key"],
+        **_customer_key_metadata(user),
         "markup_pct":          _effective_markup_pct(user),
         "pricing_scope":       _pricing_scope(user),
         "available_usd":       round(available, 6),
@@ -1834,8 +2688,33 @@ async def me(user=Depends(auth_user)):
     }
 
 
+@app.post("/v1/me/api-key/rotate")
+async def rotate_my_api_key(user=Depends(auth_user)):
+    new_key = _generate_api_key()
+    now = int(time.time())
+    db = get_db()
+    db.execute(
+        "UPDATE users SET api_key=?, api_key_last_rotated_at=? WHERE id=?",
+        (new_key, now, user["id"]),
+    )
+    _audit_event(
+        "customer_api_key_rotated",
+        actor_user_id=user["id"],
+        actor_type="customer",
+        target_type="user",
+        target_id=user["id"],
+    )
+    return {
+        "api_key": new_key,
+        "api_key_masked": _masked_secret(new_key, prefix=6, suffix=6),
+        "rotated_at": now,
+        "shown_once": True,
+        "previous_key_status": "disabled",
+    }
+
+
 @app.get("/v1/models")
-async def list_models():
+async def list_models(user=Depends(optional_auth_user)):
     """列出所有可用模型 (脱敏后的客户名 + 提示)。"""
     descs = {
         "video-pro":      "高质量, 480p/720p/1080p, 含音频, 慢 (5-30 分钟)",
@@ -1847,11 +2726,18 @@ async def list_models():
         "video-lite-i2v": "图片→视频, 便宜快速",
     }
     return {
-        "data": [{"id": k, "description": descs.get(k, "")} for k in MODEL_MAP],
+        "data": [_model_public_info(k) for k in _enabled_models_for_user(user)],
     }
 
 
 # ─── /admin/* API ────────────────────────────────────────────────
+@app.get("/admin/model-options", dependencies=[Depends(auth_admin)])
+async def admin_model_options():
+    return {
+        "data": [_admin_model_option_info(model_id) for model_id in MODEL_REGISTRY.keys()],
+    }
+
+
 @app.get("/admin/config", dependencies=[Depends(auth_admin)])
 async def admin_config():
     env_group_id = os.getenv("MODELARK_ASSET_GROUP_ID", "").strip()
@@ -1996,14 +2882,19 @@ async def admin_list_users():
     rows = db.execute(
         "SELECT id, email, balance_usd, is_active, is_admin, "
         "       api_key, byteplus_api_key, byteplus_account_label, "
-        "       markup_pct, note, created_at "
+        "       markup_pct, price_multiplier, enabled_models, note, created_at "
         "FROM users ORDER BY created_at DESC"
     ).fetchall()
     data = []
     for row in rows:
         item = dict(row)
         item["effective_markup_pct"] = _effective_markup_pct(item)
+        item["price_multiplier"] = _effective_price_multiplier(item)
         item["pricing_scope"] = _pricing_scope(item)
+        item["enabled_models_default"] = _enabled_models_uses_default(item)
+        item["enabled_models"] = _enabled_models_for_user(item)
+        item["api_key"] = _masked_secret(item.get("api_key"), prefix=6, suffix=6)
+        item["byteplus_api_key"] = _masked_secret(item.get("byteplus_api_key"))
         data.append(item)
     return {"data": data}
 
@@ -2016,11 +2907,15 @@ async def admin_get_user(user_id: str):
         raise HTTPException(404, "user not found")
     u = dict(u)
     u["effective_markup_pct"] = _effective_markup_pct(u)
+    u["price_multiplier"] = _effective_price_multiplier(u)
     u["pricing_scope"] = _pricing_scope(u)
+    u["enabled_models_default"] = _enabled_models_uses_default(u)
+    u["enabled_models"] = _enabled_models_for_user(u)
+    if u.get("api_key"):
+        u["api_key"] = _masked_secret(u["api_key"], prefix=6, suffix=6)
     # 脱敏 BytePlus key, 只显示前 8 后 4
     if u.get("byteplus_api_key"):
-        k = u["byteplus_api_key"]
-        u["byteplus_api_key"] = (k[:8] + "..." + k[-4:]) if len(k) > 12 else "***"
+        u["byteplus_api_key"] = _masked_secret(u["byteplus_api_key"])
     u.pop("password_hash", None)
 
     # 该用户最近 20 个任务
@@ -2060,33 +2955,37 @@ async def admin_create_user(req: CreateUserRequest):
     if db.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
         raise HTTPException(409, {"error": {"code": "email_exists",
                                             "message": "email 已存在"}})
-    # 自定义 api_key 还是自动生成
     if req.api_key:
-        api_key = req.api_key.strip()
-        if len(api_key) < 8:
-            raise HTTPException(400, {"error": {"code": "api_key_too_short",
-                                                "message": "API key 至少 8 位"}})
-        if db.execute("SELECT 1 FROM users WHERE api_key=?", (api_key,)).fetchone():
-            raise HTTPException(409, {"error": {"code": "api_key_exists",
-                                                "message": "该 API key 已被占用"}})
-    else:
-        api_key = "sk-" + secrets.token_urlsafe(32)
+        raise HTTPException(400, {"error": {
+            "code": "api_key_generation_required",
+            "message": "Relay API keys are generated by the server at account creation or rotation",
+        }})
+    api_key = _generate_api_key()
     user_id = "u_" + secrets.token_hex(8)
     pw = req.password or secrets.token_urlsafe(12)
+    price_multiplier = req.price_multiplier
+    if price_multiplier is None:
+        price_multiplier = 1 + (req.markup_pct if req.markup_pct is not None else MARKUP_PCT)
+    enabled_models = _serialize_enabled_models(req.enabled_models)
     db.execute(
         """INSERT INTO users (id, api_key, email, balance_usd, is_active,
                               is_admin, password_hash,
-                              byteplus_api_key, byteplus_account_label, markup_pct, note,
-                              created_at)
-           VALUES (?,?,?,?,1,?,?,?,?,?,?,?)""",
+                              byteplus_api_key, byteplus_account_label, markup_pct,
+                              price_multiplier, enabled_models, note,
+                              api_key_last_rotated_at, password_changed_at, created_at)
+           VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?)""",
         (user_id, api_key, email, req.balance_usd, int(req.is_admin),
          hash_password(pw), req.byteplus_api_key,
-         req.byteplus_account_label, req.markup_pct, req.note, int(time.time())),
+         req.byteplus_account_label, req.markup_pct, price_multiplier,
+         enabled_models, req.note, int(time.time()), int(time.time()), int(time.time())),
     )
     return {"id": user_id, "api_key": api_key, "email": email,
             "balance_usd": req.balance_usd,
             "markup_pct": _effective_markup_pct({"markup_pct": req.markup_pct}),
-            "pricing_scope": "customer" if req.markup_pct is not None else "global",
+            "price_multiplier": price_multiplier,
+            "enabled_models_default": enabled_models is None,
+            "enabled_models": _enabled_models_for_user({"enabled_models": enabled_models}),
+            "pricing_scope": "customer" if req.price_multiplier is not None or req.markup_pct is not None else "global",
             "temporary_password": pw if not req.password else None,
             "is_admin": req.is_admin}
 
@@ -2102,33 +3001,107 @@ async def admin_update_user(user_id: str, req: UpdateUserReq):
         fields.append("balance_usd=?"); args.append(req.balance_usd)
     if "markup_pct" in req.model_fields_set:
         fields.append("markup_pct=?"); args.append(req.markup_pct)
+        if "price_multiplier" not in req.model_fields_set and req.markup_pct is not None:
+            fields.append("price_multiplier=?"); args.append(1 + req.markup_pct)
+    if "price_multiplier" in req.model_fields_set:
+        fields.append("price_multiplier=?"); args.append(req.price_multiplier)
+    if "enabled_models" in req.model_fields_set:
+        fields.append("enabled_models=?"); args.append(_serialize_enabled_models(req.enabled_models))
     if req.api_key is not None:
-        new_key = req.api_key.strip()
-        if len(new_key) < 8:
-            raise HTTPException(400, {"error": {"code": "api_key_too_short",
-                                                "message": "API key 至少 8 位"}})
-        # 不允许跟其他用户的 key 重复
-        dup = db.execute("SELECT id FROM users WHERE api_key=? AND id<>?",
-                         (new_key, user_id)).fetchone()
-        if dup:
-            raise HTTPException(409, {"error": {"code": "api_key_exists",
-                                                "message": "该 API key 已被占用"}})
-        fields.append("api_key=?"); args.append(new_key)
+        raise HTTPException(400, {"error": {
+            "code": "api_key_rotation_required",
+            "message": "Use POST /admin/users/{user_id}/api-key/rotate to generate a new Relay API key",
+        }})
     if req.byteplus_api_key is not None:
         fields.append("byteplus_api_key=?"); args.append(req.byteplus_api_key)
     if req.byteplus_account_label is not None:
         fields.append("byteplus_account_label=?"); args.append(req.byteplus_account_label)
     if req.is_active is not None:
         fields.append("is_active=?"); args.append(int(req.is_active))
+        if not req.is_active:
+            db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
     if req.note is not None:
         fields.append("note=?"); args.append(req.note)
     if req.new_password:
         fields.append("password_hash=?"); args.append(hash_password(req.new_password))
+        fields.append("password_changed_at=?"); args.append(int(time.time()))
+        db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
     if not fields:
         raise HTTPException(400, "nothing to update")
     args.append(user_id)
     db.execute(f"UPDATE users SET {','.join(fields)} WHERE id=?", args)
+    if "price_multiplier" in req.model_fields_set or "markup_pct" in req.model_fields_set:
+        _audit_event(
+            "admin_changed_price_multiplier",
+            actor_user_id=None,
+            actor_type="admin",
+            target_type="user",
+            target_id=user_id,
+        )
+    if "enabled_models" in req.model_fields_set:
+        _audit_event(
+            "admin_changed_enabled_models",
+            actor_user_id=None,
+            actor_type="admin",
+            target_type="user",
+            target_id=user_id,
+        )
+    if "byteplus_api_key" in req.model_fields_set:
+        _audit_event(
+            "admin_changed_upstream_key",
+            actor_user_id=None,
+            actor_type="admin",
+            target_type="user",
+            target_id=user_id,
+            metadata={"field": "byteplus_api_key", "secret_changed": True},
+        )
+    if req.new_password:
+        _audit_event(
+            "admin_reset_password",
+            actor_user_id=None,
+            actor_type="admin",
+            target_type="user",
+            target_id=user_id,
+        )
+    if "is_active" in req.model_fields_set:
+        _audit_event(
+            "admin_changed_status",
+            actor_user_id=None,
+            actor_type="admin",
+            target_type="user",
+            target_id=user_id,
+            metadata={"is_active": bool(req.is_active)},
+        )
     return {"ok": True}
+
+
+@app.post("/admin/users/{user_id}/api-key/rotate", dependencies=[Depends(auth_admin)])
+async def admin_rotate_user_api_key(user_id: str):
+    db = get_db()
+    u = db.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+    if not u:
+        raise HTTPException(404, "user not found")
+    new_key = _generate_api_key()
+    now = int(time.time())
+    db.execute(
+        "UPDATE users SET api_key=?, api_key_last_rotated_at=? WHERE id=?",
+        (new_key, now, user_id),
+    )
+    db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+    _audit_event(
+        "admin_rotated_customer_api_key",
+        actor_user_id=None,
+        actor_type="admin",
+        target_type="user",
+        target_id=user_id,
+    )
+    return {
+        "api_key": new_key,
+        "api_key_masked": _masked_secret(new_key, prefix=6, suffix=6),
+        "rotated_at": now,
+        "shown_once": True,
+        "previous_key_status": "disabled",
+    }
 
 
 @app.post("/admin/users/{user_id}/topup", dependencies=[Depends(auth_admin)])
@@ -2140,6 +3113,14 @@ async def admin_topup(user_id: str, req: TopupReq):
                       (user_id,)).fetchone()
     if not user:
         raise HTTPException(404, "user not found")
+    _audit_event(
+        "admin_changed_balance",
+        actor_user_id=None,
+        actor_type="admin",
+        target_type="user",
+        target_id=user_id,
+        metadata={"amount_usd": req.amount_usd, "note": req.note or ""},
+    )
     return dict(user)
 
 
@@ -2148,7 +3129,71 @@ async def admin_disable_user(user_id: str):
     """禁用而非删除 (保留任务历史)。"""
     db = get_db()
     db.execute("UPDATE users SET is_active=0 WHERE id=?", (user_id,))
+    db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+    _audit_event(
+        "admin_changed_status",
+        actor_user_id=None,
+        actor_type="admin",
+        target_type="user",
+        target_id=user_id,
+        metadata={"is_active": False},
+    )
     return {"ok": True, "id": user_id, "is_active": False}
+
+
+def _format_audit_event(row: sqlite3.Row | dict) -> dict:
+    metadata = {}
+    raw = row["metadata_json"] if row["metadata_json"] else ""
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                metadata = parsed
+        except (TypeError, ValueError):
+            metadata = {}
+    return {
+        "id": row["id"],
+        "actor_user_id": row["actor_user_id"],
+        "actor_type": row["actor_type"],
+        "action": row["action"],
+        "target_type": row["target_type"],
+        "target_id": row["target_id"],
+        "metadata": metadata,
+        "created_at": row["created_at"],
+    }
+
+
+@app.get("/admin/audit-events", dependencies=[Depends(auth_admin)])
+async def admin_audit_events(limit: int = 50, offset: int = 0,
+                             action: Optional[str] = None,
+                             target_id: Optional[str] = None):
+    limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
+    where = []
+    args: list[Any] = []
+    if action:
+        where.append("action=?"); args.append(action)
+    if target_id:
+        where.append("target_id=?"); args.append(target_id)
+    where_sql = " WHERE " + " AND ".join(where) if where else ""
+    db = get_db()
+    rows = db.execute(
+        f"""SELECT * FROM audit_events
+            {where_sql}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ? OFFSET ?""",
+        [*args, limit, offset],
+    ).fetchall()
+    total = db.execute(
+        f"SELECT COUNT(*) c FROM audit_events{where_sql}",
+        args,
+    ).fetchone()["c"]
+    return {
+        "data": [_format_audit_event(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @app.get("/admin/stats", dependencies=[Depends(auth_admin)])

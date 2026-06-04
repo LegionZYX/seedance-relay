@@ -1,18 +1,45 @@
-# 把这一段追加到 /etc/caddy/Caddyfile 末尾
-# 然后: caddy reload --config /etc/caddy/Caddyfile
+﻿# Append this site block to /etc/caddy/Caddyfile.
+# Then run: caddy validate --config /etc/caddy/Caddyfile
+# Reload only after validation passes.
 
-video.example.com {
+video.customer-domain.com {
     tls {
         protocols tls1.2 tls1.3
     }
 
-    reverse_proxy 127.0.0.1:8002 {
+    @runtime_models path /v1/models
+    reverse_proxy @runtime_models 127.0.0.1:8012 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-For {remote_host}
         header_up X-Forwarded-Proto {scheme}
+    }
 
-        # 视频流式代理: 不要缓冲, 立即吐字节
+    @runtime_video_estimate path /v1/videos/estimate
+    reverse_proxy @runtime_video_estimate 127.0.0.1:8012 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    @runtime_video_create {
+        method GET POST
+        path /v1/videos
+    }
+    reverse_proxy @runtime_video_create 127.0.0.1:8012 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    @runtime_video_content path_regexp runtime_video_content ^/v1/videos/[^/]+/content$
+    reverse_proxy @runtime_video_content 127.0.0.1:8012 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
         flush_interval -1
 
         transport http {
@@ -24,19 +51,48 @@ video.example.com {
         }
     }
 
-    # 客户上传 base64 图/视频可能很大
+    @runtime_video_detail {
+        method GET
+        path_regexp runtime_video_detail ^/v1/videos/[^/]+$
+    }
+    reverse_proxy @runtime_video_detail 127.0.0.1:8012 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    reverse_proxy 127.0.0.1:8002 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Stream proxy responses without buffering.
+        flush_interval -1
+
+        transport http {
+            keepalive 120s
+            keepalive_idle_conns 64
+            compression off
+            dial_timeout 10s
+            response_header_timeout 600s
+        }
+    }
+
+    # Customer base64 image/video uploads can be large.
     request_body {
         max_size 100MB
     }
 
-    # 隐藏服务器信息，避免暴露中间件
+    # Hide server implementation details.
     header {
         -Server
         -X-Powered-By
     }
 
     log {
-        output file /var/log/caddy/video-example.log {
+        output file /var/log/caddy/seedance-relay.log {
             roll_size 50mb
             roll_keep 10
             roll_keep_for 720h
