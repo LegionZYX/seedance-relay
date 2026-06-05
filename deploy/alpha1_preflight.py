@@ -18,7 +18,6 @@ from urllib.parse import urlparse
 
 
 REQUIRED_ENV = (
-    "UPSTREAM_API_KEY",
     "ADMIN_KEY",
     "RUNTIME_INTERNAL_TOKEN",
     "UPSTREAM_BASE_URL",
@@ -26,6 +25,11 @@ REQUIRED_ENV = (
     "DB_PATH",
     "CONTROL_PLANE_BASE_URL",
     "VIDEO_PERSIST_MODE",
+)
+IAM_REQUIRED_ENV = (
+    "UPSTREAM_ENDPOINT_ID",
+    "BYTEPLUS_ACCESS_KEY_ID",
+    "BYTEPLUS_ACCESS_KEY_SECRET",
 )
 
 PLACEHOLDER_FRAGMENTS = (
@@ -123,6 +127,26 @@ def check_env(path: Path, report: Report) -> dict[str, str]:
             report.fail(f"{key} still looks like a placeholder")
     if values.get("VIDEO_PERSIST_MODE") != "proxy_only":
         report.fail("VIDEO_PERSIST_MODE must be proxy_only for alpha1")
+    upstream_auth_mode = (values.get("UPSTREAM_AUTH_MODE") or "api_key").strip().lower()
+    if upstream_auth_mode in {"iam", "aksk", "access_key"}:
+        for key in IAM_REQUIRED_ENV:
+            value = values.get(key, "")
+            if not value:
+                report.fail(f"{key} is required when UPSTREAM_AUTH_MODE=iam")
+            elif looks_placeholder(value):
+                report.fail(f"{key} still looks like a placeholder")
+        if not values.get("MODELARK_ASSET_GROUP_ID") and values.get("MODELARK_ASSET_AUTO_CREATE_GROUP", "true").lower() not in {"1", "true", "yes", "on"}:
+            report.fail("MODELARK_ASSET_GROUP_ID is required when automatic asset group creation is disabled")
+        if not values.get("MODELARK_ASSET_GROUP_ID"):
+            report.warn("MODELARK_ASSET_GROUP_ID is empty; Relay will auto-create/cache a group on first asset registration")
+    elif upstream_auth_mode in {"api_key", "bearer", ""}:
+        value = values.get("UPSTREAM_API_KEY", "")
+        if not value:
+            report.fail("UPSTREAM_API_KEY is missing or empty")
+        elif looks_placeholder(value):
+            report.fail("UPSTREAM_API_KEY still looks like a placeholder")
+    else:
+        report.fail("UPSTREAM_AUTH_MODE must be api_key or iam")
     public_domain_problem = public_domain_error(values.get("PUBLIC_DOMAIN", ""))
     if public_domain_problem:
         report.fail(public_domain_problem)

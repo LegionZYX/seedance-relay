@@ -56,6 +56,44 @@ class Alpha1PreflightTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout)
             self.assertIn("Preflight passed", proc.stdout)
 
+    def test_preflight_passes_with_iam_upstream_without_api_key(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.make_env(
+                root,
+                UPSTREAM_AUTH_MODE="iam",
+                UPSTREAM_API_KEY="",
+                UPSTREAM_ENDPOINT_ID="ep-live-endpoint",
+                BYTEPLUS_ACCESS_KEY_ID="AKliveendpointkey",
+                BYTEPLUS_ACCESS_KEY_SECRET="live-endpoint-secret",
+                MODELARK_ASSET_GROUP_ID="group-live-assets",
+            )
+            self.copy_deploy_files(root)
+
+            proc = self.run_preflight(root)
+
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+            self.assertIn("Preflight passed", proc.stdout)
+
+    def test_preflight_fails_when_iam_endpoint_is_missing(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            self.make_env(
+                root,
+                UPSTREAM_AUTH_MODE="iam",
+                UPSTREAM_API_KEY="",
+                UPSTREAM_ENDPOINT_ID="",
+                BYTEPLUS_ACCESS_KEY_ID="AKliveendpointkey",
+                BYTEPLUS_ACCESS_KEY_SECRET="live-endpoint-secret",
+                MODELARK_ASSET_GROUP_ID="group-live-assets",
+            )
+            self.copy_deploy_files(root)
+
+            proc = self.run_preflight(root)
+
+            self.assertNotEqual(proc.returncode, 0, proc.stdout)
+            self.assertIn("UPSTREAM_ENDPOINT_ID is required when UPSTREAM_AUTH_MODE=iam", proc.stdout)
+
     def test_preflight_fails_on_placeholder_secret_and_wrong_video_mode(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
