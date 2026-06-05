@@ -7,6 +7,18 @@ import unittest
 from pathlib import Path
 
 
+def png_with_dimensions(width: int = 1280, height: int = 720) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+        + b"\x08\x02\x00\x00\x00"
+        + b"\x00\x00\x00\x00"
+    )
+
+
 class Alpha1CompletionAuditTests(unittest.TestCase):
     def write_good_local_acceptance(self, root: Path) -> Path:
         root.mkdir(parents=True, exist_ok=True)
@@ -233,7 +245,7 @@ class Alpha1CompletionAuditTests(unittest.TestCase):
             encoding="utf-8",
         )
         probe_output.write_text("Probe passed\n", encoding="utf-8")
-        screenshot.write_bytes(b"png")
+        screenshot.write_bytes(png_with_dimensions())
         preflight.write_text(
             "[OK] caddy validate passed: /etc/caddy/Caddyfile\nPreflight passed: 0 warning(s)\n",
             encoding="utf-8",

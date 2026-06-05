@@ -14,7 +14,8 @@ The Relay must not become an extra content-moderation layer. Content success or 
 
 - Admin can set each customer's direct consumption multiplier, for example `1.0`, `1.2`, `1.3`.
 - Admin can set each customer's available model list.
-- Model IDs default to the native BytePlus API `model id`; admin may optionally configure aliases for lower customer explanation cost, but aliasing is opt-in and never changes the default. 绠＄悊鍛樹富鍔ㄩ厤缃苟涓哄鎴峰惎鐢ㄥ埆鍚嶆椂锛屾墠鏀瑰彉瀹㈡埛鍙鐨勬ā鍨嬪悕绉帮紱鏈厤缃垨鏈粰璇ュ鎴峰惎鐢ㄥ埆鍚嶆椂锛屽鎴风湅鍒板拰鎻愪氦鐨勪粛鐒舵槸瀛楄妭鍘熺敓 `model id`銆?- Customer estimate, balance hold, and settlement use that customer's multiplier.
+- Model IDs default to the native BytePlus API `model id`; admin may optionally configure aliases for lower customer explanation cost, but aliasing is opt-in and never changes the default. 管理员主动配置别名时才改变客户可见模型名称；管理员主动配置并为客户启用别名时，才改变客户可见的模型名称；未配置或未给该客户启用别名时，客户看到和提交的仍然是字节原生 `model id`.
+- Customer estimate, balance hold, and settlement use that customer's multiplier.
 - Customer generation results are served through Relay-owned URLs.
 - Generated videos are not permanently stored on the Relay server by default.
 - BytePlus temporary video URLs are never exposed to customers.
@@ -130,7 +131,7 @@ tasks.price_multiplier = 1.0 + tasks.markup_pct when tasks.markup_pct is not nul
 Use:
 
 ```text
-娑堣垂绯绘暟 / Price Multiplier
+消费系数 / Price Multiplier
 ```
 
 Do not present this new setting as `markup_pct`.

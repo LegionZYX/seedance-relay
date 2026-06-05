@@ -66,7 +66,7 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"data": models.Filter(nil)})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": models.Filter(enabledModelIDs(user))})
+	writeJSON(w, http.StatusOK, map[string]any{"data": models.Filter(modelAccess(user))})
 }
 
 func (s *Server) videoContent(w http.ResponseWriter, r *http.Request) {
@@ -205,7 +205,7 @@ func (s *Server) estimateVideo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorBody("invalid_model", "Unknown model"))
 		return
 	}
-	if !models.Enabled(req.Model, enabledModelIDs(user)) {
+	if !models.Enabled(req.Model, modelAccess(user)) {
 		writeJSON(w, http.StatusForbidden, errorBodyWithFields(
 			"model_not_enabled",
 			"This model is not enabled for this customer",
@@ -307,7 +307,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorBody("invalid_model", "Unknown model"))
 		return
 	}
-	if !models.Enabled(req.Model, enabledModelIDs(user)) {
+	if !models.Enabled(req.Model, modelAccess(user)) {
 		writeJSON(w, http.StatusForbidden, errorBodyWithFields(
 			"model_not_enabled",
 			"This model is not enabled for this customer",
@@ -1100,7 +1100,7 @@ func taskPriceMultiplier(task *store.Task) float64 {
 	return 1.0
 }
 
-func enabledModelIDs(user *store.User) []string {
+func modelAccess(user *store.User) []string {
 	if user == nil || !user.EnabledModelsSet {
 		return nil
 	}

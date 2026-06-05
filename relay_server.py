@@ -72,6 +72,16 @@ load_dotenv(Path(__file__).parent / ".env")
 UPSTREAM_API_KEY  = os.getenv("UPSTREAM_API_KEY", os.getenv("ARK_API_KEY", "")).strip()
 UPSTREAM_BASE_URL = os.getenv("UPSTREAM_BASE_URL",
                               "https://ark.ap-southeast.bytepluses.com/api/v3").rstrip("/")
+UPSTREAM_AUTH_MODE = os.getenv("UPSTREAM_AUTH_MODE", "api_key").strip().lower() or "api_key"
+UPSTREAM_ENDPOINT_ID = os.getenv("UPSTREAM_ENDPOINT_ID", "").strip()
+BYTEPLUS_ACCESSKEY = os.getenv(
+    "BYTEPLUS_ACCESSKEY",
+    os.getenv("BYTEPLUS_ACCESS_KEY", os.getenv("BYTEPLUS_ACCESS_KEY_ID", "")),
+).strip()
+BYTEPLUS_SECRETKEY = os.getenv(
+    "BYTEPLUS_SECRETKEY",
+    os.getenv("BYTEPLUS_SECRET_KEY", os.getenv("BYTEPLUS_ACCESS_KEY_SECRET", "")),
+).strip()
 PUBLIC_DOMAIN  = os.getenv("PUBLIC_DOMAIN", "video.example.com")
 DB_PATH        = os.getenv("DB_PATH", "/data/relay.sqlite")
 VIDEO_DIR      = Path(os.getenv("VIDEO_DIR", "/data/videos"))
@@ -603,14 +613,10 @@ def _refund_reserved_balance(user_id: str, amount: float) -> None:
 
 
 async def _cancel_upstream_task(upstream_task_id: Optional[str], bp_key: Optional[str]) -> None:
-    if not upstream_task_id or not bp_key:
+    if not upstream_task_id:
         return
     try:
-        await http.delete(
-            f"{UPSTREAM_BASE_URL}/contents/generations/tasks/{quote(upstream_task_id, safe='')}",
-            headers=upstream_headers(bp_key),
-            timeout=30,
-        )
+        await _delete_upstream_task(upstream_task_id, bp_key)
     except Exception:
         pass
 
@@ -983,6 +989,134 @@ def upstream_headers(api_key: Optional[str] = None) -> dict:
     """没传 api_key 就回退到全局 (主要给 admin / system 调用)。"""
     return {"Content-Type": "application/json",
             "Authorization": f"Bearer {api_key or UPSTREAM_API_KEY}"}
+
+
+def _upstream_iam_enabled(bp_key: Optional[str] = None) -> bool:
+    return UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key"} and not bp_key
+
+
+def _upstream_iam_ready() -> bool:
+    return bool(BYTEPLUS_ACCESSKEY and BYTEPLUS_SECRETKEY and UPSTREAM_ENDPOINT_ID)
+
+
+def _upstream_model_for_request(real_model: str, bp_key: Optional[str] = None) -> str:
+    if _upstream_iam_enabled(bp_key):
+        if not _upstream_iam_ready():
+            raise HTTPException(503, {"error": {
+                "code": "iam_upstream_not_configured",
+                "message": "IAM upstream mode requires BYTEPLUS_ACCESSKEY, BYTEPLUS_SECRETKEY, and UPSTREAM_ENDPOINT_ID",
+            }})
+        return UPSTREAM_ENDPOINT_ID
+    return real_model
+
+
+def _sdk_payload_to_dict(payload: Any) -> dict:
+    if payload is None:
+        return {}
+    if isinstance(payload, dict):
+        return payload
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump(exclude_none=True)
+    if hasattr(payload, "dict"):
+        return payload.dict()
+    if hasattr(payload, "to_dict"):
+        return payload.to_dict()
+    data = {}
+    for key in ("id", "status", "content", "usage", "error"):
+        if hasattr(payload, key):
+            data[key] = getattr(payload, key)
+    return data
+
+
+class _UpstreamSDKResponse:
+    def __init__(self, payload: Any, status_code: int = 200):
+        self.status_code = status_code
+        self.headers: dict[str, str] = {}
+        self.text = json.dumps(_sdk_payload_to_dict(payload), ensure_ascii=False)
+        self._payload = payload
+
+    def json(self) -> dict:
+        return _sdk_payload_to_dict(self._payload)
+
+
+_ark_iam_client: Any = None
+
+
+def _get_ark_iam_client() -> Any:
+    global _ark_iam_client
+    if _ark_iam_client is None:
+        try:
+            from byteplussdkarkruntime import Ark
+        except Exception as exc:
+            raise RuntimeError(
+                "byteplus-python-sdk-v2 is required for UPSTREAM_AUTH_MODE=iam"
+            ) from exc
+        _ark_iam_client = Ark(
+            ak=BYTEPLUS_ACCESSKEY,
+            sk=BYTEPLUS_SECRETKEY,
+            base_url=UPSTREAM_BASE_URL,
+        )
+    return _ark_iam_client
+
+
+def _content_generation_tasks(client: Any) -> Any:
+    return client.content_generation.tasks
+
+
+async def _create_upstream_task(payload: dict, bp_key: Optional[str]) -> _UpstreamSDKResponse | httpx.Response:
+    if not _upstream_iam_enabled(bp_key):
+        return await http.post(
+            f"{UPSTREAM_BASE_URL}/contents/generations/tasks",
+            json=payload,
+            headers=upstream_headers(bp_key),
+            timeout=60,
+        )
+
+    def call_sdk() -> Any:
+        tasks = _content_generation_tasks(_get_ark_iam_client())
+        if hasattr(tasks, "create"):
+            return tasks.create(**payload)
+        if hasattr(tasks, "create_task"):
+            return tasks.create_task(**payload)
+        raise RuntimeError("BytePlus Ark SDK does not expose content_generation.tasks.create")
+
+    return _UpstreamSDKResponse(await asyncio.to_thread(call_sdk))
+
+
+async def _get_upstream_task(upstream_task_id: str, bp_key: Optional[str]) -> _UpstreamSDKResponse | httpx.Response:
+    if not _upstream_iam_enabled(bp_key):
+        return await http.get(
+            f"{UPSTREAM_BASE_URL}/contents/generations/tasks/{upstream_task_id}",
+            headers=upstream_headers(bp_key),
+            timeout=30,
+        )
+
+    def call_sdk() -> Any:
+        tasks = _content_generation_tasks(_get_ark_iam_client())
+        for method in ("retrieve", "get", "get_task"):
+            if hasattr(tasks, method):
+                return getattr(tasks, method)(upstream_task_id)
+        raise RuntimeError("BytePlus Ark SDK does not expose a task retrieval method")
+
+    return _UpstreamSDKResponse(await asyncio.to_thread(call_sdk))
+
+
+async def _delete_upstream_task(upstream_task_id: str, bp_key: Optional[str]) -> _UpstreamSDKResponse | httpx.Response:
+    if not _upstream_iam_enabled(bp_key):
+        return await http.delete(
+            f"{UPSTREAM_BASE_URL}/contents/generations/tasks/{quote(upstream_task_id, safe='')}",
+            headers=upstream_headers(bp_key),
+            timeout=30,
+        )
+
+    def call_sdk() -> Any:
+        tasks = _content_generation_tasks(_get_ark_iam_client())
+        for method in ("delete", "cancel", "cancel_task"):
+            if hasattr(tasks, method):
+                return getattr(tasks, method)(upstream_task_id)
+        raise RuntimeError("BytePlus Ark SDK does not expose a task delete/cancel method")
+
+    return _UpstreamSDKResponse(await asyncio.to_thread(call_sdk), status_code=200)
 
 
 # ─── App ─────────────────────────────────────────────────────────
@@ -1423,9 +1557,10 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
     user_row = db.execute("SELECT byteplus_api_key, markup_pct, price_multiplier FROM users WHERE id=?",
                           (user_id,)).fetchone()
     bp_key = user_row["byteplus_api_key"] if user_row else None
+    if _upstream_iam_enabled():
+        bp_key = None
 
-    r = await http.get(f"{UPSTREAM_BASE_URL}/contents/generations/tasks/{t['upstream_task_id']}",
-                       headers=upstream_headers(bp_key), timeout=30)
+    r = await _get_upstream_task(t["upstream_task_id"], bp_key)
     if r.status_code != 200:
         return t
     info = r.json()
@@ -2395,13 +2530,29 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
         }})
 
     bp_key = (user.get("byteplus_api_key") or "").strip() or UPSTREAM_API_KEY
+    if _upstream_iam_enabled():
+        bp_key = None
     if not bp_key:
+        if _upstream_iam_enabled():
+            if not _upstream_iam_ready():
+                raise HTTPException(503, {"error": {
+                    "code": "iam_upstream_not_configured",
+                    "message": "IAM upstream mode requires BYTEPLUS_ACCESSKEY, BYTEPLUS_SECRETKEY, and UPSTREAM_ENDPOINT_ID",
+                }})
+        else:
+            raise HTTPException(503, {"error": {
+                "code": "no_upstream_key",
+                "message": "Service not configured: contact administrator"}})
+
+    upstream_model = _upstream_model_for_request(real_model, bp_key)
+
+    if not bp_key and not _upstream_iam_enabled():
         raise HTTPException(503, {"error": {
             "code": "no_upstream_key",
             "message": "Service not configured: contact administrator"}})
 
     payload: dict = {
-        "model": real_model,
+        "model": upstream_model,
         "content": [b.model_dump(exclude_none=True) for b in content],
         "resolution": req.resolution,
         "ratio": _request_ratio(req),
@@ -2421,8 +2572,7 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
         }})
 
     try:
-        r = await http.post(f"{UPSTREAM_BASE_URL}/contents/generations/tasks",
-                            json=payload, headers=upstream_headers(bp_key), timeout=60)
+        r = await _create_upstream_task(payload, bp_key)
     except Exception:
         _refund_reserved_balance(user["id"], your_max_cost)
         raise HTTPException(502, {"error": {
@@ -2614,9 +2764,10 @@ async def delete_video(vid: str, user=Depends(auth_user)):
     bp_key = db.execute("SELECT byteplus_api_key FROM users WHERE id=?",
                         (user["id"],)).fetchone()
     bp_key = (bp_key["byteplus_api_key"] if bp_key else None) or UPSTREAM_API_KEY
+    if _upstream_iam_enabled():
+        bp_key = None
 
-    r = await http.delete(f"{UPSTREAM_BASE_URL}/contents/generations/tasks/{t['upstream_task_id']}",
-                          headers=upstream_headers(bp_key), timeout=30)
+    r = await _delete_upstream_task(t["upstream_task_id"], bp_key)
     if r.status_code not in (200, 204):
         error = {
             "code": "cannot_delete",

@@ -190,6 +190,55 @@ class Alpha1EvidenceVerifierTests(unittest.TestCase):
         )
         return path
 
+    def write_collector_manifest(
+        self,
+        root: Path,
+        *,
+        probe: Path,
+        probe_output: Path,
+        screenshot: Path,
+        preflight: Path,
+        caddy: Path,
+        local_acceptance: Path,
+        local_gate_manifest: Path,
+        verify: Path,
+        completion_output: Path,
+        completion_summary: Path,
+    ) -> Path:
+        manifest = root / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "release_acceptable": True,
+                    "base_url": "https://seedance-relay.customer-domain.com",
+                    "video_id": "vid",
+                    "browser_required": True,
+                    "commands": [
+                        {"label": "deploy_preflight", "command": ["python", "deploy/alpha1_preflight.py"], "output": str(preflight), "returncode": 0},
+                        {"label": "caddy_validate", "command": ["caddy", "validate"], "output": str(caddy), "returncode": 0},
+                        {"label": "external_probe", "command": ["python", "deploy/alpha1_probe.py"], "output": str(probe_output), "returncode": 0},
+                        {"label": "evidence_verify", "command": ["python", "deploy/alpha1_verify_evidence.py"], "output": str(verify), "returncode": 0},
+                        {"label": "completion_audit", "command": ["python", "deploy/alpha1_completion_audit.py", "--manifest", str(manifest), "--summary-json", str(completion_summary)], "output": str(completion_output), "returncode": 0},
+                    ],
+                    "artifacts": {
+                        "probe": str(probe),
+                        "probe_output": str(probe_output),
+                        "screenshot": str(screenshot),
+                        "preflight": str(preflight),
+                        "caddy": str(caddy),
+                        "local_acceptance": str(local_acceptance),
+                        "local_gate_manifest": str(local_gate_manifest),
+                        "verify": str(verify),
+                        "completion_output": str(completion_output),
+                        "completion_summary": str(completion_summary),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return manifest
+
     def write_good_local_gate_manifest(self, root: Path, local_acceptance: Path | None = None):
         if local_acceptance is None:
             local_acceptance = self.write_good_local_acceptance(root)
@@ -1677,34 +1726,22 @@ class Alpha1EvidenceVerifierTests(unittest.TestCase):
             probe_output.write_text("Probe failed: 1 failure(s), 0 warning(s)\n", encoding="utf-8")
             verify = root / "alpha1-verify-output.txt"
             verify.write_text("Evidence verification passed: 0 warning(s)\n", encoding="utf-8")
-            manifest = root / "manifest.json"
-            manifest.write_text(
-                json.dumps(
-                    {
-                        "status": "passed",
-                        "release_acceptable": True,
-                        "base_url": "https://seedance-relay.customer-domain.com",
-                        "video_id": "vid",
-                        "browser_required": True,
-                        "commands": [
-                            {"command": ["python", "deploy/alpha1_preflight.py"], "output": str(preflight), "returncode": 0},
-                            {"command": ["caddy", "validate"], "output": str(caddy), "returncode": 0},
-                            {"command": ["python", "deploy/alpha1_probe.py"], "output": str(probe_output), "returncode": 0},
-                            {"command": ["python", "deploy/alpha1_verify_evidence.py"], "output": str(verify), "returncode": 0},
-                        ],
-                        "artifacts": {
-                            "probe": str(probe),
-                            "probe_output": str(probe_output),
-                            "screenshot": str(screenshot),
-                            "preflight": str(preflight),
-                            "caddy": str(caddy),
-                            "local_acceptance": str(local_acceptance),
-                            "local_gate_manifest": str(local_gate_manifest),
-                            "verify": str(verify),
-                        },
-                    }
-                ),
-                encoding="utf-8",
+            completion_output = root / "alpha1-completion-output.txt"
+            completion_output.write_text("Alpha1 completion audit passed\n", encoding="utf-8")
+            completion_summary = root / "alpha1-completion-summary.json"
+            self.write_good_completion_summary(completion_summary)
+            manifest = self.write_collector_manifest(
+                root,
+                probe=probe,
+                probe_output=probe_output,
+                screenshot=screenshot,
+                preflight=preflight,
+                caddy=caddy,
+                local_acceptance=local_acceptance,
+                local_gate_manifest=local_gate_manifest,
+                verify=verify,
+                completion_output=completion_output,
+                completion_summary=completion_summary,
             )
 
             proc = subprocess.run(
@@ -1909,34 +1946,22 @@ class Alpha1EvidenceVerifierTests(unittest.TestCase):
             probe_output.write_text("Probe passed: 0 warning(s)\n", encoding="utf-8")
             verify = root / "alpha1-verify-output.txt"
             verify.write_text("Evidence verification failed: 1 failure(s), 0 warning(s)\n", encoding="utf-8")
-            manifest = root / "manifest.json"
-            manifest.write_text(
-                json.dumps(
-                    {
-                        "status": "passed",
-                        "release_acceptable": True,
-                        "base_url": "https://seedance-relay.customer-domain.com",
-                        "video_id": "vid",
-                        "browser_required": True,
-                        "commands": [
-                            {"command": ["python", "deploy/alpha1_preflight.py"], "output": str(preflight), "returncode": 0},
-                            {"command": ["caddy", "validate"], "output": str(caddy), "returncode": 0},
-                            {"command": ["python", "deploy/alpha1_probe.py"], "output": str(probe_output), "returncode": 0},
-                            {"command": ["python", "deploy/alpha1_verify_evidence.py"], "output": str(verify), "returncode": 0},
-                        ],
-                        "artifacts": {
-                            "probe": str(probe),
-                            "probe_output": str(probe_output),
-                            "screenshot": str(screenshot),
-                            "preflight": str(preflight),
-                            "caddy": str(caddy),
-                            "local_acceptance": str(local_acceptance),
-                            "local_gate_manifest": str(local_gate_manifest),
-                            "verify": str(verify),
-                        },
-                    }
-                ),
-                encoding="utf-8",
+            completion_output = root / "alpha1-completion-output.txt"
+            completion_output.write_text("Alpha1 completion audit passed\n", encoding="utf-8")
+            completion_summary = root / "alpha1-completion-summary.json"
+            self.write_good_completion_summary(completion_summary)
+            manifest = self.write_collector_manifest(
+                root,
+                probe=probe,
+                probe_output=probe_output,
+                screenshot=screenshot,
+                preflight=preflight,
+                caddy=caddy,
+                local_acceptance=local_acceptance,
+                local_gate_manifest=local_gate_manifest,
+                verify=verify,
+                completion_output=completion_output,
+                completion_summary=completion_summary,
             )
 
             proc = subprocess.run(

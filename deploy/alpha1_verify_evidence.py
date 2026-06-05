@@ -368,6 +368,7 @@ def verify_screenshot(path: Path, report: EvidenceReport) -> None:
     if not raw:
         report.fail(f"screenshot is empty: {path}")
         return
+    report.ok("screenshot exists and is non-empty")
     if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
         report.fail(f"screenshot is not a PNG file: {path}")
         return

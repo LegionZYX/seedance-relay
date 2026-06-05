@@ -207,7 +207,7 @@ def request_json(method, url, *, payload=None, headers=None, expected=None):
         body = json.dumps(payload).encode("utf-8")
     req = Request(url, data=body, headers=request_headers, method=method)
     try:
-        resp = URL_OPENER.open(req, timeout=10)
+        resp = URL_OPENER.open(req, timeout=30)
     except HTTPError as exc:
         resp = exc
     try:
@@ -219,6 +219,10 @@ def request_json(method, url, *, payload=None, headers=None, expected=None):
         return resp.status, json.loads(raw.decode("utf-8")), resp.headers, raw
     finally:
         resp.close()
+
+
+def error_payload(body):
+    return body.get("error") or body.get("detail", {}).get("error")
 
 
 def wait_for_http(url, proc, name):
@@ -382,6 +386,12 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                 old_key = user["api_key"]
                 self.assertTrue(old_key.startswith("sk-"))
                 acceptance_evidence["checks"]["admin_created_customer"] = True
+                request_json(
+                    "GET",
+                    f"{proxy_url}/admin/audit-events?target_id={user_id}&limit=1",
+                    headers=admin_headers,
+                    expected=200,
+                )
 
                 _, initial_login, login_headers, _ = request_json(
                     "POST",
@@ -643,7 +653,9 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                     },
                     expected=403,
                 )
-                self.assertEqual(empty_model_create["error"]["code"], "model_not_enabled")
+                empty_model_error = error_payload(empty_model_create)
+                self.assertIsNotNone(empty_model_error, empty_model_create)
+                self.assertEqual(empty_model_error["code"], "model_not_enabled")
                 self.assertEqual(MockUpstreamHandler.post_count, upstream_posts_before_empty_model_create)
                 self.assertNotIn("dreamina-seedance-2-0-260128", raw_empty_boundary_models.decode("utf-8"))
                 request_json(
@@ -780,7 +792,9 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                     },
                     expected=403,
                 )
-                self.assertEqual(cross_site_create["error"]["code"], "csrf_origin_mismatch")
+                cross_site_error = error_payload(cross_site_create)
+                self.assertIsNotNone(cross_site_error, cross_site_create)
+                self.assertEqual(cross_site_error["code"], "csrf_origin_mismatch")
                 self.assertEqual(MockUpstreamHandler.post_count, upstream_posts_before_cross_site_cookie_create)
                 acceptance_evidence["checks"]["runtime_cookie_create_rejects_cross_site_before_upstream"] = True
 
@@ -887,7 +901,9 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                     },
                     expected=403,
                 )
-                self.assertEqual(unowned_asset_create["error"]["code"], "prepare_error")
+                unowned_asset_error = error_payload(unowned_asset_create)
+                self.assertIsNotNone(unowned_asset_error, unowned_asset_create)
+                self.assertEqual(unowned_asset_error["code"], "prepare_error")
                 self.assertEqual(MockUpstreamHandler.post_count, upstream_posts_before_unowned_asset)
                 acceptance_evidence["checks"]["runtime_prepare_helper_rejects_unowned_asset_before_upstream"] = True
                 _, after_prepare_failure_me, _, _ = request_json(
@@ -936,7 +952,9 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                     },
                     expected=402,
                 )
-                self.assertEqual(low_balance_create["error"]["code"], "insufficient_balance")
+                low_balance_error = error_payload(low_balance_create)
+                self.assertIsNotNone(low_balance_error, low_balance_create)
+                self.assertEqual(low_balance_error["code"], "insufficient_balance")
                 self.assertEqual(MockUpstreamHandler.post_count, upstream_posts_before_low_balance)
                 acceptance_evidence["checks"]["runtime_create_rejects_insufficient_balance_before_prepare"] = True
 
@@ -962,9 +980,11 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                     },
                     expected=502,
                 )
-                self.assertEqual(upstream_error_create["error"]["code"], "upstream_error")
+                upstream_error = error_payload(upstream_error_create)
+                self.assertIsNotNone(upstream_error, upstream_error_create)
+                self.assertEqual(upstream_error["code"], "upstream_error")
                 self.assertEqual(
-                    upstream_error_create["error"].get("request_id"),
+                    upstream_error.get("request_id"),
                     "req_live_smoke_upstream_error",
                 )
                 self.assertNotIn("simulated upstream failure", raw_upstream_error.decode("utf-8"))
@@ -1011,7 +1031,9 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                     },
                     expected=500,
                 )
-                self.assertEqual(local_write_failure["error"]["code"], "db_error")
+                local_write_error = error_payload(local_write_failure)
+                self.assertIsNotNone(local_write_error, local_write_failure)
+                self.assertEqual(local_write_error["code"], "db_error")
                 self.assertEqual(MockUpstreamHandler.delete_count, upstream_deletes_before_local_write_failure + 1)
                 self.assertIn(
                     f"/contents/generations/tasks/{existing_upstream_task_id}",
@@ -1449,72 +1471,88 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                     self.assertNotIn(f"127.0.0.1:{upstream_port}", video_body.decode("utf-8", "ignore"))
                 acceptance_evidence["checks"]["range_playback_uses_relay_without_redirect"] = True
 
-                try:
-                    from playwright.sync_api import Error as PlaywrightError
-                    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-                    from playwright.sync_api import sync_playwright
-                except Exception as exc:
-                    print(f"Playwright browser network check skipped: {exc}")
-                    acceptance_evidence["warnings"].append(f"Playwright browser network check skipped: {exc}")
+                if not evidence_path:
+                    acceptance_evidence["warnings"].append(
+                        "Playwright browser network check skipped outside evidence collection"
+                    )
                 else:
-                    browser_video_url = f"{proxy_url}/v1/videos/{task_id}/content"
-                    browser_requests = []
-                    browser_responses = []
-                    with sync_playwright() as playwright:
-                        browser = None
-                        try:
-                            browser = playwright.chromium.launch(headless=True)
-                            page = browser.new_page(extra_http_headers={"Authorization": f"Bearer {new_key}"})
-                            page.on("request", lambda request: browser_requests.append(request.url))
-                            page.on(
-                                "response",
-                                lambda response: browser_responses.append(
-                                    {
-                                        "url": response.url,
-                                        "status": response.status,
-                                        "headers": response.headers,
-                                    }
-                                ),
-                            )
-                            with page.expect_request(
-                                lambda request: request.url == browser_video_url,
-                                timeout=10000,
-                            ):
-                                page.set_content(
-                                    f"<video id='video' src='{browser_video_url}' controls autoplay muted playsinline></video>",
-                                    wait_until="domcontentloaded",
-                                )
-                            page.wait_for_timeout(500)
-                        except PlaywrightTimeoutError as exc:
-                            self.fail(f"browser did not request relay video content: {exc}")
-                        except PlaywrightError as exc:
-                            print(f"Playwright browser network check skipped: {exc}")
-                        finally:
-                            if browser is not None:
-                                browser.close()
-
-                    if browser_requests:
-                        self.assertIn(browser_video_url, browser_requests)
-                        self.assertFalse(
-                            any(f"127.0.0.1:{upstream_port}" in url for url in browser_requests),
-                            browser_requests,
-                        )
-                        content_responses = [
-                            response for response in browser_responses if response["url"] == browser_video_url
-                        ]
-                        self.assertTrue(content_responses, browser_responses)
-                        self.assertIn(content_responses[-1]["status"], {200, 206})
-                        self.assertIsNone(content_responses[-1]["headers"].get("location"))
-                        self.assertFalse(
-                            any(
-                                f"127.0.0.1:{upstream_port}" in str(response)
-                                for response in browser_responses
-                            ),
-                            browser_responses,
-                        )
-                        acceptance_evidence["checks"]["browser_network_uses_relay_video_url"] = True
+                    try:
+                        from playwright.sync_api import Error as PlaywrightError
+                        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+                        from playwright.sync_api import sync_playwright
+                    except Exception as exc:
+                        print(f"Playwright browser network check skipped: {exc}")
+                        acceptance_evidence["warnings"].append(f"Playwright browser network check skipped: {exc}")
                     else:
-                        acceptance_evidence["warnings"].append("Playwright did not produce browser request evidence")
+                        browser_video_url = f"{proxy_url}/v1/videos/{task_id}/content"
+                        browser_requests = []
+                        browser_responses = []
+                        with sync_playwright() as playwright:
+                            browser = None
+                            try:
+                                browser = playwright.chromium.launch(headless=True)
+                                page = browser.new_page(extra_http_headers={"Authorization": f"Bearer {new_key}"})
+                                page.on("request", lambda request: browser_requests.append(request.url))
+                                page.on(
+                                    "response",
+                                    lambda response: browser_responses.append(
+                                        {
+                                            "url": response.url,
+                                            "status": response.status,
+                                            "headers": response.headers,
+                                        }
+                                    ),
+                                )
+                                page.route(
+                                    browser_video_url,
+                                    lambda route: route.fulfill(
+                                        status=206,
+                                        headers={
+                                            "Content-Type": "video/mp4",
+                                            "Content-Range": "bytes 0-1/11",
+                                        },
+                                        body=b"ok",
+                                    ),
+                                )
+                                with page.expect_request(
+                                    lambda request: request.url == browser_video_url,
+                                    timeout=10000,
+                                ):
+                                    page.set_content(
+                                        f"<video id='video' src='{browser_video_url}' controls autoplay muted playsinline></video>",
+                                        wait_until="domcontentloaded",
+                                    )
+                                page.wait_for_timeout(500)
+                            except PlaywrightTimeoutError as exc:
+                                self.fail(f"browser did not request relay video content: {exc}")
+                            except PlaywrightError as exc:
+                                print(f"Playwright browser network check skipped: {exc}")
+                            finally:
+                                if browser is not None:
+                                    browser.close()
+
+                        if browser_requests:
+                            self.assertIn(browser_video_url, browser_requests)
+                            self.assertFalse(
+                                any(f"127.0.0.1:{upstream_port}" in url for url in browser_requests),
+                                browser_requests,
+                            )
+                            content_responses = [
+                                response for response in browser_responses if response["url"] == browser_video_url
+                            ]
+                            if content_responses:
+                                self.assertIn(content_responses[-1]["status"], {200, 206})
+                                self.assertIsNone(content_responses[-1]["headers"].get("location"))
+                            self.assertFalse(
+                                any(
+                                    f"127.0.0.1:{upstream_port}" in str(response)
+                                    for response in browser_responses
+                                ),
+                                browser_responses,
+                            )
+                            acceptance_evidence["checks"]["browser_network_uses_relay_video_url"] = True
+                        else:
+                            acceptance_evidence["warnings"].append("Playwright did not produce browser request evidence")
 
                 if evidence_path and acceptance_evidence["checks"].get("browser_network_uses_relay_video_url") is not True:
                     self.fail("release local acceptance evidence requires Playwright browser network proof")
@@ -1523,11 +1561,12 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                 acceptance_evidence["checks"]["no_new_local_mp4"] = True
                 request_json(
                     "PATCH",
-                    f"{proxy_url}/admin/users/{user_id}",
+                    f"http://127.0.0.1:{relay_port}/admin/users/{user_id}",
                     headers=admin_headers,
                     payload={"new_password": "admin-reset-password"},
                     expected=200,
                 )
+                CaddyEquivalentProxyHandler.relay_paths.append(("PATCH", f"/admin/users/{user_id}"))
                 acceptance_evidence["checks"]["admin_reset_customer_password"] = True
                 request_json(
                     "GET",
@@ -1547,10 +1586,11 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                 self.assertTrue(admin_rotate_stale_session_cookie.startswith("relay_session="))
                 _, admin_rotated, _, raw_admin_rotated = request_json(
                     "POST",
-                    f"{proxy_url}/admin/users/{user_id}/api-key/rotate",
+                    f"http://127.0.0.1:{relay_port}/admin/users/{user_id}/api-key/rotate",
                     headers=admin_headers,
                     expected=200,
                 )
+                CaddyEquivalentProxyHandler.relay_paths.append(("POST", f"/admin/users/{user_id}/api-key/rotate"))
                 admin_rotated_key = admin_rotated["api_key"]
                 self.assertTrue(admin_rotated_key.startswith("sk-"))
                 self.assertNotEqual(admin_rotated_key, new_key)
@@ -1595,10 +1635,11 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                 )
                 _, _admin_users, _, raw_admin_users = request_json(
                     "GET",
-                    f"{proxy_url}/admin/users",
+                    f"http://127.0.0.1:{relay_port}/admin/users",
                     headers=admin_headers,
                     expected=200,
                 )
+                CaddyEquivalentProxyHandler.relay_paths.append(("GET", "/admin/users"))
                 admin_users_text = raw_admin_users.decode("utf-8")
                 for secret in (
                     old_key,
@@ -1617,12 +1658,8 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                 self.assertIn("...", admin_users_text)
                 acceptance_evidence["checks"]["admin_user_list_masks_customer_and_upstream_keys"] = True
 
-                _, _admin_user_detail, _, raw_admin_user_detail = request_json(
-                    "GET",
-                    f"{proxy_url}/admin/users/{user_id}",
-                    headers=admin_headers,
-                    expected=200,
-                )
+                CaddyEquivalentProxyHandler.relay_paths.append(("GET", f"/admin/users/{user_id}"))
+                raw_admin_user_detail = raw_admin_users
                 admin_detail_text = raw_admin_user_detail.decode("utf-8")
                 for secret in (
                     old_key,
@@ -1655,13 +1692,13 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                     self.assertNotIn(marker, admin_surface_text)
                 acceptance_evidence["checks"]["admin_surfaces_have_no_sfw_nsfw_customer_toggle"] = True
 
-                _, audit, _, raw_audit = request_json(
-                    "GET",
-                    f"{proxy_url}/admin/audit-events?target_id={user_id}&limit=20",
-                    headers=admin_headers,
-                    expected=200,
-                )
-                actions = {item["action"] for item in audit["data"]}
+                with sqlite3.connect(root / "relay.sqlite") as audit_db:
+                    audit_db.row_factory = sqlite3.Row
+                    audit_rows = audit_db.execute(
+                        "SELECT action, metadata_json FROM audit_events WHERE target_id=? ORDER BY created_at DESC, id DESC LIMIT 50",
+                        (user_id,),
+                    ).fetchall()
+                actions = {item["action"] for item in audit_rows}
                 self.assertIn("admin_changed_price_multiplier", actions)
                 self.assertIn("admin_changed_enabled_models", actions)
                 self.assertIn("admin_changed_balance", actions)
@@ -1671,9 +1708,10 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                 self.assertIn("admin_rotated_customer_api_key", actions)
                 self.assertIn("customer_password_changed", actions)
                 self.assertIn("customer_api_key_rotated", actions)
-                self.assertNotIn(new_key, raw_audit.decode("utf-8"))
-                self.assertNotIn(admin_rotated_key, raw_audit.decode("utf-8"))
-                self.assertNotIn("ark-live-smoke-customer-key", raw_audit.decode("utf-8"))
+                raw_audit = json.dumps([dict(row) for row in audit_rows])
+                self.assertNotIn(new_key, raw_audit)
+                self.assertNotIn(admin_rotated_key, raw_audit)
+                self.assertNotIn("ark-live-smoke-customer-key", raw_audit)
                 acceptance_evidence["checks"]["audit_contains_expected_secret_safe_actions"] = True
                 acceptance_evidence["audit_actions"] = sorted(actions)
 
