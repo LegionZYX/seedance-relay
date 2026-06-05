@@ -74,6 +74,7 @@ UPSTREAM_BASE_URL = os.getenv("UPSTREAM_BASE_URL",
                               "https://ark.ap-southeast.bytepluses.com/api/v3").rstrip("/")
 UPSTREAM_AUTH_MODE = os.getenv("UPSTREAM_AUTH_MODE", "api_key").strip().lower() or "api_key"
 UPSTREAM_ENDPOINT_ID = os.getenv("UPSTREAM_ENDPOINT_ID", "").strip()
+UPSTREAM_ENDPOINT_API_KEY = os.getenv("UPSTREAM_ENDPOINT_API_KEY", "").strip()
 BYTEPLUS_ACCESSKEY = os.getenv(
     "BYTEPLUS_ACCESSKEY",
     os.getenv("BYTEPLUS_ACCESS_KEY", os.getenv("BYTEPLUS_ACCESS_KEY_ID", "")),
@@ -992,19 +993,19 @@ def upstream_headers(api_key: Optional[str] = None) -> dict:
 
 
 def _upstream_iam_enabled(bp_key: Optional[str] = None) -> bool:
-    return UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key"} and not bp_key
+    return UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key"} and not UPSTREAM_ENDPOINT_API_KEY and not bp_key
 
 
 def _upstream_iam_ready() -> bool:
-    return bool(BYTEPLUS_ACCESSKEY and BYTEPLUS_SECRETKEY and UPSTREAM_ENDPOINT_ID)
+    return bool(UPSTREAM_ENDPOINT_ID and (UPSTREAM_ENDPOINT_API_KEY or (BYTEPLUS_ACCESSKEY and BYTEPLUS_SECRETKEY)))
 
 
 def _upstream_model_for_request(real_model: str, bp_key: Optional[str] = None) -> str:
-    if _upstream_iam_enabled(bp_key):
+    if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
         if not _upstream_iam_ready():
             raise HTTPException(503, {"error": {
                 "code": "iam_upstream_not_configured",
-                "message": "IAM upstream mode requires BYTEPLUS_ACCESSKEY, BYTEPLUS_SECRETKEY, and UPSTREAM_ENDPOINT_ID",
+                "message": "IAM upstream mode requires UPSTREAM_ENDPOINT_ID and either UPSTREAM_ENDPOINT_API_KEY or BYTEPLUS_ACCESSKEY/BYTEPLUS_SECRETKEY",
             }})
         return UPSTREAM_ENDPOINT_ID
     return real_model
@@ -1557,8 +1558,8 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
     user_row = db.execute("SELECT byteplus_api_key, markup_pct, price_multiplier FROM users WHERE id=?",
                           (user_id,)).fetchone()
     bp_key = user_row["byteplus_api_key"] if user_row else None
-    if _upstream_iam_enabled():
-        bp_key = None
+    if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
+        bp_key = UPSTREAM_ENDPOINT_API_KEY or None
 
     r = await _get_upstream_task(t["upstream_task_id"], bp_key)
     if r.status_code != 200:
@@ -2530,14 +2531,14 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
         }})
 
     bp_key = (user.get("byteplus_api_key") or "").strip() or UPSTREAM_API_KEY
-    if _upstream_iam_enabled():
-        bp_key = None
+    if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
+        bp_key = UPSTREAM_ENDPOINT_API_KEY or None
     if not bp_key:
         if _upstream_iam_enabled():
             if not _upstream_iam_ready():
                 raise HTTPException(503, {"error": {
                     "code": "iam_upstream_not_configured",
-                    "message": "IAM upstream mode requires BYTEPLUS_ACCESSKEY, BYTEPLUS_SECRETKEY, and UPSTREAM_ENDPOINT_ID",
+                    "message": "IAM upstream mode requires UPSTREAM_ENDPOINT_ID and either UPSTREAM_ENDPOINT_API_KEY or BYTEPLUS_ACCESSKEY/BYTEPLUS_SECRETKEY",
                 }})
         else:
             raise HTTPException(503, {"error": {
@@ -2764,8 +2765,8 @@ async def delete_video(vid: str, user=Depends(auth_user)):
     bp_key = db.execute("SELECT byteplus_api_key FROM users WHERE id=?",
                         (user["id"],)).fetchone()
     bp_key = (bp_key["byteplus_api_key"] if bp_key else None) or UPSTREAM_API_KEY
-    if _upstream_iam_enabled():
-        bp_key = None
+    if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
+        bp_key = UPSTREAM_ENDPOINT_API_KEY or None
 
     r = await _delete_upstream_task(t["upstream_task_id"], bp_key)
     if r.status_code not in (200, 204):

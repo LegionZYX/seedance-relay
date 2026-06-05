@@ -12,13 +12,24 @@ from fastapi.testclient import TestClient
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 
 
+class FakeResponse:
+    status_code = 200
+    text = '{"id":"upstream-task"}'
+
+    def json(self):
+        return {"id": "upstream-task"}
+
+
 class FakeHttp:
     def __init__(self):
         self.posts = []
+        self.fail_on_post = True
 
     async def post(self, url, json, headers, timeout):
         self.posts.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
-        raise AssertionError("IAM upstream mode should not use Bearer HTTP task creation")
+        if self.fail_on_post:
+            raise AssertionError("IAM upstream mode should not use Bearer HTTP task creation")
+        return FakeResponse()
 
 
 class FakeTasks:
@@ -109,6 +120,28 @@ class IAMUpstreamTests(unittest.TestCase):
         self.assertEqual(len(self.fake_tasks.created), 1)
         self.assertEqual(self.fake_tasks.created[0]["model"], "ep-dreamina-real-person")
         self.assertEqual(response.json()["model"], "dreamina-seedance-2-0-260128")
+
+    def test_iam_mode_with_endpoint_api_key_uses_bearer_endpoint_request(self):
+        self.server.UPSTREAM_ENDPOINT_API_KEY = "endpoint-task-key"
+        self.fake_http.fail_on_post = False
+
+        response = self.client.post(
+            "/v1/videos",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": "dreamina-seedance-2-0-260128",
+                "content": [{"type": "text", "text": "A calm studio portrait motion."}],
+                "resolution": "480p",
+                "duration": 5,
+                "generate_audio": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.fake_tasks.created, [])
+        self.assertEqual(len(self.fake_http.posts), 1)
+        self.assertEqual(self.fake_http.posts[0]["headers"]["Authorization"], "Bearer endpoint-task-key")
+        self.assertEqual(self.fake_http.posts[0]["json"]["model"], "ep-dreamina-real-person")
 
     def test_iam_mode_refresh_ignores_legacy_customer_byteplus_key(self):
         db = self.server.get_db()

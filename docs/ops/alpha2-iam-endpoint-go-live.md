@@ -11,7 +11,7 @@ The production path is:
 Relay API key
  -> Relay FastAPI service
  -> BytePlus IAM AK/SK registers ModelArk asset:// media
- -> BytePlus Endpoint ID creates Dreamina Seedance generation task
+ -> Endpoint API key creates Dreamina Seedance generation task against Endpoint ID
  -> Relay stores local task/accounting state in SQLite
 ```
 
@@ -40,6 +40,7 @@ task/accounting records.
 ```env
 UPSTREAM_AUTH_MODE=iam
 UPSTREAM_ENDPOINT_ID=ep-xxxxxxxxxxxxxxxx
+UPSTREAM_ENDPOINT_API_KEY=endpoint-scoped-key-from-GetApiKey
 UPSTREAM_API_KEY=
 
 BYTEPLUS_ACCESS_KEY_ID=AKxxxxxxxxxxxxxxxx
@@ -60,6 +61,11 @@ PUBLIC_DOMAIN=video.example.com
 Do not paste real secrets into git, screenshots, probe output, or support
 messages. `docker compose config` expands env files, so treat its output as
 sensitive.
+
+`BYTEPLUS_ACCESS_KEY_ID` / `BYTEPLUS_ACCESS_KEY_SECRET` are still required for
+asset registration. Current BytePlus runtime SDKs require an API key for
+`content_generation.tasks.create`, so generation should use an endpoint-scoped
+key returned by IAM `GetApiKey`.
 
 ## Local Release Gate
 
@@ -109,4 +115,3 @@ Reasons:
 Vercel can still be used later for a separate static/front-end admin surface
 that calls the deployed Relay API, but that is not the shortest safe path for
 today's backend launch.
-
