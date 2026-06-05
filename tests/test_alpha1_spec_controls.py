@@ -1516,7 +1516,7 @@ class Alpha1SpecControlTests(unittest.TestCase):
         self.assertEqual(response.status_code, 206, response.text)
         self.assertEqual(response.content, b"")
         self.assertEqual(response.headers["content-range"], "bytes 3-5/10")
-        self.assertEqual(self.fake_http.streams[-1]["method"], "HEAD")
+        self.assertEqual(self.fake_http.streams[-1]["method"], "GET")
         self.assertEqual(self.fake_http.streams[-1]["headers"]["Range"], "bytes=3-5")
 
     def test_internal_runtime_prepare_video_content_materializes_real_person_assets(self):

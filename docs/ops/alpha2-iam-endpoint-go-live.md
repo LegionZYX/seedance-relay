@@ -56,6 +56,7 @@ ADMIN_KEY=replace-with-random-value
 ADMIN_PASSWORD=replace-with-strong-password
 RUNTIME_INTERNAL_TOKEN=replace-with-random-value
 PUBLIC_DOMAIN=video.example.com
+PUBLIC_BASE_URL=https://video.example.com
 ```
 
 Do not paste real secrets into git, screenshots, probe output, or support
@@ -66,6 +67,10 @@ sensitive.
 asset registration. Current BytePlus runtime SDKs require an API key for
 `content_generation.tasks.create`, so generation should use an endpoint-scoped
 key returned by IAM `GetApiKey`.
+
+For a temporary IP-only deployment, set `PUBLIC_DOMAIN` to the bare IP and
+`PUBLIC_BASE_URL` to `http://<ip>`. Switch `PUBLIC_BASE_URL` back to
+`https://<domain>` after DNS and HTTPS are ready.
 
 ## Local Release Gate
 

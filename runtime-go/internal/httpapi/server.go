@@ -715,7 +715,11 @@ func (s *Server) formatTask(task *store.Task) map[string]any {
 		out["prompt_text"] = task.PromptText.String
 	}
 	if task.Status == "succeeded" {
-		out["video_url"] = "https://" + strings.TrimRight(s.cfg.PublicDomain, "/") + "/v1/videos/" + task.ID + "/content"
+		baseURL := strings.TrimRight(s.cfg.PublicBaseURL, "/")
+		if baseURL == "" {
+			baseURL = "https://" + strings.TrimRight(s.cfg.PublicDomain, "/")
+		}
+		out["video_url"] = baseURL + "/v1/videos/" + task.ID + "/content"
 	}
 	return out
 }
@@ -743,7 +747,11 @@ func (s *Server) cancelUpstreamTask(r *http.Request, upstreamKey, upstreamTaskID
 }
 
 func (s *Server) proxyVideo(w http.ResponseWriter, r *http.Request, taskID, upstreamURL string) {
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
+	upstreamMethod := r.Method
+	if r.Method == http.MethodHead {
+		upstreamMethod = http.MethodGet
+	}
+	req, err := http.NewRequestWithContext(r.Context(), upstreamMethod, upstreamURL, nil)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("proxy_error", "invalid upstream URL"))
 		return
@@ -752,6 +760,8 @@ func (s *Server) proxyVideo(w http.ResponseWriter, r *http.Request, taskID, upst
 	if value := r.Header.Get("Range"); value != "" {
 		requestedRange = true
 		req.Header.Set("Range", value)
+	} else if r.Method == http.MethodHead {
+		req.Header.Set("Range", "bytes=0-0")
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {

@@ -1963,7 +1963,7 @@ func TestVideoContentRefreshesQueuedTaskBeforeReturningNotReady(t *testing.T) {
 
 func TestVideoContentHeadRefreshesQueuedTaskBeforeReturningNotReady(t *testing.T) {
 	var upstreamURL string
-	var gotHead bool
+	var gotMethod, gotRange string
 	server, db, upstreamURL := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/contents/generations/tasks/upstream-content-head-ready":
@@ -1979,9 +1979,12 @@ func TestVideoContentHeadRefreshesQueuedTaskBeforeReturningNotReady(t *testing.T
 				},
 			})
 		case "/upstream-head-ready.mp4":
-			gotHead = r.Method == http.MethodHead
+			gotMethod = r.Method
+			gotRange = r.Header.Get("Range")
 			w.Header().Set("Content-Type", "video/mp4")
-			w.Header().Set("Content-Length", "11")
+			w.Header().Set("Content-Length", "1")
+			w.Header().Set("Content-Range", "bytes 0-0/11")
+			w.WriteHeader(http.StatusPartialContent)
 		default:
 			t.Fatalf("unexpected upstream path = %s", r.URL.Path)
 		}
@@ -2005,14 +2008,17 @@ func TestVideoContentHeadRefreshesQueuedTaskBeforeReturningNotReady(t *testing.T
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusPartialContent {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
 	}
 	if len(body) != 0 {
 		t.Fatalf("head returned body: %q", body)
 	}
-	if !gotHead {
-		t.Fatalf("upstream content was not requested with HEAD")
+	if gotMethod != http.MethodGet {
+		t.Fatalf("upstream content method = %q", gotMethod)
+	}
+	if gotRange != "bytes=0-0" {
+		t.Fatalf("upstream content range = %q", gotRange)
 	}
 	if resp.Header.Get("Location") != "" {
 		t.Fatalf("location leaked: %q", resp.Header.Get("Location"))
@@ -2217,7 +2223,7 @@ func TestVideoContentHeadForwardsRangeWithoutBody(t *testing.T) {
 	if len(body) != 0 {
 		t.Fatalf("head returned body: %q", body)
 	}
-	if gotMethod != http.MethodHead {
+	if gotMethod != http.MethodGet {
 		t.Fatalf("method = %q", gotMethod)
 	}
 	if gotRange != "bytes=3-5" {

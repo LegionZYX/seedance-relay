@@ -84,6 +84,7 @@ BYTEPLUS_SECRETKEY = os.getenv(
     os.getenv("BYTEPLUS_SECRET_KEY", os.getenv("BYTEPLUS_ACCESS_KEY_SECRET", "")),
 ).strip()
 PUBLIC_DOMAIN  = os.getenv("PUBLIC_DOMAIN", "video.example.com")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"https://{PUBLIC_DOMAIN}").strip().rstrip("/")
 DB_PATH        = os.getenv("DB_PATH", "/data/relay.sqlite")
 VIDEO_DIR      = Path(os.getenv("VIDEO_DIR", "/data/videos"))
 UPLOAD_DIR     = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
@@ -1463,7 +1464,7 @@ def _format_task(t: dict, error: Optional[str] = None) -> dict:
         "updated_at": t["updated_at"],
     }
     if t.get("status") == "succeeded":
-        out["video_url"] = f"https://{PUBLIC_DOMAIN}/v1/videos/{t['id']}/content"
+        out["video_url"] = f"{PUBLIC_BASE_URL}/v1/videos/{t['id']}/content"
     if error:
         out["error"] = {"message": sanitize(error)}
     return out
@@ -2726,10 +2727,10 @@ async def head_video_content(request: Request, vid: str, user=Depends(auth_user)
         raise HTTPException(404, {"error": {"code": "video_unavailable",
                                             "message": "video URL no longer available"}})
 
-    range_header = request.headers.get("range")
-    upstream_headers_for_content = {"Range": range_header} if range_header else None
+    range_header = request.headers.get("range") or "bytes=0-0"
+    upstream_headers_for_content = {"Range": range_header}
     async with http.stream(
-        "HEAD",
+        "GET",
         cached_url,
         headers=upstream_headers_for_content,
         timeout=300,
