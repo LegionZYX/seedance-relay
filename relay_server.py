@@ -85,6 +85,7 @@ BYTEPLUS_SECRETKEY = os.getenv(
 ).strip()
 PUBLIC_DOMAIN  = os.getenv("PUBLIC_DOMAIN", "video.example.com")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"https://{PUBLIC_DOMAIN}").strip().rstrip("/")
+SESSION_COOKIE_SECURE = PUBLIC_BASE_URL.lower().startswith("https://")
 DB_PATH        = os.getenv("DB_PATH", "/data/relay.sqlite")
 VIDEO_DIR      = Path(os.getenv("VIDEO_DIR", "/data/videos"))
 UPLOAD_DIR     = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
@@ -2135,7 +2136,7 @@ async def auth_login(req: LoginRequest, response: Response):
     response.set_cookie(
         "relay_session", token,
         max_age=SESSION_TTL_SECS, httponly=True,
-        secure=True, samesite="lax", path="/",
+        secure=SESSION_COOKIE_SECURE, samesite="lax", path="/",
     )
     return {"id": u["id"], "email": u["email"], "is_admin": bool(u["is_admin"]),
             "balance_usd": u["balance_usd"],

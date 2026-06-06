@@ -70,7 +70,9 @@ key returned by IAM `GetApiKey`.
 
 For a temporary IP-only deployment, set `PUBLIC_DOMAIN` to the bare IP and
 `PUBLIC_BASE_URL` to `http://<ip>`. Switch `PUBLIC_BASE_URL` back to
-`https://<domain>` after DNS and HTTPS are ready.
+`https://<domain>` after DNS and HTTPS are ready. The login session cookie uses
+the same setting: HTTP temporary deployments omit the `Secure` flag, while
+HTTPS deployments enable it.
 
 ## Local Release Gate
 
