@@ -156,6 +156,10 @@ type createVideoRequest struct {
 	ExtraBody     map[string]any   `json:"extra_body"`
 }
 
+type customerNote struct {
+	BytePlusEndpointID string `json:"byteplus_endpoint_id"`
+}
+
 var allowedContentBlockTypes = map[string]bool{
 	"text":      true,
 	"image_url": true,
@@ -347,10 +351,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		))
 		return
 	}
-	upstreamKey := strings.TrimSpace(s.cfg.UpstreamAPIKey)
-	if user.BytePlusAPIKey.Valid && strings.TrimSpace(user.BytePlusAPIKey.String) != "" {
-		upstreamKey = strings.TrimSpace(user.BytePlusAPIKey.String)
-	}
+	upstreamKey, upstreamModel := s.customerUpstream(user, model.UpstreamID)
 	if upstreamKey == "" {
 		writeJSON(w, http.StatusServiceUnavailable, errorBody("no_upstream_key", "Service not configured: contact administrator"))
 		return
@@ -381,7 +382,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Content = preparedContent
 	upstreamPayload := map[string]any{
-		"model":      model.UpstreamID,
+		"model":      upstreamModel,
 		"content":    req.Content,
 		"resolution": resolution,
 		"ratio":      ratio,
@@ -460,7 +461,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		ID:               taskID,
 		UserID:           user.ID,
 		UpstreamTaskID:   upstreamBody.ID,
-		UpstreamModel:    model.UpstreamID,
+		UpstreamModel:    upstreamModel,
 		ClientModel:      req.Model,
 		Resolution:       resolution,
 		Duration:         duration,
@@ -603,10 +604,7 @@ func (s *Server) getVideo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) refreshTask(r *http.Request, user *store.User, task *store.Task) (*store.Task, error) {
-	upstreamKey := strings.TrimSpace(s.cfg.UpstreamAPIKey)
-	if user.BytePlusAPIKey.Valid && strings.TrimSpace(user.BytePlusAPIKey.String) != "" {
-		upstreamKey = strings.TrimSpace(user.BytePlusAPIKey.String)
-	}
+	upstreamKey, _ := s.customerUpstream(user, task.UpstreamModel)
 	if upstreamKey == "" {
 		return task, nil
 	}
@@ -1115,6 +1113,39 @@ func modelAccess(user *store.User) []string {
 		return nil
 	}
 	return user.EnabledModels
+}
+
+func (s *Server) customerUpstream(user *store.User, fallbackModel string) (string, string) {
+	upstreamKey := strings.TrimSpace(s.cfg.UpstreamAPIKey)
+	upstreamModel := fallbackModel
+	customerKey := ""
+	if user != nil && user.BytePlusAPIKey.Valid {
+		customerKey = strings.TrimSpace(user.BytePlusAPIKey.String)
+	}
+	if user != nil && user.Note.Valid && strings.TrimSpace(user.Note.String) != "" {
+		var note customerNote
+		if err := json.Unmarshal([]byte(user.Note.String), &note); err == nil {
+			if endpointID := strings.TrimSpace(note.BytePlusEndpointID); endpointID != "" {
+				upstreamModel = endpointID
+				if customerKey != "" {
+					upstreamKey = customerKey
+				}
+			}
+		}
+	}
+	if upstreamModel == fallbackModel && customerKey != "" && !isEndpointAuthMode(s.cfg.UpstreamAuthMode) {
+		upstreamKey = customerKey
+	}
+	return upstreamKey, upstreamModel
+}
+
+func isEndpointAuthMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "iam", "aksk", "access_key", "endpoint", "endpoint_api_key":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseInt(value string, fallback int) int {

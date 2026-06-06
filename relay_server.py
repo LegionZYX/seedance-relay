@@ -1374,6 +1374,27 @@ def _upsert_face_asset_record(
     return dict(row)
 
 
+def _user_note_json(user: Optional[dict]) -> dict:
+    if not user:
+        return {}
+    raw = (user.get("note") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _user_modelark_asset_group_id(user: Optional[dict]) -> str:
+    return str(_user_note_json(user).get("modelark_asset_group_id") or "").strip()
+
+
+def _user_byteplus_endpoint_id(user: Optional[dict]) -> str:
+    return str(_user_note_json(user).get("byteplus_endpoint_id") or "").strip()
+
+
 def _content_url_for_block(block: ContentBlock) -> str:
     if block.type == "image_url" and isinstance(block.image_url, dict):
         return str(block.image_url.get("url") or "")
@@ -1559,9 +1580,17 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
     # 用提交时使用的 BytePlus key 来查询(因为 task 是用那把 key 创建的)
     user_row = db.execute("SELECT byteplus_api_key, markup_pct, price_multiplier FROM users WHERE id=?",
                           (user_id,)).fetchone()
-    bp_key = user_row["byteplus_api_key"] if user_row else None
+    user_endpoint_id = ""
+    if user_row:
+        user_for_note = db.execute("SELECT note FROM users WHERE id=?", (user_id,)).fetchone()
+        user_endpoint_id = _user_byteplus_endpoint_id(dict(user_for_note)) if user_for_note else ""
+    user_bp_key = user_row["byteplus_api_key"] if user_row else None
+    bp_key = user_bp_key
     if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
-        bp_key = UPSTREAM_ENDPOINT_API_KEY or None
+        if user_endpoint_id and user_bp_key:
+            bp_key = user_bp_key
+        else:
+            bp_key = UPSTREAM_ENDPOINT_API_KEY or None
 
     r = await _get_upstream_task(t["upstream_task_id"], bp_key)
     if r.status_code != 200:
@@ -1773,10 +1802,14 @@ def _create_and_cache_asset_group(ak: str, sk: str) -> str:
     return group_id
 
 
-def _server_asset_config() -> tuple[str, str, str]:
+def _server_asset_config(user: Optional[dict] = None) -> tuple[str, str, str]:
     ak = os.getenv("BYTEPLUS_ACCESS_KEY_ID", "").strip()
     sk = os.getenv("BYTEPLUS_ACCESS_KEY_SECRET", "").strip()
-    group_id = os.getenv("MODELARK_ASSET_GROUP_ID", "").strip() or _get_setting(_ASSET_GROUP_SETTING_KEY)
+    group_id = (
+        _user_modelark_asset_group_id(user)
+        or os.getenv("MODELARK_ASSET_GROUP_ID", "").strip()
+        or _get_setting(_ASSET_GROUP_SETTING_KEY)
+    )
     if ak and sk and not group_id and MODELARK_ASSET_AUTO_CREATE_GROUP:
         group_id = _create_and_cache_asset_group(ak, sk)
     missing = [
@@ -1800,8 +1833,8 @@ def _asset_type_for_purpose(purpose: str) -> str:
     return {"image": "Image", "video": "Video", "audio": "Audio"}[purpose]
 
 
-def _register_upload_asset(url: str, purpose: str) -> dict:
-    ak, sk, group_id = _server_asset_config()
+def _register_upload_asset(url: str, purpose: str, user: Optional[dict] = None) -> dict:
+    ak, sk, group_id = _server_asset_config(user)
     body = build_create_asset_body(
         group_id=group_id,
         url=url,
@@ -2031,7 +2064,7 @@ def _materialize_real_person_assets(content: list[ContentBlock], user: dict) -> 
         purpose = "image" if block.type == "image_url" else "video"
         asset_info = _find_user_whitelisted_upload_asset(user["id"], url, purpose)
         if asset_info is None:
-            asset_info = _register_upload_asset(url, purpose)
+            asset_info = _register_upload_asset(url, purpose, user)
             row = _upsert_face_asset_record(
                 asset_info["asset_url"],
                 purpose,
@@ -2352,7 +2385,7 @@ async def upload_media(
         or (ASSET_AUTO_REGISTER_UPLOADS and inferred_purpose in ASSET_AUTO_REGISTER_PURPOSES)
     )
     if should_register_asset:
-        asset_info = _register_upload_asset(url, inferred_purpose)
+        asset_info = _register_upload_asset(url, inferred_purpose, dict(user))
     face_asset_note_to_store: Optional[str] = None
     if face_allowlist:
         face_asset_note_to_store = face_asset_note or f"self-service upload by {user['id']}"
@@ -2444,7 +2477,7 @@ async def upload_media_from_url(req: UploadFromUrlRequest, user=Depends(auth_use
         or (ASSET_AUTO_REGISTER_UPLOADS and inferred_purpose in ASSET_AUTO_REGISTER_PURPOSES)
     )
     if should_register_asset:
-        asset_info = _register_upload_asset(req.url, inferred_purpose)
+        asset_info = _register_upload_asset(req.url, inferred_purpose, dict(user))
 
     face_asset_note_to_store: Optional[str] = None
     if req.face_allowlist:
@@ -2532,9 +2565,14 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
             "needed_usd": your_max_cost, "balance_usd": user["balance_usd"],
         }})
 
-    bp_key = (user.get("byteplus_api_key") or "").strip() or UPSTREAM_API_KEY
+    user_endpoint_id = _user_byteplus_endpoint_id(user)
+    user_bp_key = (user.get("byteplus_api_key") or "").strip()
+    bp_key = user_bp_key or UPSTREAM_API_KEY
     if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
-        bp_key = UPSTREAM_ENDPOINT_API_KEY or None
+        if user_endpoint_id and user_bp_key:
+            bp_key = user_bp_key
+        else:
+            bp_key = UPSTREAM_ENDPOINT_API_KEY or None
     if not bp_key:
         if _upstream_iam_enabled():
             if not _upstream_iam_ready():
@@ -2547,7 +2585,7 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
                 "code": "no_upstream_key",
                 "message": "Service not configured: contact administrator"}})
 
-    upstream_model = _upstream_model_for_request(real_model, bp_key)
+    upstream_model = user_endpoint_id or _upstream_model_for_request(real_model, bp_key)
 
     if not bp_key and not _upstream_iam_enabled():
         raise HTTPException(503, {"error": {
@@ -2764,11 +2802,15 @@ async def delete_video(vid: str, user=Depends(auth_user)):
         raise HTTPException(404, {"error": {"code": "not_found",
                                             "message": "video not found"}})
     t = dict(t)
-    bp_key = db.execute("SELECT byteplus_api_key FROM users WHERE id=?",
-                        (user["id"],)).fetchone()
-    bp_key = (bp_key["byteplus_api_key"] if bp_key else None) or UPSTREAM_API_KEY
+    user_key_row = db.execute("SELECT byteplus_api_key FROM users WHERE id=?",
+                              (user["id"],)).fetchone()
+    user_bp_key = (user_key_row["byteplus_api_key"] if user_key_row else None)
+    bp_key = user_bp_key or UPSTREAM_API_KEY
     if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
-        bp_key = UPSTREAM_ENDPOINT_API_KEY or None
+        if _user_byteplus_endpoint_id(user) and user_bp_key:
+            bp_key = user_bp_key
+        else:
+            bp_key = UPSTREAM_ENDPOINT_API_KEY or None
 
     r = await _delete_upstream_task(t["upstream_task_id"], bp_key)
     if r.status_code not in (200, 204):

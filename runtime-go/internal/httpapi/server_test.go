@@ -1494,6 +1494,64 @@ func TestCreateVideoPassesPromptTextWithoutRelayContentCensorship(t *testing.T) 
 	}
 }
 
+func TestCreateVideoUsesCustomerEndpointFromUserNote(t *testing.T) {
+	var gotAuthorization string
+	var gotUpstreamPayload map[string]any
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotUpstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-customer-endpoint"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		var gotPreparePayload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"content": gotPreparePayload["content"]})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-customer-endpoint",
+		"u_customer_endpoint",
+		`["dreamina-seedance-2-0-260128"]`,
+		10,
+		1.0,
+		"customer-endpoint-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_customer_endpoint", `{"byteplus_endpoint_id":"ep-customer-dedicated"}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"customer endpoint routing"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-customer-endpoint")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if gotAuthorization != "Bearer customer-endpoint-key" {
+		t.Fatalf("authorization = %q", gotAuthorization)
+	}
+	if gotUpstreamPayload["model"] != "ep-customer-dedicated" {
+		t.Fatalf("upstream model = %#v payload=%#v", gotUpstreamPayload["model"], gotUpstreamPayload)
+	}
+}
+
 func TestCreateVideoDelegatesRealPersonMaterializationBeforeUpstream(t *testing.T) {
 	var gotPrepareAuth string
 	var gotPreparePayload map[string]any

@@ -143,6 +143,40 @@ class IAMUpstreamTests(unittest.TestCase):
         self.assertEqual(self.fake_http.posts[0]["headers"]["Authorization"], "Bearer endpoint-task-key")
         self.assertEqual(self.fake_http.posts[0]["json"]["model"], "ep-dreamina-real-person")
 
+    def test_iam_mode_customer_endpoint_note_uses_customer_endpoint_key(self):
+        self.fake_http.fail_on_post = False
+        db = self.server.get_db()
+        db.execute(
+            "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+            (
+                "customer-endpoint-task-key",
+                '{"byteplus_endpoint_id":"ep-customer-dedicated"}',
+                "u_iam",
+            ),
+        )
+        db.close()
+
+        response = self.client.post(
+            "/v1/videos",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": "dreamina-seedance-2-0-260128",
+                "content": [{"type": "text", "text": "A calm studio portrait motion."}],
+                "resolution": "480p",
+                "duration": 5,
+                "generate_audio": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.fake_tasks.created, [])
+        self.assertEqual(len(self.fake_http.posts), 1)
+        self.assertEqual(
+            self.fake_http.posts[0]["headers"]["Authorization"],
+            "Bearer customer-endpoint-task-key",
+        )
+        self.assertEqual(self.fake_http.posts[0]["json"]["model"], "ep-customer-dedicated")
+
     def test_iam_mode_refresh_ignores_legacy_customer_byteplus_key(self):
         db = self.server.get_db()
         db.execute(

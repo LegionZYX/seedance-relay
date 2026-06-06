@@ -1522,7 +1522,7 @@ class Alpha1SpecControlTests(unittest.TestCase):
     def test_internal_runtime_prepare_video_content_materializes_real_person_assets(self):
         self.server.FACE_ASSET_SELF_SERVICE = True
 
-        def fake_register(url, purpose):
+        def fake_register(url, purpose, user=None):
             return {
                 "asset_id": f"asset-{purpose}",
                 "asset_url": f"asset://asset-{purpose}",

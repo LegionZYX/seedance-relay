@@ -25,6 +25,7 @@ type User struct {
 	EnabledModels    []string
 	EnabledModelsSet bool
 	BytePlusAPIKey   sql.NullString
+	Note             sql.NullString
 }
 
 type Task struct {
@@ -180,7 +181,7 @@ func (db *DB) Close() error {
 func (db *DB) UserByAPIKey(apiKey string) (*User, error) {
 	row := db.sql.QueryRow(`
 		SELECT id, api_key, email, balance_usd, markup_pct, price_multiplier,
-		       is_active, enabled_models, byteplus_api_key
+		       is_active, enabled_models, byteplus_api_key, note
 		FROM users
 		WHERE api_key = ? AND is_active = 1
 	`, apiKey)
@@ -189,7 +190,7 @@ func (db *DB) UserByAPIKey(apiKey string) (*User, error) {
 	var active int
 	if err := row.Scan(
 		&user.ID, &user.APIKey, &user.Email, &user.BalanceUSD, &user.MarkupPct,
-		&user.PriceMultiplier, &active, &enabled, &user.BytePlusAPIKey,
+		&user.PriceMultiplier, &active, &enabled, &user.BytePlusAPIKey, &user.Note,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -204,7 +205,7 @@ func (db *DB) UserByAPIKey(apiKey string) (*User, error) {
 func (db *DB) UserBySessionToken(token string, now int64) (*User, error) {
 	row := db.sql.QueryRow(`
 		SELECT u.id, u.api_key, u.email, u.balance_usd, u.markup_pct, u.price_multiplier,
-		       u.is_active, u.enabled_models, u.byteplus_api_key, s.expires_at
+		       u.is_active, u.enabled_models, u.byteplus_api_key, u.note, s.expires_at
 		FROM sessions s
 		JOIN users u ON s.user_id = u.id
 		WHERE s.token = ?
@@ -215,7 +216,7 @@ func (db *DB) UserBySessionToken(token string, now int64) (*User, error) {
 	var expiresAt int64
 	if err := row.Scan(
 		&user.ID, &user.APIKey, &user.Email, &user.BalanceUSD, &user.MarkupPct,
-		&user.PriceMultiplier, &active, &enabled, &user.BytePlusAPIKey, &expiresAt,
+		&user.PriceMultiplier, &active, &enabled, &user.BytePlusAPIKey, &user.Note, &expiresAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -489,6 +490,11 @@ func (db *DB) InsertTestUserWithUpstreamKey(apiKey, userID, enabledModels string
 			 price_multiplier, byteplus_api_key, created_at)
 		VALUES (?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
 	`, userID, apiKey, userID+"@example.test", balanceUSD, enabledModels, priceMultiplier, bytePlusAPIKey, time.Now().Unix())
+	return err
+}
+
+func (db *DB) SetTestUserNote(userID, note string) error {
+	_, err := db.sql.Exec("UPDATE users SET note = ? WHERE id = ?", note, userID)
 	return err
 }
 

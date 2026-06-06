@@ -50,7 +50,7 @@ class SelfServiceFaceFlowTests(unittest.TestCase):
         self.fake_http = FakeHttp()
         self.server.http = self.fake_http
 
-        def fake_register(url, purpose):
+        def fake_register(url, purpose, user=None):
             return {
                 "asset_id": "asset-self-face",
                 "asset_url": "asset://asset-self-face",

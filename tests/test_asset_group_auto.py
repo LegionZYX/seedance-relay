@@ -75,6 +75,27 @@ class AssetGroupAutoCreateTests(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["value"], "group-auto")
 
+    def test_register_upload_prefers_customer_asset_group_from_user_note(self):
+        calls = []
+
+        def fake_request(action, body, ak, sk):
+            calls.append({"action": action, "body": body, "ak": ak, "sk": sk})
+            if action == "CreateAsset":
+                return {"Result": {"Id": "asset-customer-group"}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        self.server.request_asset_api = fake_request
+
+        result = self.server._register_upload_asset(
+            "https://media.example.test/uploads/peter.jpg",
+            "image",
+            {"note": '{"modelark_asset_group_id":"group-customer"}'},
+        )
+
+        self.assertEqual(result["asset_url"], "asset://asset-customer-group")
+        self.assertEqual([call["action"] for call in calls], ["CreateAsset"])
+        self.assertEqual(calls[0]["body"]["GroupId"], "group-customer")
+
 
 if __name__ == "__main__":
     unittest.main()

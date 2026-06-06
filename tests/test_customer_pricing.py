@@ -178,7 +178,7 @@ class CustomerPricingTests(unittest.TestCase):
         self.server.FACE_ASSET_SELF_SERVICE = True
         calls = []
 
-        def fake_register(url, purpose):
+        def fake_register(url, purpose, user=None):
             calls.append((url, purpose))
             return {
                 "asset_id": f"asset-{purpose}",

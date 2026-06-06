@@ -109,7 +109,7 @@ class UploadEndpointTests(unittest.TestCase):
         self.server.ASSET_AUTO_REGISTER_PURPOSES = {"image", "video", "audio"}
         calls = []
 
-        def fake_register(url, purpose):
+        def fake_register(url, purpose, user=None):
             calls.append((url, purpose))
             return {
                 "asset_id": "asset-server-side",
@@ -143,7 +143,7 @@ class UploadEndpointTests(unittest.TestCase):
         self.server.FACE_ASSET_SELF_SERVICE = True
         calls = []
 
-        def fake_register(url, purpose):
+        def fake_register(url, purpose, user=None):
             calls.append((url, purpose))
             return {
                 "asset_id": "asset-face-self-service",
@@ -215,7 +215,7 @@ class UploadEndpointTests(unittest.TestCase):
         self.server.FACE_ASSET_SELF_SERVICE = True
         calls = []
 
-        def fake_register(url, purpose):
+        def fake_register(url, purpose, user=None):
             calls.append((url, purpose))
             return {
                 "asset_id": "asset-url-face",

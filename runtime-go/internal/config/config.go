@@ -9,6 +9,7 @@ type Config struct {
 	PublicBaseURL        string
 	UpstreamBaseURL      string
 	UpstreamAPIKey       string
+	UpstreamAuthMode     string
 	ControlPlaneBaseURL  string
 	RuntimeInternalToken string
 }
@@ -21,6 +22,7 @@ func Load() Config {
 		PublicBaseURL:        env("PUBLIC_BASE_URL", ""),
 		UpstreamBaseURL:      env("UPSTREAM_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
 		UpstreamAPIKey:       env("UPSTREAM_API_KEY", ""),
+		UpstreamAuthMode:     env("UPSTREAM_AUTH_MODE", "api_key"),
 		ControlPlaneBaseURL:  env("CONTROL_PLANE_BASE_URL", "http://127.0.0.1:8002"),
 		RuntimeInternalToken: env("RUNTIME_INTERNAL_TOKEN", ""),
 	}
