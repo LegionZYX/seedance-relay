@@ -179,6 +179,86 @@ python -m unittest tests.test_upstream_admin tests.test_iam_upstream tests.test_
 
 Expected: PASS。
 
+## Task 8: Alpha3 Continuous Backlog
+
+这个任务池用于承接上个 spec 已要求但尚未完成、或 Alpha3 主线外仍需要持续补齐的内容。Task 1-3 只负责核心资源链路；Task 8 负责防止遗留项散落或被忘记。
+
+### P0: 上线阻塞 / 回归安全
+
+这些项如果不通过，Alpha3 不应上线：
+
+1. 素材分组不回归
+   - 客户上传素材必须使用自己的 `byteplus_project_name` 和 `modelark_asset_group_id`。
+   - `CreateAssetGroup` 必须带 `GroupType=AIGC` 和客户 `ProjectName`。
+   - `CreateAsset` 必须带同一 `ProjectName`、`GroupId`、`Moderation.Strategy=Skip`。
+   - 验收：`tests.test_asset_group_auto` 通过，并新增/保留客户 ProjectName 断言。
+
+2. 生成路由不误打 endpoint
+   - 已启用但未映射的模型必须返回 `endpoint_not_configured_for_model`。
+   - 不允许 fallback 到 `byteplus_endpoint_id` 误打主 endpoint。
+   - 验收：`tests.test_iam_upstream` 覆盖 mapped / unmapped 两种情况。
+
+3. 密钥和上游资源不暴露
+   - 客户 UI/API 不返回 BytePlus Project、endpoint、asset group、endpoint key、IAM AK/SK、上游原始 URL。
+   - 管理员 API 只返回脱敏 key。
+   - 验收：静态 UI 和 API 回归测试继续检查敏感词与明文 key。
+
+4. 旧核心功能保持可用
+   - 管理员密码重置、endpoint key 手动轮换、endpoint key 自动轮换、账单 CSV、视频白标代理不能回归。
+   - 验收：focused gate 必须包含 upstream admin、billing、asset、model、static UI 相关测试。
+
+### P1: 上个 spec 承诺但未完整实现
+
+这些项不一定阻塞 Task 1-3，但应作为 Alpha3 后续持续交付：
+
+1. Admin UI 完整收敛
+   - 从“shared/dedicated 升级”改为“客户 Project 资源”。
+   - 展示模型开关、endpoint map、mapping 缺失告警、endpoint key 过期状态。
+   - 验收：`tests.test_static_admin_ui` 覆盖关键文案和入口。
+
+2. 批量模型升级脚本
+   - 新增 `deploy/upgrade_model_endpoints.py`。
+   - 支持 dry-run、指定客户范围、指定模型、JSON merge 更新 mapping。
+   - 不覆盖 note 中的 asset group、key rotation、billing、audit 等字段。
+   - 验收：dry-run 不写 DB；真实执行只追加/替换目标模型 mapping。
+
+3. 上传文件 retention 清理
+   - 实现本地 `/data/uploads` 临时文件自动清理策略。
+   - 已注册为 `asset://...` 的素材可以清理本地文件，但 DB 记录继续保留。
+   - 未注册成功的素材不能被自动删除，除非管理员手动处理。
+   - 验收：新增清理脚本或后台任务测试。
+
+4. Provision job 细步骤
+   - 当前 job 至少应区分 ensure_project、create_endpoints、wait_endpoints、ensure_asset_group、generate_key、persist_config。
+   - UI 应能显示当前步骤和失败原因。
+   - 验收：job 查询接口返回 current_step 和脱敏 error。
+
+5. per-endpoint key fallback
+   - 如果 BytePlus 不支持一个 `GetApiKey` 覆盖多个 endpoint ResourceIds，需要切换为 endpoint-key map。
+   - 设计字段可为 `users.note.byteplus_endpoint_key_map`，但明文 key 仍不得直接返回 API。
+   - 验收：先通过 BytePlus 实测或工单确认，再实现 fallback。
+
+### P2: 业务增强 / 后置完善
+
+这些项不阻塞 Alpha3 核心资源模型上线：
+
+1. XLSX 账单导出。
+2. PDF 账单导出。
+3. 更完整的账单历史筛选和客户账单视图。
+4. BytePlus asset 删除请求自动异步执行。
+5. 模型升级执行报告和审计导出。
+6. endpoint map 健康检查面板。
+7. Project / endpoint / AssetGroup 配额监控和 Quota Center 提醒。
+
+### Backlog Review Rule
+
+每完成一个 Alpha3 主线提交后，都要回看 Task 8：
+
+- 若 P0 有未通过项，不进入上线验收。
+- 若 P1 有未完成项，必须在 release note 标注“后续任务”或继续排入下一轮。
+- 若某项已实现，补充对应测试或验收命令，不只写“已完成”。
+- 不把 P2 包装成 P0，避免把 Alpha3 主线拖成无限范围。
+
 ## Release Notes
 
 Alpha3 发布前必须确认：
@@ -189,4 +269,3 @@ Alpha3 发布前必须确认：
 - Endpoint 和素材注册请求均为 `Moderation.Strategy=Skip`。
 - 客户只使用 Relay API Key，不接触 BytePlus key。
 - 模型升级脚本 dry-run 可审计，真实执行不覆盖无关 note 字段。
-
