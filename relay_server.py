@@ -761,6 +761,9 @@ CREATE TABLE IF NOT EXISTS uploads (
     asset_id                 TEXT,
     asset_url                TEXT,
     asset_status             TEXT,
+    asset_group_id           TEXT,
+    asset_project_name       TEXT,
+    asset_group_type         TEXT,
     face_asset_whitelisted   INTEGER NOT NULL DEFAULT 0,
     face_asset_label         TEXT,
     face_asset_note          TEXT,
@@ -893,6 +896,9 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN request_payload TEXT",
     "ALTER TABLE uploads ADD COLUMN deleted_at INTEGER",
     "ALTER TABLE uploads ADD COLUMN local_deleted_at INTEGER",
+    "ALTER TABLE uploads ADD COLUMN asset_group_id TEXT",
+    "ALTER TABLE uploads ADD COLUMN asset_project_name TEXT",
+    "ALTER TABLE uploads ADD COLUMN asset_group_type TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)",
 ]
 
@@ -1534,6 +1540,10 @@ def _user_modelark_asset_group_id(user: Optional[dict]) -> str:
     return str(_user_note_json(user).get("modelark_asset_group_id") or "").strip()
 
 
+def _user_byteplus_project_name(user: Optional[dict]) -> str:
+    return str(_user_note_json(user).get("byteplus_project_name") or "").strip()
+
+
 def _user_byteplus_endpoint_id(user: Optional[dict]) -> str:
     return str(_user_note_json(user).get("byteplus_endpoint_id") or "").strip()
 
@@ -1683,6 +1693,7 @@ def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamReq
             build_create_asset_group_body(
                 name=f"{slug}-assets",
                 description=f"Relay customer asset group {slug}",
+                project_name=project_name,
             ),
             BYTEPLUS_ACCESSKEY,
             BYTEPLUS_SECRETKEY,
@@ -2150,11 +2161,11 @@ def _call_asset_api(action: str, body: dict, ak: str, sk: str) -> dict:
         }}) from exc
 
 
-def _create_and_cache_asset_group(ak: str, sk: str) -> str:
+def _create_and_cache_asset_group(ak: str, sk: str, project_name: str) -> str:
     body = build_create_asset_group_body(
         name=MODELARK_ASSET_GROUP_NAME,
         description=MODELARK_ASSET_GROUP_DESCRIPTION,
-        project_name=MODELARK_PROJECT_NAME,
+        project_name=project_name,
     )
     result = _call_asset_api("CreateAssetGroup", body, ak, sk)
     group_id = extract_asset_group_id(result)
@@ -2167,21 +2178,23 @@ def _create_and_cache_asset_group(ak: str, sk: str) -> str:
     return group_id
 
 
-def _server_asset_config(user: Optional[dict] = None) -> tuple[str, str, str]:
+def _server_asset_config(user: Optional[dict] = None) -> tuple[str, str, str, str]:
     ak = os.getenv("BYTEPLUS_ACCESS_KEY_ID", "").strip()
     sk = os.getenv("BYTEPLUS_ACCESS_KEY_SECRET", "").strip()
+    project_name = _user_byteplus_project_name(user) or MODELARK_PROJECT_NAME
     group_id = (
         _user_modelark_asset_group_id(user)
         or os.getenv("MODELARK_ASSET_GROUP_ID", "").strip()
         or _get_setting(_ASSET_GROUP_SETTING_KEY)
     )
     if ak and sk and not group_id and MODELARK_ASSET_AUTO_CREATE_GROUP:
-        group_id = _create_and_cache_asset_group(ak, sk)
+        group_id = _create_and_cache_asset_group(ak, sk, project_name)
     missing = [
         name for name, value in (
             ("BYTEPLUS_ACCESS_KEY_ID", ak),
             ("BYTEPLUS_ACCESS_KEY_SECRET", sk),
             ("MODELARK_ASSET_GROUP_ID", group_id),
+            ("MODELARK_PROJECT_NAME", project_name),
         )
         if not value
     ]
@@ -2191,7 +2204,7 @@ def _server_asset_config(user: Optional[dict] = None) -> tuple[str, str, str]:
             "message": "Server asset registration is not configured",
             "missing": missing,
         }})
-    return ak, sk, group_id
+    return ak, sk, group_id, project_name
 
 
 def _asset_type_for_purpose(purpose: str) -> str:
@@ -2199,12 +2212,14 @@ def _asset_type_for_purpose(purpose: str) -> str:
 
 
 def _register_upload_asset(url: str, purpose: str, user: Optional[dict] = None) -> dict:
-    ak, sk, group_id = _server_asset_config(user)
+    ak, sk, group_id, project_name = _server_asset_config(user)
     body = build_create_asset_body(
         group_id=group_id,
         url=url,
         asset_type=_asset_type_for_purpose(purpose),
         skip_moderation=ASSET_AUTO_REGISTER_SKIP_MODERATION,
+        name=Path(urlparse(url).path).name,
+        project_name=project_name,
     )
     result = _call_asset_api("CreateAsset", body, ak, sk)
     asset_id = extract_asset_id(result)
@@ -2218,7 +2233,8 @@ def _register_upload_asset(url: str, purpose: str, user: Optional[dict] = None) 
     if ASSET_AUTO_REGISTER_WAIT_SECONDS > 0:
         deadline = time.time() + ASSET_AUTO_REGISTER_WAIT_SECONDS
         while time.time() < deadline:
-            checked = _call_asset_api("GetAsset", {"Id": asset_id}, ak, sk)
+            checked_body: dict[str, Any] = {"Id": asset_id, "ProjectName": project_name}
+            checked = _call_asset_api("GetAsset", checked_body, ak, sk)
             status = (
                 extract_nested_value(checked, "Result", "Status")
                 or extract_nested_value(checked, "Status")
@@ -2238,12 +2254,15 @@ def _register_upload_asset(url: str, purpose: str, user: Optional[dict] = None) 
         "asset_id": asset_id,
         "asset_url": f"asset://{asset_id}",
         "asset_status": status or "created",
+        "asset_group_id": group_id,
+        "project_name": project_name,
+        "group_type": "AIGC",
     }
 
 
 def _delete_byteplus_asset(asset_id: str, user: Optional[dict] = None) -> dict:
-    ak, sk, _group_id = _server_asset_config(user)
-    return _call_asset_api("DeleteAsset", {"Id": asset_id}, ak, sk)
+    ak, sk, _group_id, project_name = _server_asset_config(user)
+    return _call_asset_api("DeleteAsset", {"Id": asset_id, "ProjectName": project_name}, ak, sk)
 
 
 def _local_upload_path_for_object_key(object_key: str) -> Optional[Path]:
@@ -2350,6 +2369,12 @@ def _upload_response_from_row(row: sqlite3.Row | dict) -> dict:
         data["asset_url"] = row["asset_url"]
     if row["asset_status"]:
         data["asset_status"] = row["asset_status"]
+    if _record_get(row, "asset_group_id"):
+        data["asset_group_id"] = _record_get(row, "asset_group_id")
+    if _record_get(row, "asset_project_name"):
+        data["project_name"] = _record_get(row, "asset_project_name")
+    if _record_get(row, "asset_group_type"):
+        data["group_type"] = _record_get(row, "asset_group_type")
     if face_whitelisted:
         data["face_asset"] = {
             "asset_url": row["asset_url"],
@@ -2395,10 +2420,11 @@ def _record_upload(
         db.execute(
             """INSERT INTO uploads
                (id, user_id, url, object_key, content_type, size_bytes, purpose,
-                original_filename, asset_id, asset_url, asset_status,
-                face_asset_whitelisted, face_asset_label, face_asset_note,
-                created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 original_filename, asset_id, asset_url, asset_status,
+                 asset_group_id, asset_project_name, asset_group_type,
+                 face_asset_whitelisted, face_asset_label, face_asset_note,
+                 created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 upload_id,
                 user_id,
@@ -2411,6 +2437,9 @@ def _record_upload(
                 asset_info.get("asset_id"),
                 asset_info.get("asset_url"),
                 asset_info.get("asset_status"),
+                asset_info.get("asset_group_id"),
+                asset_info.get("project_name"),
+                asset_info.get("group_type"),
                 1 if face_asset_whitelisted else 0,
                 face_asset_label,
                 face_asset_note,

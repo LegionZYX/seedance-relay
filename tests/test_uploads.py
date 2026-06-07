@@ -116,6 +116,9 @@ class UploadEndpointTests(unittest.TestCase):
                 "asset_id": "asset-server-side",
                 "asset_url": "asset://asset-server-side",
                 "asset_status": "created",
+                "asset_group_id": "group-upload",
+                "project_name": "seedance-project",
+                "group_type": "AIGC",
             }
 
         self.server._register_upload_asset = fake_register
@@ -130,6 +133,9 @@ class UploadEndpointTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["asset_url"], "asset://asset-server-side")
         self.assertEqual(body["asset_status"], "created")
+        self.assertEqual(body["asset_group_id"], "group-upload")
+        self.assertEqual(body["project_name"], "seedance-project")
+        self.assertEqual(body["group_type"], "AIGC")
         self.assertEqual(calls, [(body["url"], "image")])
         self.assertEqual(
             body["suggested_content_block"],

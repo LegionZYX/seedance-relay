@@ -23,6 +23,7 @@ class AssetGroupAutoCreateTests(unittest.TestCase):
         os.environ["BYTEPLUS_ACCESS_KEY_SECRET"] = "sk-test"
         os.environ["MODELARK_ASSET_AUTO_CREATE_GROUP"] = "true"
         os.environ["MODELARK_ASSET_GROUP_NAME"] = "relay-face-assets"
+        os.environ["MODELARK_PROJECT_NAME"] = "seedance-project"
         os.environ.pop("MODELARK_ASSET_GROUP_ID", None)
         os.environ.pop("FACE_ASSET_ALLOWLIST", None)
 
@@ -32,6 +33,7 @@ class AssetGroupAutoCreateTests(unittest.TestCase):
         self.server = importlib.import_module("relay_server")
 
     def tearDown(self):
+        os.environ.pop("MODELARK_PROJECT_NAME", None)
         self.tmp.cleanup()
 
     def test_register_upload_creates_asset_group_once_and_reuses_cached_group_id(self):
@@ -63,8 +65,13 @@ class AssetGroupAutoCreateTests(unittest.TestCase):
             ["CreateAssetGroup", "CreateAsset", "CreateAsset"],
         )
         self.assertEqual(calls[0]["body"]["Name"], "relay-face-assets")
+        self.assertEqual(calls[0]["body"]["GroupType"], "AIGC")
+        self.assertEqual(calls[0]["body"]["ProjectName"], "seedance-project")
         self.assertEqual(calls[1]["body"]["GroupId"], "group-auto")
+        self.assertEqual(calls[1]["body"]["Name"], "face-a.jpg")
+        self.assertEqual(calls[1]["body"]["ProjectName"], "seedance-project")
         self.assertEqual(calls[2]["body"]["GroupId"], "group-auto")
+        self.assertEqual(calls[2]["body"]["ProjectName"], "seedance-project")
 
         db = self.server.get_db()
         row = db.execute(
@@ -89,12 +96,42 @@ class AssetGroupAutoCreateTests(unittest.TestCase):
         result = self.server._register_upload_asset(
             "https://media.example.test/uploads/peter.jpg",
             "image",
-            {"note": '{"modelark_asset_group_id":"group-customer"}'},
+            {"note": '{"modelark_asset_group_id":"group-customer","byteplus_project_name":"peterlv"}'},
         )
 
         self.assertEqual(result["asset_url"], "asset://asset-customer-group")
         self.assertEqual([call["action"] for call in calls], ["CreateAsset"])
         self.assertEqual(calls[0]["body"]["GroupId"], "group-customer")
+        self.assertEqual(calls[0]["body"]["ProjectName"], "peterlv")
+
+    def test_register_upload_waits_for_asset_with_project_name(self):
+        calls = []
+        self.server.ASSET_AUTO_REGISTER_WAIT_SECONDS = 1
+        self.server.ASSET_AUTO_REGISTER_WAIT_INTERVAL = 0
+
+        def fake_request(action, body, ak, sk):
+            calls.append({"action": action, "body": body, "ak": ak, "sk": sk})
+            if action == "CreateAssetGroup":
+                return {"Result": {"Id": "group-auto"}}
+            if action == "CreateAsset":
+                return {"Result": {"Id": "asset-wait", "Status": "Processing"}}
+            if action == "GetAsset":
+                return {"Result": {"Status": "Active"}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        self.server.request_asset_api = fake_request
+
+        result = self.server._register_upload_asset(
+            "https://media.example.test/uploads/wait.jpg",
+            "image",
+        )
+
+        self.assertEqual(result["asset_status"], "Active")
+        self.assertEqual(result["asset_group_id"], "group-auto")
+        self.assertEqual(result["project_name"], "seedance-project")
+        self.assertEqual(result["group_type"], "AIGC")
+        get_asset = next(call for call in calls if call["action"] == "GetAsset")
+        self.assertEqual(get_asset["body"], {"Id": "asset-wait", "ProjectName": "seedance-project"})
 
 
 if __name__ == "__main__":

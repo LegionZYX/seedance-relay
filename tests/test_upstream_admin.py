@@ -199,6 +199,42 @@ class UpstreamAdminTests(unittest.TestCase):
         self.assertEqual(json.loads(row["note"])["modelark_asset_group_id"], "group-peter")
         self.assertEqual(job["status"], "succeeded")
 
+    def test_provision_creates_aigc_asset_group_inside_customer_project(self):
+        calls = []
+
+        def fake_call_asset_api(action, body, ak, sk):
+            calls.append({"action": action, "body": body, "ak": ak, "sk": sk})
+            if action == "CreateProject":
+                return {"Result": {"ProjectId": "project-peter"}}
+            if action == "CreateEndpoint":
+                return {"Result": {"EndpointId": "ep-peter"}}
+            if action == "CreateAssetGroup":
+                return {"Result": {"Id": "group-peter"}}
+            if action == "GetApiKey":
+                return {"Result": {"ApiKey": "peter-endpoint-key", "ExpiresAt": 2222222222}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        self.server._call_asset_api = fake_call_asset_api
+        db = self.server.get_db()
+        user = dict(db.execute("SELECT * FROM users WHERE id=?", (self.user_id,)).fetchone())
+        db.close()
+        req = self.server.ProvisionUpstreamRequest(
+            customer_slug="peterlv",
+            create_project=True,
+            create_endpoint=True,
+            create_asset_group=True,
+            rotate_endpoint_key=True,
+            endpoint_key_duration_seconds=3600,
+        )
+
+        result = self.server._provision_customer_upstream_resources(user, req)
+
+        self.assertEqual(result["byteplus_project_name"], "peterlv")
+        self.assertEqual(result["modelark_asset_group_id"], "group-peter")
+        create_group = next(call for call in calls if call["action"] == "CreateAssetGroup")
+        self.assertEqual(create_group["body"]["GroupType"], "AIGC")
+        self.assertEqual(create_group["body"]["ProjectName"], "peterlv")
+
     def test_iam_capabilities_reports_configured_flags_without_secrets(self):
         resp = self.client.get("/admin/upstream/iam-capabilities", headers=self.admin_headers())
         self.assertEqual(resp.status_code, 200, resp.text)

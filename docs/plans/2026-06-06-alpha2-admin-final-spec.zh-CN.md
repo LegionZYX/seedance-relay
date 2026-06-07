@@ -592,6 +592,8 @@ class BytePlusControlClient:
 - 不打印 endpoint API key。
 - 保留 BytePlus request id 用于排障。
 - 错误返回给后台前必须脱敏。
+- 创建素材组时 `CreateAssetGroup` 请求必须显式带 `GroupType: "AIGC"`，并带当前客户的 `ProjectName`；否则可能落入真人素材库或 default 项目，导致后续素材注册/生成不可用。
+- 注册和查询素材时，`CreateAsset` / `GetAsset` 请求也必须带同一个 `ProjectName`；`CreateAsset` 还必须带 `GroupId`、`URL`、`AssetType` 和素材 `Name`。
 
 ## 7. 独立资源开通 Job
 

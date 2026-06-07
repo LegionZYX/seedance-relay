@@ -143,12 +143,18 @@ def build_create_asset_body(
     url: str,
     asset_type: str,
     skip_moderation: bool = False,
+    name: str = "",
+    project_name: str = "",
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "GroupId": group_id,
         "URL": url,
         "AssetType": asset_type,
     }
+    if name:
+        body["Name"] = name
+    if project_name:
+        body["ProjectName"] = project_name
     if skip_moderation:
         body["Moderation"] = {"Strategy": "Skip"}
     return body
@@ -158,8 +164,12 @@ def build_create_asset_group_body(
     name: str,
     description: str = "",
     project_name: str = "",
+    group_type: str = "AIGC",
 ) -> dict[str, Any]:
-    body: dict[str, Any] = {"Name": name}
+    body: dict[str, Any] = {
+        "Name": name,
+        "GroupType": (group_type or "AIGC").strip() or "AIGC",
+    }
     if description:
         body["Description"] = description
     if project_name:
@@ -206,8 +216,11 @@ def extract_asset_group_id(data: dict[str, Any]) -> str:
     return ""
 
 
-def get_asset(asset_id: str, ak: str, sk: str) -> dict[str, Any]:
-    return request_api("GetAsset", {"Id": asset_id}, ak, sk)
+def get_asset(asset_id: str, ak: str, sk: str, project_name: str = "") -> dict[str, Any]:
+    body: dict[str, Any] = {"Id": asset_id}
+    if project_name:
+        body["ProjectName"] = project_name
+    return request_api("GetAsset", body, ak, sk)
 
 
 def print_json(data: dict[str, Any]) -> None:
@@ -218,7 +231,15 @@ def cmd_create(args: argparse.Namespace) -> int:
     ak = env_required("BYTEPLUS_ACCESS_KEY_ID")
     sk = env_required("BYTEPLUS_ACCESS_KEY_SECRET")
     group_id = args.group_id or env_required("MODELARK_ASSET_GROUP_ID")
-    body = build_create_asset_body(group_id, args.url, args.asset_type, args.skip_moderation)
+    project_name = args.project_name or os.getenv("MODELARK_PROJECT_NAME", "").strip()
+    body = build_create_asset_body(
+        group_id,
+        args.url,
+        args.asset_type,
+        args.skip_moderation,
+        args.name or "",
+        project_name,
+    )
     result = request_api("CreateAsset", body, ak, sk)
     print_json(result)
     asset_id = extract_asset_id(result)
@@ -232,7 +253,12 @@ def cmd_create(args: argparse.Namespace) -> int:
 def cmd_create_group(args: argparse.Namespace) -> int:
     ak = env_required("BYTEPLUS_ACCESS_KEY_ID")
     sk = env_required("BYTEPLUS_ACCESS_KEY_SECRET")
-    body = build_create_asset_group_body(args.name, args.description or "", args.project_name or "")
+    body = build_create_asset_group_body(
+        args.name,
+        args.description or "",
+        args.project_name or os.getenv("MODELARK_PROJECT_NAME", "").strip(),
+        args.group_type or "AIGC",
+    )
     result = request_api("CreateAssetGroup", body, ak, sk)
     print_json(result)
     group_id = extract_asset_group_id(result)
@@ -246,7 +272,7 @@ def cmd_create_group(args: argparse.Namespace) -> int:
 def cmd_get(args: argparse.Namespace) -> int:
     ak = env_required("BYTEPLUS_ACCESS_KEY_ID")
     sk = env_required("BYTEPLUS_ACCESS_KEY_SECRET")
-    print_json(get_asset(args.asset_id, ak, sk))
+    print_json(get_asset(args.asset_id, ak, sk, args.project_name or os.getenv("MODELARK_PROJECT_NAME", "").strip()))
     return 0
 
 
@@ -255,7 +281,12 @@ def cmd_wait(args: argparse.Namespace) -> int:
     sk = env_required("BYTEPLUS_ACCESS_KEY_SECRET")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
-        result = get_asset(args.asset_id, ak, sk)
+        result = get_asset(
+            args.asset_id,
+            ak,
+            sk,
+            args.project_name or os.getenv("MODELARK_PROJECT_NAME", "").strip(),
+        )
         print_json(result)
         status = extract_nested_value(result, "Result", "Status") or extract_nested_value(result, "Status")
         if status == "Active":
@@ -278,6 +309,8 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--url", required=True, help="Public HTTPS URL that ModelArk can fetch.")
     create.add_argument("--asset-type", required=True, choices=("Image", "Video", "Audio"))
     create.add_argument("--group-id", help="Override MODELARK_ASSET_GROUP_ID.")
+    create.add_argument("--name", default="", help="Optional asset display name.")
+    create.add_argument("--project-name", default="", help="ProjectName for the asset request.")
     create.add_argument("--skip-moderation", action="store_true")
     create.set_defaults(func=cmd_create)
 
@@ -285,14 +318,17 @@ def build_parser() -> argparse.ArgumentParser:
     create_group.add_argument("--name", required=True, help="Asset group name.")
     create_group.add_argument("--description", default="")
     create_group.add_argument("--project-name", default="")
+    create_group.add_argument("--group-type", default="AIGC", help="Asset group type. Defaults to AIGC.")
     create_group.set_defaults(func=cmd_create_group)
 
     get = sub.add_parser("get", help="Fetch one asset status.")
     get.add_argument("--asset-id", required=True)
+    get.add_argument("--project-name", default="", help="ProjectName for the asset request.")
     get.set_defaults(func=cmd_get)
 
     wait = sub.add_parser("wait", help="Poll until an asset is Active.")
     wait.add_argument("--asset-id", required=True)
+    wait.add_argument("--project-name", default="", help="ProjectName for the asset request.")
     wait.add_argument("--interval", type=float, default=3.0)
     wait.add_argument("--timeout", type=float, default=120.0)
     wait.set_defaults(func=cmd_wait)
