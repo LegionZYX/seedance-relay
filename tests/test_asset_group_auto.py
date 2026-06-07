@@ -103,6 +103,7 @@ class AssetGroupAutoCreateTests(unittest.TestCase):
         self.assertEqual([call["action"] for call in calls], ["CreateAsset"])
         self.assertEqual(calls[0]["body"]["GroupId"], "group-customer")
         self.assertEqual(calls[0]["body"]["ProjectName"], "peterlv")
+        self.assertEqual(calls[0]["body"]["Moderation"], {"Strategy": "Skip"})
 
     def test_register_upload_waits_for_asset_with_project_name(self):
         calls = []

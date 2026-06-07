@@ -65,6 +65,7 @@ from create_asset_white_label import (
     extract_asset_id,
     extract_nested_value,
     request_api as request_asset_api,
+    request_signed_api,
 )
 
 # ─── Config ──────────────────────────────────────────────────────
@@ -117,7 +118,7 @@ ASSET_AUTO_REGISTER_PURPOSES = {
 ASSET_AUTO_REGISTER_WAIT_SECONDS = float(os.getenv("ASSET_AUTO_REGISTER_WAIT_SECONDS", "0"))
 ASSET_AUTO_REGISTER_WAIT_INTERVAL = float(os.getenv("ASSET_AUTO_REGISTER_WAIT_INTERVAL", "3"))
 ASSET_AUTO_REGISTER_SKIP_MODERATION = os.getenv(
-    "ASSET_AUTO_REGISTER_SKIP_MODERATION", "false"
+    "ASSET_AUTO_REGISTER_SKIP_MODERATION", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
 ASSET_DELETE_EXECUTION_MODE = (
     os.getenv("ASSET_DELETE_EXECUTION_MODE", "admin_batch").strip().lower()
@@ -135,6 +136,19 @@ MODELARK_ASSET_GROUP_DESCRIPTION = os.getenv(
     "MODELARK_ASSET_GROUP_DESCRIPTION", "Relay self-service face asset whitelist"
 ).strip()
 MODELARK_PROJECT_NAME = os.getenv("MODELARK_PROJECT_NAME", "").strip()
+BYTEPLUS_REGION = (
+    os.getenv("BYTEPLUS_REGION", os.getenv("MODELARK_OPENAPI_REGION", "ap-southeast-1"))
+    .strip()
+    or "ap-southeast-1"
+)
+BYTEPLUS_IAM_SERVICE = os.getenv("BYTEPLUS_IAM_SERVICE", "iam").strip() or "iam"
+BYTEPLUS_IAM_VERSION = os.getenv("BYTEPLUS_IAM_VERSION", "2018-01-01").strip() or "2018-01-01"
+BYTEPLUS_IAM_HOST = os.getenv("BYTEPLUS_IAM_HOST", "iam.byteplusapi.com").strip() or "iam.byteplusapi.com"
+BYTEPLUS_ENDPOINT_MODEL_NAME = os.getenv("BYTEPLUS_ENDPOINT_MODEL_NAME", "dreamina-seedance-2-0").strip() or "dreamina-seedance-2-0"
+BYTEPLUS_ENDPOINT_MODEL_VERSION = os.getenv("BYTEPLUS_ENDPOINT_MODEL_VERSION", "260128").strip() or "260128"
+BYTEPLUS_ENDPOINT_MODERATION_STRATEGY = os.getenv("BYTEPLUS_ENDPOINT_MODERATION_STRATEGY", "Skip").strip() or "Skip"
+BYTEPLUS_ENDPOINT_WAIT_SECONDS = float(os.getenv("BYTEPLUS_ENDPOINT_WAIT_SECONDS", "600"))
+BYTEPLUS_ENDPOINT_WAIT_INTERVAL = float(os.getenv("BYTEPLUS_ENDPOINT_WAIT_INTERVAL", "5"))
 FACE_ASSET_ENFORCE = os.getenv("FACE_ASSET_ENFORCE", "false").strip().lower() in (
     "1", "true", "yes", "on"
 )
@@ -180,6 +194,17 @@ NATIVE_MODEL_IDS = [
     "seedance-1-0-lite-t2v-250428",
     "seedance-1-0-lite-i2v-250428",
 ]
+
+DEFAULT_CUSTOMER_MODEL_IDS = [
+    item.strip()
+    for item in os.getenv(
+        "DEFAULT_CUSTOMER_MODEL_IDS",
+        ",".join(NATIVE_MODEL_IDS),
+    ).split(",")
+    if item.strip() in NATIVE_MODEL_IDS
+]
+if not DEFAULT_CUSTOMER_MODEL_IDS:
+    DEFAULT_CUSTOMER_MODEL_IDS = list(NATIVE_MODEL_IDS)
 
 
 def _load_model_aliases() -> dict[str, str]:
@@ -457,7 +482,7 @@ def _customer_key_metadata(user: dict) -> dict:
 def _enabled_models_for_user(user: Optional[dict]) -> list[str]:
     raw = _record_get(user, "enabled_models")
     if raw is None or (isinstance(raw, str) and raw.strip() == ""):
-        return list(NATIVE_MODEL_IDS)
+        return list(DEFAULT_CUSTOMER_MODEL_IDS)
     if isinstance(raw, list):
         items = raw
     else:
@@ -1536,6 +1561,46 @@ def _merge_user_note_json(raw_note: Optional[str], updates: dict[str, Any]) -> s
     return json.dumps(note, ensure_ascii=True, sort_keys=True)
 
 
+_UPSTREAM_NOTE_KEYS = {
+    "upstream_mode",
+    "customer_slug",
+    "byteplus_project_name",
+    "byteplus_project_id",
+    "byteplus_endpoint_id",
+    "byteplus_endpoint_map",
+    "byteplus_endpoint_map_updated_at",
+    "modelark_asset_group_id",
+    "byteplus_endpoint_key_rotation_enabled",
+    "byteplus_endpoint_api_key_expires_at",
+    "byteplus_endpoint_key_last_rotated_at",
+    "byteplus_endpoint_key_next_rotate_at",
+    "byteplus_endpoint_key_rotation_error",
+    "byteplus_upstream_updated_at",
+}
+
+
+def _merge_note_preserving_upstream_fields(
+    current_note_raw: Optional[str],
+    incoming_note_raw: Optional[str],
+) -> str:
+    current = _user_note_json({"note": current_note_raw or ""})
+    protected = {key: current[key] for key in _UPSTREAM_NOTE_KEYS if key in current}
+    if not protected:
+        return incoming_note_raw or ""
+
+    raw = (incoming_note_raw or "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            incoming = parsed if isinstance(parsed, dict) else {"legacy_note": raw}
+        except Exception:
+            incoming = {"legacy_note": raw}
+    else:
+        incoming = {}
+    incoming.update(protected)
+    return json.dumps(incoming, ensure_ascii=True, sort_keys=True)
+
+
 def _user_modelark_asset_group_id(user: Optional[dict]) -> str:
     return str(_user_note_json(user).get("modelark_asset_group_id") or "").strip()
 
@@ -1546,6 +1611,33 @@ def _user_byteplus_project_name(user: Optional[dict]) -> str:
 
 def _user_byteplus_endpoint_id(user: Optional[dict]) -> str:
     return str(_user_note_json(user).get("byteplus_endpoint_id") or "").strip()
+
+
+def _user_byteplus_endpoint_map(user: Optional[dict]) -> dict[str, str]:
+    raw = _user_note_json(user).get("byteplus_endpoint_map")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for model_id, endpoint_id in raw.items():
+        key = str(model_id or "").strip()
+        value = str(endpoint_id or "").strip()
+        if key and value:
+            out[key] = value
+    return out
+
+
+def _user_byteplus_endpoint_id_for_model(user: Optional[dict], client_model: str, real_model: str) -> str:
+    endpoint_map = _user_byteplus_endpoint_map(user)
+    if endpoint_map:
+        endpoint_id = endpoint_map.get(client_model) or endpoint_map.get(real_model)
+        if endpoint_id:
+            return endpoint_id
+        raise HTTPException(400, {"error": {
+            "code": "endpoint_not_configured_for_model",
+            "message": "This dedicated customer endpoint is not configured for the selected model",
+            "model": client_model,
+        }})
+    return _user_byteplus_endpoint_id(user)
 
 
 def _truthy_note_value(value: Any) -> bool:
@@ -1567,6 +1659,7 @@ def _user_upstream_response(user: dict | sqlite3.Row) -> dict:
         "customer_slug": note.get("customer_slug") or "",
         "byteplus_project_name": note.get("byteplus_project_name") or "",
         "byteplus_endpoint_id": note.get("byteplus_endpoint_id") or "",
+        "byteplus_endpoint_map": _user_byteplus_endpoint_map(user_dict),
         "modelark_asset_group_id": note.get("modelark_asset_group_id") or "",
         "endpoint_key_rotation_enabled": _truthy_note_value(note.get("byteplus_endpoint_key_rotation_enabled")),
         "byteplus_endpoint_api_key_expires_at": note.get("byteplus_endpoint_api_key_expires_at"),
@@ -1618,12 +1711,166 @@ def _planned_upstream_provision(user: dict, req: ProvisionUpstreamRequest) -> di
     }
 
 
-def _get_endpoint_api_key(endpoint_id: str, duration_seconds: int) -> dict[str, Any]:
+def _call_iam_api(action: str, params: dict[str, Any], ak: str, sk: str) -> dict:
+    try:
+        return request_signed_api(
+            action,
+            None,
+            ak,
+            sk,
+            service=BYTEPLUS_IAM_SERVICE,
+            region=BYTEPLUS_REGION,
+            host=BYTEPLUS_IAM_HOST,
+            version=BYTEPLUS_IAM_VERSION,
+            query_params=params,
+        )
+    except SystemExit as exc:
+        raise HTTPException(502, {"error": {
+            "code": "iam_project_error",
+            "message": str(exc),
+        }}) from exc
+
+
+def _upstream_http_exception_message(exc: HTTPException) -> str:
+    detail = getattr(exc, "detail", "")
+    if isinstance(detail, dict):
+        error = detail.get("error")
+        if isinstance(error, dict):
+            return str(error.get("message") or error)
+    return str(detail)
+
+
+def _get_byteplus_project(project_name: str) -> Optional[dict[str, Any]]:
+    response = _call_iam_api(
+        "GetProject",
+        {"ProjectName": project_name},
+        BYTEPLUS_ACCESSKEY,
+        BYTEPLUS_SECRETKEY,
+    )
+    result = response.get("Result") if isinstance(response, dict) else None
+    project = result.get("Project") if isinstance(result, dict) else response.get("Project")
+    if isinstance(project, dict):
+        return project
+    return {"ProjectName": project_name}
+
+
+def _ensure_byteplus_project(project_name: str, display_name: str, description: str) -> dict[str, Any]:
+    try:
+        existing = _get_byteplus_project(project_name)
+        if existing:
+            return existing
+    except HTTPException as exc:
+        message = _upstream_http_exception_message(exc)
+        if (
+            "EntityNotFound" not in message
+            and "NotFound" not in message
+            and "not found" not in message.lower()
+        ):
+            raise
+
+    result = _call_iam_api(
+        "CreateProject",
+        {"ProjectName": project_name, "Description": description or display_name or project_name},
+        BYTEPLUS_ACCESSKEY,
+        BYTEPLUS_SECRETKEY,
+    )
+    result_body = result.get("Result") if isinstance(result, dict) else None
+    project = result_body.get("Project") if isinstance(result_body, dict) else result.get("Project")
+    if isinstance(project, dict):
+        return project
+    try:
+        return _get_byteplus_project(project_name) or {"ProjectName": project_name}
+    except HTTPException as exc:
+        message = _upstream_http_exception_message(exc)
+        if "AlreadyExists" in message or "already" in message.lower():
+            existing = _get_byteplus_project(project_name)
+            return existing or {"ProjectName": project_name}
+        raise
+
+
+def _foundation_model_reference_for_client_model(client_model: str) -> dict[str, str]:
+    upstream_model = MODEL_MAP.get(client_model, client_model)
+    model_name, sep, model_version = upstream_model.rpartition("-")
+    if not sep or not model_name or not model_version:
+        return {"Name": BYTEPLUS_ENDPOINT_MODEL_NAME, "ModelVersion": BYTEPLUS_ENDPOINT_MODEL_VERSION}
+    return {"Name": model_name, "ModelVersion": model_version}
+
+
+def _endpoint_name_for_model(slug: str, client_model: str) -> str:
+    upstream_model = MODEL_MAP.get(client_model, client_model)
+    suffix = re.sub(r"[^a-z0-9]+", "-", upstream_model.lower()).strip("-")
+    suffix = suffix.replace("dreamina-", "").replace("seedance-", "sd-")
+    return f"relay-{slug}-{suffix}"[:120]
+
+
+def _endpoint_create_body(slug: str, project_name: str, email: str = "", client_model: str = "") -> dict[str, Any]:
+    tags = [
+        {"Key": "app", "Value": "seedance-relay"},
+        {"Key": "customer", "Value": slug},
+        {"Key": "createdBy", "Value": "seedance-relay"},
+    ]
+    if client_model:
+        tags.append({"Key": "clientModel", "Value": client_model[:120]})
+    if email:
+        tags.append({"Key": "email", "Value": email})
+    foundation_model = (
+        _foundation_model_reference_for_client_model(client_model)
+        if client_model
+        else {"Name": BYTEPLUS_ENDPOINT_MODEL_NAME, "ModelVersion": BYTEPLUS_ENDPOINT_MODEL_VERSION}
+    )
+    return {
+        "ProjectName": project_name,
+        "Name": _endpoint_name_for_model(slug, client_model) if client_model else f"relay-{slug}-seedance2",
+        "Description": f"Relay customer endpoint {slug}",
+        "ModelReference": {
+            "FoundationModel": foundation_model,
+            "CustomModelId": "",
+        },
+        "Moderation": {"Strategy": BYTEPLUS_ENDPOINT_MODERATION_STRATEGY},
+        "Tags": tags,
+    }
+
+
+def _wait_endpoint_ready(endpoint_id: str, project_name: str) -> None:
+    if not endpoint_id or BYTEPLUS_ENDPOINT_WAIT_SECONDS <= 0:
+        return
+    deadline = time.time() + BYTEPLUS_ENDPOINT_WAIT_SECONDS
+    last_status = ""
+    while time.time() < deadline:
+        result = _call_asset_api(
+            "GetEndpoint",
+            {"Id": endpoint_id, "ProjectName": project_name},
+            BYTEPLUS_ACCESSKEY,
+            BYTEPLUS_SECRETKEY,
+        )
+        status = str(
+            extract_nested_value(result, "Result", "Status")
+            or extract_nested_value(result, "Status")
+            or ""
+        )
+        last_status = status
+        if status == "Running":
+            return
+        if status in {"Failed", "Deleting"}:
+            raise RuntimeError(f"Endpoint {endpoint_id} is {status}")
+        time.sleep(BYTEPLUS_ENDPOINT_WAIT_INTERVAL)
+    raise RuntimeError(f"Endpoint {endpoint_id} did not become Running; last_status={last_status}")
+
+
+def _get_endpoint_api_key(endpoint_id: str | list[str], duration_seconds: int) -> dict[str, Any]:
     if not BYTEPLUS_ACCESSKEY or not BYTEPLUS_SECRETKEY:
         raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_SECRET_ACCESS_KEY are required")
+    endpoint_ids = endpoint_id if isinstance(endpoint_id, list) else [endpoint_id]
+    endpoint_ids = [str(item).strip() for item in endpoint_ids if str(item).strip()]
+    if not endpoint_ids:
+        raise RuntimeError("endpoint id is required before rotating endpoint API key")
     result = _call_asset_api(
         "GetApiKey",
-        {"EndpointId": endpoint_id, "DurationSeconds": duration_seconds},
+        {
+            "DurationSeconds": duration_seconds,
+            "ResourceType": "endpoint",
+            "ResourceIds": endpoint_ids,
+        },
         BYTEPLUS_ACCESSKEY,
         BYTEPLUS_SECRETKEY,
     )
@@ -1634,7 +1881,9 @@ def _get_endpoint_api_key(endpoint_id: str, duration_seconds: int) -> dict[str, 
     )
     expires_at = (
         extract_nested_value(result, "Result", "ExpiresAt")
+        or extract_nested_value(result, "Result", "ExpiredTime")
         or extract_nested_value(result, "ExpiresAt")
+        or extract_nested_value(result, "ExpiredTime")
         or extract_nested_value(result, "expires_at")
     )
     if not api_key:
@@ -1653,40 +1902,40 @@ def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamReq
     project_name = planned["byteplus_project_name"]
     project_id = ""
     endpoint_id = _user_byteplus_endpoint_id(user)
+    endpoint_map = _user_byteplus_endpoint_map(user)
     asset_group_id = _user_modelark_asset_group_id(user)
 
     if req.create_project:
-        project_result = _call_asset_api(
-            "CreateProject",
-            {"Name": project_name, "Description": f"Relay customer {slug}"},
-            BYTEPLUS_ACCESSKEY,
-            BYTEPLUS_SECRETKEY,
+        project_result = _ensure_byteplus_project(
+            project_name,
+            display_name=project_name,
+            description=f"Relay customer {slug}",
         )
         project_id = str(
-            extract_nested_value(project_result, "Result", "ProjectId")
-            or extract_nested_value(project_result, "ProjectId")
-            or extract_nested_value(project_result, "Id")
+            project_result.get("ProjectId")
+            or project_result.get("Id")
+            or project_result.get("ProjectName")
             or ""
         )
     if req.create_endpoint:
-        endpoint_result = _call_asset_api(
-            "CreateEndpoint",
-            {
-                "ProjectId": project_id,
-                "ProjectName": project_name,
-                "Name": slug,
-                "Description": f"Relay customer endpoint {slug}",
-            },
-            BYTEPLUS_ACCESSKEY,
-            BYTEPLUS_SECRETKEY,
-        )
-        endpoint_id = str(
-            extract_nested_value(endpoint_result, "Result", "EndpointId")
-            or extract_nested_value(endpoint_result, "EndpointId")
-            or extract_nested_value(endpoint_result, "Id")
-            or endpoint_id
-            or ""
-        )
+        for client_model in _enabled_models_for_user(user):
+            endpoint_result = _call_asset_api(
+                "CreateEndpoint",
+                _endpoint_create_body(slug, project_name, str(user.get("email") or ""), client_model),
+                BYTEPLUS_ACCESSKEY,
+                BYTEPLUS_SECRETKEY,
+            )
+            created_endpoint_id = str(
+                extract_nested_value(endpoint_result, "Result", "EndpointId")
+                or extract_nested_value(endpoint_result, "EndpointId")
+                or extract_nested_value(endpoint_result, "Id")
+                or ""
+            )
+            if created_endpoint_id:
+                endpoint_map[client_model] = created_endpoint_id
+                if not endpoint_id:
+                    endpoint_id = created_endpoint_id
+                _wait_endpoint_ready(created_endpoint_id, project_name)
     if req.create_asset_group:
         group_result = _call_asset_api(
             "CreateAssetGroup",
@@ -1705,12 +1954,14 @@ def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamReq
         "byteplus_project_name": project_name,
         "byteplus_project_id": project_id,
         "byteplus_endpoint_id": endpoint_id,
+        "byteplus_endpoint_map": endpoint_map,
         "modelark_asset_group_id": asset_group_id,
     }
     if req.rotate_endpoint_key:
-        if not endpoint_id:
+        endpoint_ids = list(endpoint_map.values()) or ([endpoint_id] if endpoint_id else [])
+        if not endpoint_ids:
             raise RuntimeError("endpoint id is required before rotating endpoint API key")
-        issued = _get_endpoint_api_key(endpoint_id, req.endpoint_key_duration_seconds)
+        issued = _get_endpoint_api_key(endpoint_ids, req.endpoint_key_duration_seconds)
         result["endpoint_api_key"] = issued["api_key"]
         result["byteplus_endpoint_api_key_expires_at"] = issued["expires_at"]
     return result
@@ -1730,6 +1981,7 @@ def _apply_upstream_result_to_user(
         "byteplus_project_name": updates.get("byteplus_project_name") or "",
         "byteplus_project_id": updates.get("byteplus_project_id") or "",
         "byteplus_endpoint_id": updates.get("byteplus_endpoint_id") or "",
+        "byteplus_endpoint_map": updates.get("byteplus_endpoint_map") or {},
         "modelark_asset_group_id": updates.get("modelark_asset_group_id") or "",
         "byteplus_endpoint_key_rotation_enabled": bool(rotation_enabled),
         "byteplus_upstream_updated_at": now,
@@ -3411,7 +3663,7 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
             "needed_usd": your_max_cost, "balance_usd": user["balance_usd"],
         }})
 
-    user_endpoint_id = _user_byteplus_endpoint_id(user)
+    user_endpoint_id = _user_byteplus_endpoint_id_for_model(user, client_model, real_model)
     user_bp_key = (user.get("byteplus_api_key") or "").strip()
     bp_key = user_bp_key or UPSTREAM_API_KEY
     if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
@@ -4627,7 +4879,7 @@ async def admin_update_user(user_id: str, req: UpdateUserReq):
         if not req.is_active:
             db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
     if req.note is not None:
-        fields.append("note=?"); args.append(req.note)
+        fields.append("note=?"); args.append(_merge_note_preserving_upstream_fields(u["note"], req.note))
     if req.new_password:
         fields.append("password_hash=?"); args.append(hash_password(req.new_password))
         fields.append("password_changed_at=?"); args.append(int(time.time()))

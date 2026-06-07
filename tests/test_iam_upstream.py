@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -176,6 +177,86 @@ class IAMUpstreamTests(unittest.TestCase):
             "Bearer customer-endpoint-task-key",
         )
         self.assertEqual(self.fake_http.posts[0]["json"]["model"], "ep-customer-dedicated")
+
+    def test_iam_mode_customer_endpoint_map_routes_by_client_model(self):
+        self.fake_http.fail_on_post = False
+        db = self.server.get_db()
+        db.execute(
+            "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+            (
+                "customer-multi-endpoint-key",
+                json.dumps(
+                    {
+                        "byteplus_endpoint_id": "ep-default-standard",
+                        "byteplus_endpoint_map": {
+                            "dreamina-seedance-2-0-260128": "ep-standard",
+                            "seedance-1-5-pro-251215": "ep-seedance15",
+                        },
+                    }
+                ),
+                "u_iam",
+            ),
+        )
+        db.close()
+
+        response = self.client.post(
+            "/v1/videos",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": "seedance-1-5-pro-251215",
+                "content": [{"type": "text", "text": "A premium cinematic product reveal."}],
+                "resolution": "480p",
+                "duration": 5,
+                "generate_audio": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.fake_tasks.created, [])
+        self.assertEqual(len(self.fake_http.posts), 1)
+        self.assertEqual(
+            self.fake_http.posts[0]["headers"]["Authorization"],
+            "Bearer customer-multi-endpoint-key",
+        )
+        self.assertEqual(self.fake_http.posts[0]["json"]["model"], "ep-seedance15")
+        self.assertEqual(response.json()["model"], "seedance-1-5-pro-251215")
+
+    def test_iam_mode_customer_endpoint_map_blocks_unmapped_model(self):
+        self.fake_http.fail_on_post = False
+        db = self.server.get_db()
+        db.execute(
+            "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+            (
+                "customer-multi-endpoint-key",
+                json.dumps(
+                    {
+                        "byteplus_endpoint_id": "ep-default-standard",
+                        "byteplus_endpoint_map": {
+                            "dreamina-seedance-2-0-260128": "ep-standard",
+                        },
+                    }
+                ),
+                "u_iam",
+            ),
+        )
+        db.close()
+
+        response = self.client.post(
+            "/v1/videos",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": "dreamina-seedance-2-0-fast-260128",
+                "content": [{"type": "text", "text": "A fast route request."}],
+                "resolution": "480p",
+                "duration": 5,
+                "generate_audio": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["detail"]["error"]["code"], "endpoint_not_configured_for_model")
+        self.assertEqual(self.fake_http.posts, [])
+        self.assertEqual(self.fake_tasks.created, [])
 
     def test_iam_mode_refresh_ignores_legacy_customer_byteplus_key(self):
         db = self.server.get_db()

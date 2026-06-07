@@ -138,6 +138,29 @@ class UpstreamAdminTests(unittest.TestCase):
         self.assertEqual(row["byteplus_api_key"], "rotated-endpoint-key")
         self.assertEqual(json.loads(row["note"])["byteplus_endpoint_api_key_expires_at"], 1234567890)
 
+    def test_endpoint_key_request_uses_resource_ids_contract(self):
+        calls = []
+
+        def fake_call_asset_api(action, body, ak, sk):
+            calls.append({"action": action, "body": body, "ak": ak, "sk": sk})
+            return {"ApiKey": "endpoint-key", "ExpiredTime": 1234567890}
+
+        self.server._call_asset_api = fake_call_asset_api
+
+        issued = self.server._get_endpoint_api_key("ep-peter", 3600)
+
+        self.assertEqual(issued, {"api_key": "endpoint-key", "expires_at": 1234567890})
+        self.assertEqual(calls, [{
+            "action": "GetApiKey",
+            "body": {
+                "DurationSeconds": 3600,
+                "ResourceType": "endpoint",
+                "ResourceIds": ["ep-peter"],
+            },
+            "ak": "ak-test",
+            "sk": "sk-test",
+        }])
+
     def test_admin_can_create_dry_run_and_mocked_provision_job(self):
         dry_run = self.client.post(
             f"/admin/users/{self.user_id}/upstream/provision",
@@ -201,20 +224,32 @@ class UpstreamAdminTests(unittest.TestCase):
 
     def test_provision_creates_aigc_asset_group_inside_customer_project(self):
         calls = []
+        ensured_projects = []
 
         def fake_call_asset_api(action, body, ak, sk):
             calls.append({"action": action, "body": body, "ak": ak, "sk": sk})
-            if action == "CreateProject":
-                return {"Result": {"ProjectId": "project-peter"}}
             if action == "CreateEndpoint":
-                return {"Result": {"EndpointId": "ep-peter"}}
+                return {"Result": {"EndpointId": f"ep-peter-{len([c for c in calls if c['action'] == 'CreateEndpoint'])}"}}
+            if action == "GetEndpoint":
+                return {"Result": {"Status": "Running"}}
             if action == "CreateAssetGroup":
                 return {"Result": {"Id": "group-peter"}}
             if action == "GetApiKey":
                 return {"Result": {"ApiKey": "peter-endpoint-key", "ExpiresAt": 2222222222}}
             raise AssertionError(f"unexpected action: {action}")
 
+        def fake_ensure_project(project_name, display_name, description):
+            ensured_projects.append(
+                {
+                    "project_name": project_name,
+                    "display_name": display_name,
+                    "description": description,
+                }
+            )
+            return {"ProjectName": project_name, "Status": "Created"}
+
         self.server._call_asset_api = fake_call_asset_api
+        self.server._ensure_byteplus_project = fake_ensure_project
         db = self.server.get_db()
         user = dict(db.execute("SELECT * FROM users WHERE id=?", (self.user_id,)).fetchone())
         db.close()
@@ -231,9 +266,97 @@ class UpstreamAdminTests(unittest.TestCase):
 
         self.assertEqual(result["byteplus_project_name"], "peterlv")
         self.assertEqual(result["modelark_asset_group_id"], "group-peter")
+        self.assertEqual(set(result["byteplus_endpoint_map"]), set(self.server.DEFAULT_CUSTOMER_MODEL_IDS))
+        self.assertEqual(ensured_projects[0]["project_name"], "peterlv")
+        self.assertNotIn("CreateProject", [call["action"] for call in calls])
+        create_endpoint_calls = [call for call in calls if call["action"] == "CreateEndpoint"]
+        self.assertEqual(len(create_endpoint_calls), len(self.server.DEFAULT_CUSTOMER_MODEL_IDS))
+        create_endpoint = create_endpoint_calls[0]
+        self.assertEqual(create_endpoint["body"]["ProjectName"], "peterlv")
+        self.assertEqual(create_endpoint["body"]["Name"], "relay-peterlv-sd-2-0-260128")
+        self.assertEqual(
+            create_endpoint["body"]["ModelReference"],
+            {
+                "FoundationModel": {
+                    "Name": "dreamina-seedance-2-0",
+                    "ModelVersion": "260128",
+                },
+                "CustomModelId": "",
+            },
+        )
+        self.assertEqual(create_endpoint["body"]["Moderation"], {"Strategy": "Skip"})
         create_group = next(call for call in calls if call["action"] == "CreateAssetGroup")
         self.assertEqual(create_group["body"]["GroupType"], "AIGC")
         self.assertEqual(create_group["body"]["ProjectName"], "peterlv")
+        get_key = next(call for call in calls if call["action"] == "GetApiKey")
+        self.assertEqual(set(get_key["body"]["ResourceIds"]), set(result["byteplus_endpoint_map"].values()))
+
+    def test_main_user_save_preserves_endpoint_note_fields_from_stale_form(self):
+        patched = self.client.patch(
+            f"/admin/users/{self.user_id}/upstream",
+            headers=self.admin_headers(),
+            json={
+                "upstream_mode": "auto_dedicated",
+                "customer_slug": "peterlv",
+                "byteplus_project_name": "peterlv",
+                "byteplus_endpoint_id": "ep-peter",
+                "modelark_asset_group_id": "group-peter",
+                "endpoint_key_rotation_enabled": True,
+            },
+        )
+        self.assertEqual(patched.status_code, 200, patched.text)
+
+        stale_note_from_open_form = json.dumps({"legacy_note": "opened before endpoint save"})
+        saved = self.client.patch(
+            f"/admin/users/{self.user_id}",
+            headers=self.admin_headers(),
+            json={
+                "balance_usd": 51.0,
+                "note": stale_note_from_open_form,
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+
+        current = self.client.get(
+            f"/admin/users/{self.user_id}/upstream",
+            headers=self.admin_headers(),
+        )
+        self.assertEqual(current.status_code, 200, current.text)
+        body = current.json()
+        self.assertEqual(body["byteplus_endpoint_id"], "ep-peter")
+        self.assertEqual(body["modelark_asset_group_id"], "group-peter")
+        self.assertTrue(body["endpoint_key_rotation_enabled"])
+
+    def test_ensure_byteplus_project_uses_iam_project_openapi(self):
+        calls = []
+
+        def fake_call_iam_api(action, params, ak, sk):
+            calls.append({"action": action, "params": params, "ak": ak, "sk": sk})
+            if action == "GetProject":
+                raise self.server.HTTPException(502, {"error": {
+                    "code": "iam_project_error",
+                    "message": "EntityNotFound: project is not found",
+                }})
+            if action == "CreateProject":
+                return {"Result": {"Project": {"ProjectName": params["ProjectName"], "Id": 41626686}}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        self.server._call_iam_api = fake_call_iam_api
+
+        result = self.server._ensure_byteplus_project(
+            "peterlv",
+            display_name="peterlv",
+            description="Relay customer peterlv",
+        )
+
+        self.assertEqual(result["ProjectName"], "peterlv")
+        self.assertEqual([call["action"] for call in calls], ["GetProject", "CreateProject"])
+        self.assertEqual(calls[1]["params"], {
+            "ProjectName": "peterlv",
+            "Description": "Relay customer peterlv",
+        })
+        self.assertEqual(calls[1]["ak"], "ak-test")
+        self.assertEqual(calls[1]["sk"], "sk-test")
 
     def test_iam_capabilities_reports_configured_flags_without_secrets(self):
         resp = self.client.get("/admin/upstream/iam-capabilities", headers=self.admin_headers())

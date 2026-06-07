@@ -68,12 +68,25 @@ def hash_sha256(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def request_api(action: str, body: dict[str, Any], ak: str, sk: str) -> dict[str, Any]:
-    body_json = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+def request_signed_api(
+    action: str,
+    body: dict[str, Any] | None,
+    ak: str,
+    sk: str,
+    *,
+    service: str = SERVICE,
+    region: str = REGION,
+    host: str = HOST,
+    version: str = VERSION,
+    query_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    body_json = "" if body is None else json.dumps(body, separators=(",", ":"), ensure_ascii=False)
     now = dt.datetime.utcnow()
     x_date = now.strftime("%Y%m%dT%H%M%SZ")
     short_date = x_date[:8]
-    query = {"Action": action, "Version": VERSION}
+    query = {"Action": action, "Version": version}
+    if query_params:
+        query.update(query_params)
     body_hash = hash_sha256(body_json)
 
     signed_headers = "content-type;host;x-content-sha256;x-date"
@@ -85,7 +98,7 @@ def request_api(action: str, body: dict[str, Any], ak: str, sk: str) -> dict[str
             "\n".join(
                 [
                     f"content-type:{CONTENT_TYPE}",
-                    f"host:{HOST}",
+                    f"host:{host}",
                     f"x-content-sha256:{body_hash}",
                     f"x-date:{x_date}",
                 ]
@@ -95,14 +108,14 @@ def request_api(action: str, body: dict[str, Any], ak: str, sk: str) -> dict[str
             body_hash,
         ]
     )
-    credential_scope = "/".join([short_date, REGION, SERVICE, "request"])
+    credential_scope = "/".join([short_date, region, service, "request"])
     string_to_sign = "\n".join(
         ["HMAC-SHA256", x_date, credential_scope, hash_sha256(canonical_request)]
     )
 
     k_date = hmac_sha256(sk.encode("utf-8"), short_date)
-    k_region = hmac_sha256(k_date, REGION)
-    k_service = hmac_sha256(k_region, SERVICE)
+    k_region = hmac_sha256(k_date, region)
+    k_service = hmac_sha256(k_region, service)
     k_signing = hmac_sha256(k_service, "request")
     signature = hmac_sha256(k_signing, string_to_sign).hex()
     authorization = (
@@ -110,14 +123,14 @@ def request_api(action: str, body: dict[str, Any], ak: str, sk: str) -> dict[str
         f"SignedHeaders={signed_headers}, Signature={signature}"
     )
 
-    url = f"https://{HOST}{PATH}?{norm_query(query)}"
+    url = f"https://{host}{PATH}?{norm_query(query)}"
     req = urllib.request.Request(
         url,
         data=body_json.encode("utf-8"),
         method="POST",
         headers={
             "Content-Type": CONTENT_TYPE,
-            "Host": HOST,
+            "Host": host,
             "X-Content-Sha256": body_hash,
             "X-Date": x_date,
             "Authorization": authorization,
@@ -136,6 +149,10 @@ def request_api(action: str, body: dict[str, Any], ak: str, sk: str) -> dict[str
         return json.loads(text)
     except json.JSONDecodeError as exc:
         raise SystemExit(f"{action} returned invalid JSON:\n{text}") from exc
+
+
+def request_api(action: str, body: dict[str, Any], ak: str, sk: str) -> dict[str, Any]:
+    return request_signed_api(action, body, ak, sk)
 
 
 def build_create_asset_body(

@@ -115,7 +115,10 @@ class ModelAliasTests(unittest.TestCase):
         models = self.client.get("/v1/models", headers=self.auth_headers(user["api_key"]))
         self.assertEqual(models.status_code, 200, models.text)
         ids = [item["id"] for item in models.json()["data"]]
+        self.assertEqual(ids, self.server.DEFAULT_CUSTOMER_MODEL_IDS)
+        self.assertEqual(self.server.DEFAULT_CUSTOMER_MODEL_IDS, self.server.NATIVE_MODEL_IDS)
         self.assertIn("dreamina-seedance-2-0-260128", ids)
+        self.assertIn("dreamina-seedance-2-0-fast-260128", ids)
         self.assertNotIn("video-pro", ids)
 
         denied = self.client.post(
@@ -140,8 +143,10 @@ class ModelAliasTests(unittest.TestCase):
         items = response.json()["data"]
         by_id = {item["id"]: item for item in items}
         self.assertIn("dreamina-seedance-2-0-260128", by_id)
+        self.assertIn("dreamina-seedance-2-0-fast-260128", by_id)
         self.assertIn("video-pro", by_id)
         self.assertFalse(by_id["dreamina-seedance-2-0-260128"]["is_alias"])
+        self.assertFalse(by_id["dreamina-seedance-2-0-fast-260128"]["is_alias"])
         self.assertTrue(by_id["video-pro"]["is_alias"])
         self.assertEqual(by_id["video-pro"]["alias_for"], "dreamina-seedance-2-0-260128")
         self.assertNotIn("upstream_model_or_endpoint", response.text)
