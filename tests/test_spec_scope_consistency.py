@@ -88,6 +88,12 @@ class SpecScopeConsistencyTests(unittest.TestCase):
 
         self.assertIn("客户只用 Relay API Key", app_html)
         self.assertIn("内部密钥不会出现在用户端", app_html)
+        self.assertIn("低审查内容生成规范", app_html)
+        self.assertIn("curl https://seedance3.eu/v1/videos", app_html)
+        self.assertIn("adult-only cinematic editorial video", app_html)
+        self.assertIn('"references": [', app_html)
+        self.assertIn('"asset_id": "upl_6b867a97c567d64d"', app_html)
+        self.assertNotIn("https://video.example.com", app_html)
         for fragment in [
             "NSFW",
             "SFW",

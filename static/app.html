@@ -800,6 +800,43 @@
         <div class="card card-pad markdown-body" v-loading="loading.docs">
           <div v-html="docsHtml"></div>
         </div>
+        <div class="card card-pad markdown-body" style="margin-top:18px;">
+          <h2>低审查内容生成规范</h2>
+          <p>本节是技术文档页下方的客户可见操作规范，用于说明如何上传授权素材、引用素材 ID，并用当前账号的可用模型发起生成任务。</p>
+          <h3>适用范围</h3>
+          <ul>
+            <li>仅适用于已取得授权的成年人素材、商业广告素材、剧情/影视化创作素材。</li>
+            <li>素材上传后会绑定到当前客户账号，其他客户不可见。</li>
+            <li>生成任务只需要传 Relay API Key、模型 ID、提示词和素材引用。</li>
+          </ul>
+          <h3>禁止范围</h3>
+          <ul>
+            <li>不得上传或生成未成年人相关、非授权真人、隐私侵害、诈骗、勒索、仇恨或违法内容。</li>
+            <li>不得把他人肖像、声音、身份标识用于误导性冒充。</li>
+            <li>平台会保留任务、素材引用和账单记录，用于客户查询、争议处理和合规审计。</li>
+          </ul>
+          <h3>推荐流程</h3>
+          <ol>
+            <li>在“素材库”上传客户自己的图片、视频或音频素材。</li>
+            <li>上传成功后复制素材 ID，例如 <code>upl_6b867a97c567d64d</code>。</li>
+            <li>在生成请求里把素材 ID 放入 <code>references[].asset_id</code>，并填写清楚的授权创作提示词。</li>
+            <li>任务完成后直接读取返回的视频地址；视频文件默认保留在字节侧存储，Relay 只做转发和账单记录。</li>
+          </ol>
+          <pre><code>curl https://seedance3.eu/v1/uploads \
+  -H "Authorization: Bearer sk-your-relay-key" \
+  -F "file=@reference.jpg" \
+  -F "purpose=reference"</code></pre>
+          <pre><code>curl https://seedance3.eu/v1/videos \
+  -H "Authorization: Bearer sk-your-relay-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "dreamina-seedance-2-0-260128",
+    "prompt": "adult-only cinematic editorial video, authorized performer, elegant studio lighting",
+    "references": [
+      { "asset_id": "upl_6b867a97c567d64d", "role": "reference_image" }
+    ]
+  }'</code></pre>
+        </div>
       </section>
 
       <!-- ACCOUNT -->
