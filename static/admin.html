@@ -907,16 +907,109 @@
           </div>
         </el-form-item>
         <el-form-item label="BytePlus 标签">
+          <div class="info-box" style="margin-bottom:18px;">
+            <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:12px;">
+              <div>
+                <b>Customer Endpoint</b>
+                <div style="font-size:12px; margin-top:3px;">shared = 普通客户；auto_dedicated = 独立 project / endpoint / asset group。</div>
+              </div>
+              <el-tag :type="upstreamForm.upstream_mode === 'auto_dedicated' ? 'success' : 'info'" effect="light">
+                {{ upstreamForm.upstream_mode || 'shared' }}
+              </el-tag>
+            </div>
+            <el-row :gutter="10">
+              <el-col :span="8">
+                <el-form-item label="Mode">
+                  <el-select v-model="upstreamForm.upstream_mode" style="width:100%">
+                    <el-option label="shared" value="shared" />
+                    <el-option label="manual_dedicated" value="manual_dedicated" />
+                    <el-option label="auto_dedicated" value="auto_dedicated" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="8"><el-form-item label="customer_slug"><el-input v-model="upstreamForm.customer_slug" placeholder="peterlv" /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="project_name"><el-input v-model="upstreamForm.byteplus_project_name" placeholder="peterlv" /></el-form-item></el-col>
+            </el-row>
+            <el-row :gutter="10">
+              <el-col :span="8"><el-form-item label="endpoint_id"><el-input v-model="upstreamForm.byteplus_endpoint_id" placeholder="ep-..." /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="asset_group_id"><el-input v-model="upstreamForm.modelark_asset_group_id" placeholder="group-..." /></el-form-item></el-col>
+              <el-col :span="8"><el-form-item label="endpoint key"><el-input v-model="upstreamForm.endpoint_api_key" :placeholder="upstreamForm.endpoint_api_key_masked ? `当前: ${upstreamForm.endpoint_api_key_masked}` : '留空不改'" /></el-form-item></el-col>
+            </el-row>
+            <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+              <el-checkbox v-model="upstreamForm.endpoint_key_rotation_enabled">自动轮换 endpoint key</el-checkbox>
+              <el-button size="small" :loading="loading.upstream" @click="saveUpstreamConfig">保存 Endpoint 配置</el-button>
+              <el-button size="small" plain :loading="loading.provision" @click="provisionCustomerEndpoint(true)">Dry run</el-button>
+              <el-button size="small" type="primary" :loading="loading.provision" @click="provisionCustomerEndpoint(false)">创建独立 Endpoint</el-button>
+              <el-button size="small" type="warning" plain :loading="loading.rotateEndpointKey" :disabled="!upstreamForm.byteplus_endpoint_id" @click="rotateEndpointKey">轮换 endpoint key</el-button>
+            </div>
+            <div v-if="upstreamForm.byteplus_endpoint_api_key_expires_at" style="font-size:12px; color:var(--text-muted); margin-top:8px;">
+              expires: {{ fmtTs(upstreamForm.byteplus_endpoint_api_key_expires_at) }}
+              <span v-if="upstreamForm.byteplus_endpoint_key_rotation_error"> / error: {{ upstreamForm.byteplus_endpoint_key_rotation_error }}</span>
+            </div>
+            <div v-if="upstreamJob" class="credential-box" style="margin-top:10px;">
+              <div class="credential-label">Provision job</div>
+              <div class="credential-value">{{ upstreamJob.id }} / {{ upstreamJob.status }}</div>
+            </div>
+          </div>
           <el-input v-model="editForm.byteplus_account_label" />
         </el-form-item>
         <el-form-item label="新密码 (留空不改)">
           <el-input v-model="editForm.new_password" type="password" show-password autocomplete="new-password" minlength="10" placeholder="至少 10 位；留空不改" />
+          <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
+            <el-checkbox v-model="editForm.force_change_on_next_login">下次登录强制改密</el-checkbox>
+            <el-button size="small" type="warning" plain :loading="loading.resetPassword" @click="resetCustomerPassword(true)">
+              生成临时密码
+            </el-button>
+            <el-button size="small" plain :loading="loading.resetPassword" :disabled="!editForm.new_password" @click="resetCustomerPassword(false)">
+              使用上方密码重置
+            </el-button>
+          </div>
+          <div v-if="resetPasswordResult?.temporary_password" class="credential-box" style="margin-top:10px;">
+            <div class="credential-label">客户临时密码 (只显示一次)</div>
+            <div class="credential-value">{{ resetPasswordResult.temporary_password }}</div>
+          </div>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="editForm.note" type="textarea" :rows="2" />
         </el-form-item>
         <el-checkbox v-model="editForm.is_active">账号已启用</el-checkbox>
       </el-form>
+
+      <h4 style="margin:24px 0 12px; font-size:14px; display:flex; align-items:center; gap:8px;">
+        <el-icon><Money /></el-icon> 账单
+      </h4>
+      <div class="info-box" style="margin-bottom:18px;">
+        <el-row :gutter="10">
+          <el-col :span="10">
+            <el-date-picker
+              v-model="billingForm.range"
+              type="daterange"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              style="width:100%"
+            />
+          </el-col>
+          <el-col :span="4">
+            <el-input-number v-model="billingForm.discount_usd" :precision="2" :min="0" controls-position="right" placeholder="折扣" style="width:100%" />
+          </el-col>
+          <el-col :span="10">
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <el-button size="small" :loading="loading.billing" @click="previewBilling">预览账单</el-button>
+              <el-button size="small" type="primary" :loading="loading.billing" @click="saveInvoice">保存账单</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('customer')">导出客户 CSV</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('internal')">导出内部 CSV</el-button>
+              <el-button size="small" type="success" plain :disabled="!savedInvoice || savedInvoice.status === 'paid'" @click="markInvoicePaid">标记已付款</el-button>
+            </div>
+          </el-col>
+        </el-row>
+        <div v-if="invoicePreview" style="display:flex; gap:18px; margin-top:12px; flex-wrap:wrap;">
+          <span>任务数：<b>{{ invoicePreview.task_count }}</b></span>
+          <span>收入：<b>${{ fmt(invoicePreview.total_usd) }}</b></span>
+          <span>BP 成本：<b>${{ fmt(invoicePreview.upstream_cost_usd) }}</b></span>
+          <span>毛利：<b>${{ fmt(invoicePreview.gross_profit_usd) }}</b></span>
+          <span v-if="savedInvoice">账单：<b>{{ savedInvoice.invoice_no }}</b> / {{ savedInvoice.status }}</span>
+        </div>
+      </div>
 
       <h4 style="margin:24px 0 12px; font-size:14px; display:flex; align-items:center; gap:8px;">
         <el-icon><FolderOpened /></el-icon> 最近 20 个素材
@@ -1020,16 +1113,22 @@ const App = {
       tasks: [],
       auditEvents: [],
       auditFilters: { action: "", target_id: "" },
-      loading: { stats: false, config: false, users: false, uploads: false, reconcile: false, tasks: false, audit: false, newUser: false, saveUser: false, rotateKey: false, docs: false },
+      loading: { stats: false, config: false, users: false, uploads: false, reconcile: false, tasks: false, audit: false, newUser: false, saveUser: false, rotateKey: false, resetPassword: false, billing: false, docs: false, upstream: false, provision: false, rotateEndpointKey: false },
       docsHtml: "",
 
       dialogs: { newUser: false, editUser: false, created: false, rotatedKey: false },
       newUserForm: this.emptyNewUser(),
       created: null,
       rotatedKey: null,
+      resetPasswordResult: null,
+      invoicePreview: null,
+      savedInvoice: null,
 
       editing: null,
       editForm: {},
+      upstreamForm: {},
+      upstreamJob: null,
+      billingForm: { range: [], discount_usd: 0 },
       topupAmount: null,
 
     };
@@ -1262,6 +1361,7 @@ const App = {
       try {
         await this.loadAllModels();
         const u = await this.api(`/admin/users/${row.id}`);
+        const upstream = await this.api(`/admin/users/${row.id}/upstream`);
         this.editing = u;
         this.editForm = {
           balance_usd: u.balance_usd,
@@ -1271,10 +1371,30 @@ const App = {
           byteplus_api_key: "",
           byteplus_account_label: u.byteplus_account_label || "",
           new_password: "",
+          force_change_on_next_login: true,
           note: u.note || "",
           is_active: !!u.is_active,
         };
+        this.upstreamForm = {
+          upstream_mode: upstream.upstream_mode || "shared",
+          customer_slug: upstream.customer_slug || (u.email || u.id).split("@")[0],
+          byteplus_project_name: upstream.byteplus_project_name || upstream.customer_slug || "",
+          byteplus_endpoint_id: upstream.byteplus_endpoint_id || "",
+          modelark_asset_group_id: upstream.modelark_asset_group_id || "",
+          endpoint_api_key: "",
+          endpoint_api_key_masked: upstream.endpoint_api_key_masked || "",
+          endpoint_key_rotation_enabled: !!upstream.endpoint_key_rotation_enabled,
+          byteplus_endpoint_api_key_expires_at: upstream.byteplus_endpoint_api_key_expires_at,
+          byteplus_endpoint_key_rotation_error: upstream.byteplus_endpoint_key_rotation_error || "",
+        };
+        this.upstreamJob = null;
         this.topupAmount = null;
+        this.resetPasswordResult = null;
+        const now = new Date();
+        const start = new Date(now.getFullYear(), now.getMonth(), 1);
+        this.billingForm = { range: [start, now], discount_usd: 0 };
+        this.invoicePreview = null;
+        this.savedInvoice = null;
         this.dialogs.editUser = true;
       } catch (e) { ElMessage.error(this.errMsg(e)); }
     },
@@ -1309,6 +1429,160 @@ const App = {
         await this.loadUsers();
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.rotateKey = false; }
+    },
+    async resetCustomerPassword(generate) {
+      if (!this.editing?.id) return;
+      if (!generate && this.passwordTooShort(this.editForm.new_password)) {
+        ElMessage.warning("新密码至少 10 位");
+        return;
+      }
+      const title = generate ? "生成临时密码" : "重置客户密码";
+      try {
+        await ElMessageBox.confirm(
+          generate
+            ? `确认为 ${this.editing.email || this.editing.id} 生成临时密码？现有客户会话会撤销。`
+            : `确认把 ${this.editing.email || this.editing.id} 的密码重置为上方填写的新密码？现有客户会话会撤销。`,
+          title,
+          { type: "warning" },
+        );
+      } catch { return; }
+      this.loading.resetPassword = true;
+      try {
+        const body = {
+          generate,
+          new_password: generate ? null : this.editForm.new_password,
+          force_change_on_next_login: !!this.editForm.force_change_on_next_login,
+        };
+        const r = await this.api(`/admin/users/${this.editing.id}/password/reset`, { method: "POST", body: JSON.stringify(body) });
+        this.resetPasswordResult = r;
+        this.editForm.new_password = "";
+        ElMessage.success(generate ? "客户临时密码已生成" : "客户密码已重置");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.resetPassword = false; }
+    },
+    async saveUpstreamConfig() {
+      if (!this.editing?.id) return;
+      this.loading.upstream = true;
+      try {
+        const body = {
+          upstream_mode: this.upstreamForm.upstream_mode || "shared",
+          customer_slug: this.upstreamForm.customer_slug || "",
+          byteplus_project_name: this.upstreamForm.byteplus_project_name || "",
+          byteplus_endpoint_id: this.upstreamForm.byteplus_endpoint_id || "",
+          modelark_asset_group_id: this.upstreamForm.modelark_asset_group_id || "",
+          endpoint_key_rotation_enabled: !!this.upstreamForm.endpoint_key_rotation_enabled,
+          endpoint_api_key: this.upstreamForm.endpoint_api_key || "",
+        };
+        const r = await this.api(`/admin/users/${this.editing.id}/upstream`, { method: "PATCH", body: JSON.stringify(body) });
+        this.upstreamForm = { ...this.upstreamForm, ...r, endpoint_api_key: "" };
+        ElMessage.success("Endpoint 配置已保存");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.upstream = false; }
+    },
+    async provisionCustomerEndpoint(dryRun) {
+      if (!this.editing?.id) return;
+      if (!this.upstreamForm.customer_slug) {
+        ElMessage.warning("请先填写 customer_slug");
+        return;
+      }
+      if (!dryRun) {
+        try {
+          await ElMessageBox.confirm(
+            `确认为 ${this.editing.email || this.editing.id} 创建独立 BytePlus endpoint？`,
+            "创建独立 Endpoint",
+            { type: "warning" },
+          );
+        } catch { return; }
+      }
+      this.loading.provision = true;
+      try {
+        const r = await this.api(`/admin/users/${this.editing.id}/upstream/provision`, {
+          method: "POST",
+          body: JSON.stringify({
+            customer_slug: this.upstreamForm.customer_slug,
+            dry_run: !!dryRun,
+            create_project: true,
+            create_endpoint: true,
+            create_asset_group: true,
+            rotate_endpoint_key: true,
+            endpoint_key_duration_seconds: 2592000,
+          }),
+        });
+        this.upstreamJob = r;
+        if (r.upstream) this.upstreamForm = { ...this.upstreamForm, ...r.upstream, endpoint_api_key: "" };
+        ElMessage.success(dryRun ? "Dry run 已完成" : "独立 Endpoint 已创建");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.provision = false; }
+    },
+    async rotateEndpointKey() {
+      if (!this.editing?.id || !this.upstreamForm.byteplus_endpoint_id) return;
+      try {
+        await ElMessageBox.confirm(
+          `确认轮换 ${this.editing.email || this.editing.id} 的 endpoint API key？`,
+          "轮换 endpoint key",
+          { type: "warning" },
+        );
+      } catch { return; }
+      this.loading.rotateEndpointKey = true;
+      try {
+        const r = await this.api(`/admin/users/${this.editing.id}/upstream/endpoint-key/rotate`, {
+          method: "POST",
+          body: JSON.stringify({ duration_seconds: 2592000 }),
+        });
+        this.upstreamForm = { ...this.upstreamForm, ...r, endpoint_api_key: "" };
+        ElMessage.success("endpoint key 已轮换");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.rotateEndpointKey = false; }
+    },
+    billingPeriod() {
+      const range = this.billingForm.range || [];
+      if (!range[0] || !range[1]) {
+        ElMessage.warning("请选择账期");
+        return null;
+      }
+      return {
+        period_start: Math.floor(new Date(range[0]).getTime() / 1000),
+        period_end: Math.floor(new Date(range[1]).getTime() / 1000) + 86400,
+      };
+    },
+    async previewBilling() {
+      if (!this.editing?.id) return;
+      const period = this.billingPeriod();
+      if (!period) return;
+      this.loading.billing = true;
+      try {
+        const qs = new URLSearchParams(period);
+        this.invoicePreview = await this.api(`/admin/users/${this.editing.id}/billing/preview?${qs.toString()}`);
+        ElMessage.success("账单预览已更新");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.billing = false; }
+    },
+    async saveInvoice() {
+      if (!this.editing?.id) return;
+      const period = this.billingPeriod();
+      if (!period) return;
+      this.loading.billing = true;
+      try {
+        const body = { ...period, discount_usd: Number(this.billingForm.discount_usd || 0) };
+        this.savedInvoice = await this.api(`/admin/users/${this.editing.id}/invoices`, { method: "POST", body: JSON.stringify(body) });
+        await this.previewBilling();
+        ElMessage.success("账单已保存");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.billing = false; }
+    },
+    async exportInvoice(view) {
+      if (!this.savedInvoice?.id) return;
+      const suffix = view === "internal" ? "/export?format=csv&view=internal" : "/export?format=csv&view=customer";
+      window.open(`/admin/invoices/${this.savedInvoice.id}${suffix}`, "_blank", "noopener");
+    },
+    async markInvoicePaid() {
+      if (!this.savedInvoice?.id) return;
+      this.loading.billing = true;
+      try {
+        this.savedInvoice = await this.api(`/admin/invoices/${this.savedInvoice.id}/mark-paid`, { method: "POST" });
+        ElMessage.success("账单已标记为 paid");
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.billing = false; }
     },
     async saveEditUser() {
       if (this.editForm.new_password && this.passwordTooShort(this.editForm.new_password)) {

@@ -686,6 +686,7 @@
                   <el-button size="small" @click="useUpload(a)"><el-icon><Check /></el-icon> 用作参考</el-button>
                   <el-button size="small" @click="copyContentBlock(a)"><el-icon><CopyDocument /></el-icon> 复制引用</el-button>
                   <el-button size="small" text @click="openUrl(a.url)">打开</el-button>
+                  <el-button size="small" text type="danger" @click="deleteUpload(a)">删除</el-button>
                 </div>
                 <div v-if="a.asset_url" class="mono" style="font-size:11px; color:var(--text-muted); margin-top:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                   {{ a.asset_url }}
@@ -1307,6 +1308,29 @@ curl -X POST https://video.example.com/v1/uploads \\
     copyContentBlock(asset) {
       navigator.clipboard.writeText(JSON.stringify(asset.suggested_content_block, null, 2));
       ElMessage.success("引用块已复制");
+    },
+    async deleteUpload(asset) {
+      if (!confirm(`删除素材「${asset.original_filename || asset.id}」？删除后不会再出现在素材库。`)) return;
+      try {
+        const result = await this.api(`/v1/uploads/${asset.id}`, { method: "DELETE" });
+        this.uploads = this.uploads.filter(a => a.id !== asset.id);
+        if (this.form.upload_id === asset.id) {
+          this.form.upload_id = "";
+          this.scheduleEstimate();
+        }
+        const request = result.asset_delete_request;
+        if (request?.status === "pending_admin") {
+          ElMessage.success("素材已删除，BytePlus asset 等待平台批量删除");
+        } else if (request?.status === "succeeded") {
+          ElMessage.success("素材和 BytePlus asset 已删除");
+        } else if (request?.status === "blocked") {
+          ElMessage.warning("素材已移出素材库，BytePlus asset 删除请求被安全检查阻止");
+        } else {
+          ElMessage.success("素材已删除");
+        }
+      } catch (e) {
+        ElMessage.error(this.errMsg(e));
+      }
     },
     copyText(text) {
       navigator.clipboard.writeText(text || "");

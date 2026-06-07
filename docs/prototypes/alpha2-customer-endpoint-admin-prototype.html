@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alpha2 客户独立 Endpoint 管理原型</title>
+  <style>
+    :root {
+      --ink: #111827;
+      --muted: #667085;
+      --line: #d9e0ea;
+      --soft: #f5f7fb;
+      --panel: #ffffff;
+      --nav: #101828;
+      --blue: #2563eb;
+      --green: #15803d;
+      --amber: #b45309;
+      --red: #b42318;
+      --cyan: #0e7490;
+      --violet: #6d28d9;
+      --shadow: 0 18px 45px rgba(16, 24, 40, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #edf1f7;
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+    .frame {
+      width: 1440px;
+      height: 980px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 228px 1fr;
+      overflow: hidden;
+      background: var(--soft);
+    }
+    .sidebar {
+      background: var(--nav);
+      color: #cbd5e1;
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+    .brand {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 0 8px 18px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+    }
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #2563eb, #06b6d4);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      color: white;
+    }
+    .brand h1 { margin: 0; font-size: 15px; color: #fff; line-height: 1.2; }
+    .brand span { font-size: 11px; color: #8ea0b8; }
+    .nav { display: grid; gap: 6px; }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .nav-item.active {
+      background: rgba(37, 99, 235, .22);
+      color: #fff;
+      box-shadow: inset 0 0 0 1px rgba(96,165,250,.22);
+    }
+    .nav-item small {
+      margin-left: auto;
+      color: #8ea0b8;
+      font-size: 11px;
+    }
+    .admin-foot {
+      margin-top: auto;
+      border-top: 1px solid rgba(255,255,255,.08);
+      padding-top: 16px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #7c3aed;
+      color: white;
+      font-weight: 800;
+      font-size: 12px;
+    }
+    .main {
+      display: grid;
+      grid-template-rows: 72px 1fr;
+      min-width: 0;
+    }
+    .topbar {
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      padding: 14px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .topbar h2 { margin: 0; font-size: 22px; }
+    .topbar p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+    .btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      height: 34px;
+      border-radius: 7px;
+      padding: 0 12px;
+      font-weight: 700;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .btn.warn { background: #fff7ed; border-color: #fed7aa; color: #9a3412; }
+    .btn.danger { background: #fff1f2; border-color: #fecdd3; color: #be123c; }
+    .content {
+      padding: 24px 28px;
+      display: grid;
+      grid-template-columns: 355px 1fr 330px;
+      gap: 18px;
+      min-height: 0;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, .03);
+      min-width: 0;
+    }
+    .panel-head {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-head h3 { margin: 0; font-size: 15px; }
+    .search {
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      width: 188px;
+      color: #98a2b3;
+      display: flex;
+      align-items: center;
+      font-size: 13px;
+    }
+    .customer-list { padding: 10px; display: grid; gap: 8px; }
+    .customer {
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 36px 1fr;
+      gap: 10px;
+    }
+    .customer.active {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+    }
+    .customer h4 { margin: 0; font-size: 13px; }
+    .customer p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .tag {
+      border: 1px solid var(--line);
+      color: #475467;
+      background: #f8fafc;
+      border-radius: 999px;
+      font-size: 11px;
+      padding: 3px 7px;
+      line-height: 1;
+    }
+    .tag.green { color: var(--green); background: #f0fdf4; border-color: #bbf7d0; }
+    .tag.amber { color: var(--amber); background: #fffbeb; border-color: #fde68a; }
+    .tag.red { color: var(--red); background: #fff1f2; border-color: #fecdd3; }
+    .tag.blue { color: var(--blue); background: #eff6ff; border-color: #bfdbfe; }
+    .detail {
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+    .identity {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    .identity h2 { margin: 0; font-size: 22px; }
+    .identity p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }
+    .metric span { color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 7px; font-size: 18px; }
+    .section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .section-title h3 { margin: 0; font-size: 15px; }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      padding: 14px 16px;
+    }
+    .field label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .input {
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      font-size: 13px;
+      background: #fff;
+      min-width: 0;
+    }
+    .input.mono { font-family: Consolas, monospace; color: #344054; }
+    .full { grid-column: 1 / -1; }
+    .status-strip {
+      margin: 0 16px 14px;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #fed7aa;
+      background: #fff7ed;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+    }
+    .status-strip strong { color: #9a3412; font-size: 13px; }
+    .status-strip span { display: block; margin-top: 3px; color: #9a3412; font-size: 12px; }
+    .toggle {
+      width: 46px;
+      height: 24px;
+      border-radius: 999px;
+      background: #2563eb;
+      padding: 3px;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .toggle i {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      display: block;
+    }
+    .timeline { padding: 12px 16px 16px; display: grid; gap: 11px; }
+    .line-item {
+      display: grid;
+      grid-template-columns: 84px 1fr;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .line-item strong { color: #344054; }
+    .drawer {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .drawer-head {
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+    .drawer-head h3 { margin: 0; font-size: 16px; }
+    .drawer-head p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .drawer-body { padding: 16px; display: grid; gap: 14px; }
+    .action-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .action-card h4 { margin: 0; font-size: 14px; }
+    .action-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .check {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+      color: #475467;
+    }
+    .box {
+      width: 15px;
+      height: 15px;
+      border: 1px solid #94a3b8;
+      border-radius: 3px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: #2563eb;
+      font-size: 10px;
+    }
+    .audit {
+      height: 210px;
+      overflow: hidden;
+      padding: 14px 16px;
+      display: grid;
+      gap: 9px;
+    }
+    .audit-row {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 10px;
+      font-size: 12px;
+    }
+    .audit-row span { color: var(--muted); }
+    .audit-row strong { color: #344054; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">SR</div>
+        <div>
+          <h1>Seedance Relay</h1>
+          <span>Admin console</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <div class="nav-item">概览</div>
+        <div class="nav-item active">客户 <small>12</small></div>
+        <div class="nav-item">素材</div>
+        <div class="nav-item">任务流水</div>
+        <div class="nav-item">对账</div>
+        <div class="nav-item">审计</div>
+        <div class="nav-item">API 文档</div>
+      </nav>
+      <div class="admin-foot">
+        <div class="avatar">AD</div>
+        <div>
+          <div style="color:white;font-weight:700;font-size:13px;">admin@example.com</div>
+          <div style="color:#8ea0b8;font-size:11px;">Administrator</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h2>客户账号 / 独立 Endpoint 管理</h2>
+            <p>统一管理客户余额、模型权限，并直接通过 IAM 自动创建 BytePlus 独立 project、endpoint、素材组。</p>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn">刷新</button>
+          <button class="btn primary">新建客户</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>客户列表</h3>
+            <div class="search">搜索邮箱 / slug</div>
+          </div>
+          <div class="customer-list">
+            <article class="customer active">
+              <div class="avatar" style="background:#2563eb;">PL</div>
+              <div>
+                <h4>peterlv1985@gmail.com</h4>
+                <p>u_6cbe404ff2592155</p>
+                <div class="tags">
+                  <span class="tag green">Enabled</span>
+                  <span class="tag blue">Dedicated endpoint</span>
+                  <span class="tag amber">Key 30d</span>
+                </div>
+              </div>
+            </article>
+            <article class="customer">
+              <div class="avatar" style="background:#0e7490;">AC</div>
+              <div>
+                <h4>alice@client.test</h4>
+                <p>Shared mode / 可升级为独立 endpoint</p>
+                <div class="tags"><span class="tag green">Enabled</span><span class="tag">Shared</span><span class="tag blue">可开通</span></div>
+              </div>
+            </article>
+            <article class="customer">
+              <div class="avatar" style="background:#64748b;">DM</div>
+              <div>
+                <h4>demo@studio.test</h4>
+                <p>API key mode legacy customer</p>
+                <div class="tags"><span class="tag">Legacy key</span><span class="tag red">Low balance</span></div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div class="panel detail">
+          <div class="identity">
+            <div>
+              <h2>Peter 专属配置</h2>
+              <p>当前模式: <b>auto_dedicated</b> · 客户 slug: <b>peterlv</b> · 价格系数 1.15 · 余额 $49.51</p>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="btn">查看任务</button>
+              <button class="btn primary">保存变更</button>
+            </div>
+          </div>
+
+          <div class="metric-row">
+            <div class="metric"><span>本月任务</span><strong>1</strong></div>
+            <div class="metric"><span>已收入</span><strong>$0.4892</strong></div>
+            <div class="metric"><span>素材数</span><strong>0</strong></div>
+            <div class="metric"><span>最近状态</span><strong style="color:var(--green)">Succeeded</strong></div>
+          </div>
+
+          <section class="section">
+            <div class="section-title">
+              <h3>BytePlus 独立 Endpoint</h3>
+              <span class="tag green">Running</span>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>模式</label>
+                <div class="input">自动独立模式 auto_dedicated</div>
+              </div>
+              <div class="field">
+                <label>自动轮换</label>
+                <div class="input" style="justify-content:space-between;">已开启 <span class="toggle"><i></i></span></div>
+              </div>
+              <div class="field full">
+                <label>Provisioning 状态</label>
+                <div class="input" style="justify-content:space-between;">
+                  <span>已完成 · Project / Endpoint / Asset group 均由 Relay 后台自动创建</span>
+                  <span class="tag green">provisioned</span>
+                </div>
+              </div>
+              <div class="field">
+                <label>Project name</label>
+                <div class="input mono">peterlv</div>
+              </div>
+              <div class="field">
+                <label>Endpoint ID</label>
+                <div class="input mono">ep-20260606113200-7cmmq</div>
+              </div>
+              <div class="field full">
+                <label>Endpoint API Key</label>
+                <div class="input mono" style="justify-content:space-between;">
+                  <span>eyJhbGci...qw9EsC5Q</span>
+                  <span style="color:var(--blue);font-weight:700;">替换 / 轮换</span>
+                </div>
+              </div>
+              <div class="field">
+                <label>Asset group ID</label>
+                <div class="input mono">group-20260606113202-679wh</div>
+              </div>
+              <div class="field">
+                <label>Asset group name</label>
+                <div class="input mono">relay-peterlv-face-assets</div>
+              </div>
+            </div>
+            <div class="status-strip">
+              <div>
+                <strong>Endpoint key 将于 2026-07-06 12:07:54 +08:00 过期</strong>
+                <span>建议提前 5 天自动轮换；失败时保留旧 key 并写入审计。</span>
+              </div>
+              <button class="btn warn">立即轮换</button>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h3>普通客户升级入口</h3>
+              <span class="tag blue">无需进入 BytePlus 控制台</span>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>共享模式客户</label>
+                <div class="input">使用平台默认 endpoint / asset group</div>
+              </div>
+              <div class="field">
+                <label>升级动作</label>
+                <div class="input" style="justify-content:space-between;">开通独立资源 <span style="color:var(--blue);font-weight:700;">创建 job</span></div>
+              </div>
+              <div class="field full">
+                <label>Provision job 步骤</label>
+                <div class="input">ensure_project -> ensure_endpoint -> wait_running -> ensure_asset_group -> get_api_key -> verify</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h3>支持与密码</h3>
+              <span class="tag">客户不可见 BytePlus 配置</span>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>Relay API Key</label>
+                <div class="input mono">sk-mpFGv...EvfQvR</div>
+              </div>
+              <div class="field">
+                <label>登录密码</label>
+                <div class="input">已设置 · 可由管理员重置</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h3>账单保存与导出</h3>
+              <span class="tag blue">customer / internal</span>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>未出账金额</label>
+                <div class="input">$0.4892 · 1 settled task</div>
+              </div>
+              <div class="field">
+                <label>最近账单</label>
+                <div class="input">INV-202606-0001 · issued</div>
+              </div>
+              <div class="field">
+                <label>账期</label>
+                <div class="input">2026-06-01 至 2026-06-30</div>
+              </div>
+              <div class="field">
+                <label>操作</label>
+                <div class="input" style="justify-content:space-between;">保存账单 <span style="color:var(--blue);font-weight:700;">导出 CSV / XLSX</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <h3>素材生命周期</h3>
+              <span class="tag green">asset_registered</span>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>素材 ID</label>
+                <div class="input mono">upl_6b867a97c567d64d</div>
+              </div>
+              <div class="field">
+                <label>BytePlus Asset</label>
+                <div class="input mono">asset-8a31...c92f</div>
+              </div>
+              <div class="field">
+                <label>预览策略</label>
+                <div class="input">图片直接预览 / 视频 metadata / 音频控件</div>
+              </div>
+              <div class="field">
+                <label>客户操作</label>
+                <div class="input" style="justify-content:space-between;">删除自己的素材 <span style="color:var(--red);font-weight:700;">保留 asset</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-title"><h3>最近审计</h3><span class="tag">secret-safe</span></div>
+            <div class="audit">
+              <div class="audit-row"><span>12:11</span><strong>customer_generation_succeeded · endpoint ep-20260606113200-7cmmq</strong></div>
+              <div class="audit-row"><span>12:07</span><strong>system_rotated_endpoint_api_key · expires_at updated</strong></div>
+              <div class="audit-row"><span>11:32</span><strong>admin_changed_customer_upstream_config · asset group linked</strong></div>
+              <div class="audit-row"><span>11:30</span><strong>admin_reset_password · sessions revoked</strong></div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="drawer">
+          <div class="drawer-head">
+            <h3>快速操作</h3>
+            <p>这些操作都写审计；不会在响应、日志或审计里保存 BytePlus key 明文。</p>
+          </div>
+          <div class="drawer-body">
+            <div class="action-card">
+              <h4>开通独立 Endpoint</h4>
+              <p>给普通客户一键创建独立 project、endpoint、asset group 和 endpoint key。</p>
+              <div class="field">
+                <label>客户 slug</label>
+                <div class="input mono">alice</div>
+              </div>
+              <label class="check"><span class="box">✓</span> 创建前 dry-run 检查 IAM 权限</label>
+              <button class="btn primary">开通并创建资源</button>
+            </div>
+
+            <div class="action-card">
+              <h4>手动轮换 endpoint key</h4>
+              <p>调用 BytePlus GetApiKey，为当前 endpoint 生成 30 天 key，并更新客户账号。</p>
+              <div class="field">
+                <label>Duration seconds</label>
+                <div class="input mono">2592000</div>
+              </div>
+              <label class="check"><span class="box">✓</span> 仅返回脱敏 key 和过期时间</label>
+              <button class="btn primary">执行轮换</button>
+            </div>
+
+            <div class="action-card">
+              <h4>密码重置</h4>
+              <p>给客户生成临时密码，只显示一次；旧 session 立即失效。</p>
+              <div class="field">
+                <label>新密码</label>
+                <div class="input">自动生成强密码</div>
+              </div>
+              <label class="check"><span class="box">✓</span> 重置后踢掉旧登录会话</label>
+              <label class="check"><span class="box">✓</span> 下次登录建议改密</label>
+              <button class="btn danger">生成临时密码</button>
+            </div>
+
+            <div class="action-card">
+              <h4>保存 / 导出账单</h4>
+              <p>把当前账期 settled 任务固定为账单快照，客户版不显示成本和毛利。</p>
+              <div class="field">
+                <label>账期</label>
+                <div class="input">2026-06-01 ~ 2026-06-30</div>
+              </div>
+              <label class="check"><span class="box">✓</span> 防止同一任务重复出账</label>
+              <button class="btn primary">保存账单</button>
+              <button class="btn">导出客户版 CSV</button>
+            </div>
+
+            <div class="action-card">
+              <h4>删除客户素材</h4>
+              <p>客户可删除自己的素材；默认只移出素材库并清理本地文件，BytePlus asset 保留。</p>
+              <div class="field">
+                <label>素材</label>
+                <div class="input mono">upl_6b867a97c567d64d</div>
+              </div>
+              <label class="check"><span class="box">✓</span> 客户只能删除自己的素材</label>
+              <button class="btn danger">删除素材</button>
+            </div>
+
+            <div class="action-card">
+              <h4>轮换开关策略</h4>
+              <p>平台总开关开启后，只有客户开关也开启才会自动轮换。</p>
+              <div class="timeline">
+                <div class="line-item"><strong>全局开关</strong><span>ENDPOINT_KEY_ROTATION_ENABLED=true</span></div>
+                <div class="line-item"><strong>客户开关</strong><span>Peter: enabled</span></div>
+                <div class="line-item"><strong>阈值</strong><span>过期前 5 天轮换</span></div>
+                <div class="line-item"><strong>失败策略</strong><span>保留旧 key，写入 sanitized error</span></div>
+              </div>
+            </div>
+
+            <div class="action-card">
+              <h4>IAM 能力检测</h4>
+              <p>后台自动创建资源前先检测平台 IAM 账号能力。</p>
+              <div class="timeline">
+                <div class="line-item"><strong>Project</strong><span>can_create_project: true</span></div>
+                <div class="line-item"><strong>Endpoint</strong><span>can_create_endpoint: true</span></div>
+                <div class="line-item"><strong>Asset</strong><span>can_create_asset_group: true</span></div>
+                <div class="line-item"><strong>Key</strong><span>can_get_api_key: true</span></div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

@@ -376,10 +376,15 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | `UPLOAD_MAX_IMAGE_MB` | `10` | 图片上传白名单大小上限 |
 | `UPLOAD_MAX_VIDEO_MB` | `50` | 视频上传白名单大小上限 |
 | `UPLOAD_MAX_AUDIO_MB` | `15` | 音频上传白名单大小上限 |
+| `ENDPOINT_KEY_ROTATION_ENABLED` | `false` | 是否启用客户独立 endpoint key 自动轮换脚本 |
+| `ENDPOINT_KEY_ROTATION_DAYS_BEFORE_EXPIRY` | `5` | 距离过期多少天以内触发轮换 |
+| `ENDPOINT_KEY_DURATION_SECONDS` | `2592000` | 新 endpoint API key 有效期秒数 |
+| `ENDPOINT_KEY_ROTATION_DRY_RUN` | `false` | 只检查待轮换客户，不写 DB、不调用上游 |
 | `ASSET_AUTO_REGISTER_UPLOADS` | `false` | 服务端是否自动把上传 URL 注册成 `asset://...` |
 | `ASSET_AUTO_REGISTER_PURPOSES` | `image,video,audio` | 开关启用后哪些上传类型自动注册 |
 | `ASSET_AUTO_REGISTER_WAIT_SECONDS` | `0` | 是否等待 asset 变 Active；0 表示只创建不等待 |
 | `ASSET_AUTO_REGISTER_SKIP_MODERATION` | `false` | CreateAsset 时是否传 skip moderation |
+| `ASSET_DELETE_EXECUTION_MODE` | `admin_batch` | 客户删除素材后的 BytePlus asset 删除方式：`local_only` / `admin_batch` / `auto` |
 | `BYTEPLUS_ACCESS_KEY_ID` | 空 | 服务端 asset registry AK，用户不可见 |
 | `BYTEPLUS_ACCESS_KEY_SECRET` | 空 | 服务端 asset registry SK，用户不可见 |
 | `MODELARK_ASSET_GROUP_ID` | 空 | 服务端 asset group，用户不可见 |

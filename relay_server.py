@@ -36,6 +36,8 @@ import sqlite3
 import secrets
 import asyncio
 import json
+import csv
+import io
 import bcrypt
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -81,7 +83,10 @@ BYTEPLUS_ACCESSKEY = os.getenv(
 ).strip()
 BYTEPLUS_SECRETKEY = os.getenv(
     "BYTEPLUS_SECRETKEY",
-    os.getenv("BYTEPLUS_SECRET_KEY", os.getenv("BYTEPLUS_ACCESS_KEY_SECRET", "")),
+    os.getenv(
+        "BYTEPLUS_SECRET_KEY",
+        os.getenv("BYTEPLUS_ACCESS_KEY_SECRET", os.getenv("BYTEPLUS_SECRET_ACCESS_KEY", "")),
+    ),
 ).strip()
 PUBLIC_DOMAIN  = os.getenv("PUBLIC_DOMAIN", "video.example.com")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"https://{PUBLIC_DOMAIN}").strip().rstrip("/")
@@ -114,6 +119,12 @@ ASSET_AUTO_REGISTER_WAIT_INTERVAL = float(os.getenv("ASSET_AUTO_REGISTER_WAIT_IN
 ASSET_AUTO_REGISTER_SKIP_MODERATION = os.getenv(
     "ASSET_AUTO_REGISTER_SKIP_MODERATION", "false"
 ).strip().lower() in ("1", "true", "yes", "on")
+ASSET_DELETE_EXECUTION_MODE = (
+    os.getenv("ASSET_DELETE_EXECUTION_MODE", "admin_batch").strip().lower()
+    or "admin_batch"
+)
+if ASSET_DELETE_EXECUTION_MODE not in {"local_only", "admin_batch", "auto"}:
+    ASSET_DELETE_EXECUTION_MODE = "admin_batch"
 MODELARK_ASSET_AUTO_CREATE_GROUP = os.getenv(
     "MODELARK_ASSET_AUTO_CREATE_GROUP", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
@@ -754,7 +765,76 @@ CREATE TABLE IF NOT EXISTS uploads (
     face_asset_label         TEXT,
     face_asset_note          TEXT,
     created_at               INTEGER NOT NULL,
-    updated_at               INTEGER NOT NULL
+    updated_at               INTEGER NOT NULL,
+    deleted_at               INTEGER,
+    local_deleted_at         INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS asset_delete_requests (
+    id                       TEXT PRIMARY KEY,
+    user_id                  TEXT NOT NULL,
+    upload_id                TEXT NOT NULL,
+    asset_id                 TEXT NOT NULL,
+    asset_url                TEXT NOT NULL,
+    status                   TEXT NOT NULL,
+    requested_by_user_id     TEXT,
+    execution_mode           TEXT NOT NULL,
+    reason                   TEXT,
+    error_message            TEXT,
+    byteplus_request_id      TEXT,
+    created_at               INTEGER NOT NULL,
+    updated_at               INTEGER NOT NULL,
+    executed_at              INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS invoices (
+    id                       TEXT PRIMARY KEY,
+    user_id                  TEXT NOT NULL,
+    invoice_no               TEXT NOT NULL UNIQUE,
+    status                   TEXT NOT NULL,
+    period_start             INTEGER NOT NULL,
+    period_end               INTEGER NOT NULL,
+    currency                 TEXT NOT NULL DEFAULT 'USD',
+    subtotal_usd             REAL NOT NULL,
+    discount_usd             REAL NOT NULL DEFAULT 0,
+    total_usd                REAL NOT NULL,
+    upstream_cost_usd        REAL NOT NULL DEFAULT 0,
+    gross_profit_usd         REAL NOT NULL DEFAULT 0,
+    task_count               INTEGER NOT NULL DEFAULT 0,
+    note                     TEXT,
+    snapshot_json            TEXT NOT NULL,
+    created_at               INTEGER NOT NULL,
+    updated_at               INTEGER NOT NULL,
+    paid_at                  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS invoice_items (
+    id                       TEXT PRIMARY KEY,
+    invoice_id               TEXT NOT NULL,
+    task_id                  TEXT,
+    item_type                TEXT NOT NULL,
+    description              TEXT NOT NULL,
+    client_model             TEXT,
+    resolution               TEXT,
+    duration                 INTEGER,
+    quantity                 REAL NOT NULL DEFAULT 1,
+    unit_price_usd           REAL NOT NULL,
+    amount_usd               REAL NOT NULL,
+    upstream_cost_usd        REAL NOT NULL DEFAULT 0,
+    created_at               INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS upstream_provision_jobs (
+    id                       TEXT PRIMARY KEY,
+    user_id                  TEXT NOT NULL,
+    status                   TEXT NOT NULL,
+    customer_slug            TEXT,
+    request_json             TEXT NOT NULL,
+    result_json              TEXT,
+    error_message            TEXT,
+    created_at               INTEGER NOT NULL,
+    updated_at               INTEGER NOT NULL,
+    finished_at              INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -780,6 +860,14 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status    ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_face_assets_active ON face_assets(is_active);
 CREATE INDEX IF NOT EXISTS idx_uploads_user_created ON uploads(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_uploads_asset_url ON uploads(asset_url);
+CREATE INDEX IF NOT EXISTS idx_asset_delete_requests_user ON asset_delete_requests(user_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_delete_requests_upload_active
+    ON asset_delete_requests(upload_id)
+    WHERE status IN ('pending_admin', 'queued', 'running');
+CREATE INDEX IF NOT EXISTS idx_invoices_user_period ON invoices(user_id, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_invoice_items_task ON invoice_items(task_id);
+CREATE INDEX IF NOT EXISTS idx_upstream_provision_jobs_user ON upstream_provision_jobs(user_id, created_at DESC);
 """
 
 # 现有 DB 升级到新 schema (添加新字段, 已存在则跳过)
@@ -803,6 +891,8 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN local_video_path TEXT",
     "ALTER TABLE tasks ADD COLUMN prompt_text TEXT",
     "ALTER TABLE tasks ADD COLUMN request_payload TEXT",
+    "ALTER TABLE uploads ADD COLUMN deleted_at INTEGER",
+    "ALTER TABLE uploads ADD COLUMN local_deleted_at INTEGER",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)",
 ]
 
@@ -1288,6 +1378,43 @@ class UpdateUserReq(BaseModel):
     new_password: Optional[str] = Field(None, min_length=10)
 
 
+class AdminPasswordResetRequest(BaseModel):
+    generate: bool = True
+    new_password: Optional[str] = Field(None, min_length=10)
+    force_change_on_next_login: bool = True
+
+
+class CreateInvoiceRequest(BaseModel):
+    period_start: int
+    period_end: int
+    note: Optional[str] = None
+    discount_usd: float = Field(0, ge=0)
+
+
+class UpdateUpstreamConfigRequest(BaseModel):
+    upstream_mode: Optional[str] = Field(None, pattern="^(shared|manual_dedicated|auto_dedicated)$")
+    customer_slug: Optional[str] = Field(None, min_length=1, max_length=80)
+    byteplus_project_name: Optional[str] = Field(None, max_length=120)
+    byteplus_endpoint_id: Optional[str] = Field(None, max_length=120)
+    modelark_asset_group_id: Optional[str] = Field(None, max_length=120)
+    endpoint_key_rotation_enabled: Optional[bool] = None
+    endpoint_api_key: Optional[str] = None
+
+
+class ProvisionUpstreamRequest(BaseModel):
+    customer_slug: str = Field(..., min_length=1, max_length=80)
+    dry_run: bool = True
+    create_project: bool = True
+    create_endpoint: bool = True
+    create_asset_group: bool = True
+    rotate_endpoint_key: bool = True
+    endpoint_key_duration_seconds: int = Field(2592000, ge=60, le=31536000)
+
+
+class EndpointKeyRotateRequest(BaseModel):
+    duration_seconds: int = Field(2592000, ge=60, le=31536000)
+
+
 class FaceAssetReq(BaseModel):
     asset_url: str
     asset_type: str = Field("image", pattern="^(image|video)$")
@@ -1387,12 +1514,250 @@ def _user_note_json(user: Optional[dict]) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _merge_user_note_json(raw_note: Optional[str], updates: dict[str, Any]) -> str:
+    note = {}
+    raw = (raw_note or "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                note = parsed
+            else:
+                note = {"legacy_note": raw}
+        except Exception:
+            note = {"legacy_note": raw}
+    note.update(updates)
+    return json.dumps(note, ensure_ascii=True, sort_keys=True)
+
+
 def _user_modelark_asset_group_id(user: Optional[dict]) -> str:
     return str(_user_note_json(user).get("modelark_asset_group_id") or "").strip()
 
 
 def _user_byteplus_endpoint_id(user: Optional[dict]) -> str:
     return str(_user_note_json(user).get("byteplus_endpoint_id") or "").strip()
+
+
+def _truthy_note_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _user_upstream_response(user: dict | sqlite3.Row) -> dict:
+    user_dict = dict(user)
+    note = _user_note_json(user_dict)
+    endpoint_key = user_dict.get("byteplus_api_key") or ""
+    return {
+        "user_id": user_dict["id"],
+        "email": user_dict.get("email"),
+        "upstream_mode": note.get("upstream_mode") or ("manual_dedicated" if endpoint_key else "shared"),
+        "customer_slug": note.get("customer_slug") or "",
+        "byteplus_project_name": note.get("byteplus_project_name") or "",
+        "byteplus_endpoint_id": note.get("byteplus_endpoint_id") or "",
+        "modelark_asset_group_id": note.get("modelark_asset_group_id") or "",
+        "endpoint_key_rotation_enabled": _truthy_note_value(note.get("byteplus_endpoint_key_rotation_enabled")),
+        "byteplus_endpoint_api_key_expires_at": note.get("byteplus_endpoint_api_key_expires_at"),
+        "byteplus_endpoint_key_last_rotated_at": note.get("byteplus_endpoint_key_last_rotated_at"),
+        "byteplus_endpoint_key_next_rotate_at": note.get("byteplus_endpoint_key_next_rotate_at"),
+        "byteplus_endpoint_key_rotation_error": note.get("byteplus_endpoint_key_rotation_error") or "",
+        "endpoint_api_key_configured": bool(endpoint_key),
+        "endpoint_api_key_masked": _masked_secret(endpoint_key, prefix=6, suffix=5) if endpoint_key else "",
+    }
+
+
+def _upstream_capabilities() -> dict:
+    iam_configured = bool(BYTEPLUS_ACCESSKEY and BYTEPLUS_SECRETKEY)
+    return {
+        "auth_mode": UPSTREAM_AUTH_MODE,
+        "iam_configured": iam_configured,
+        "server_endpoint_configured": bool(UPSTREAM_ENDPOINT_ID),
+        "fallback_api_key_configured": bool(UPSTREAM_API_KEY),
+        "can_create_project": iam_configured,
+        "can_create_endpoint": iam_configured,
+        "can_create_asset_group": iam_configured,
+        "can_rotate_endpoint_key": iam_configured,
+    }
+
+
+def _normalize_customer_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9_-]+", "-", (value or "").strip().lower())
+    slug = re.sub(r"-+", "-", slug).strip("-_")
+    if not slug:
+        raise HTTPException(400, {"error": {
+            "code": "invalid_customer_slug",
+            "message": "customer_slug must contain at least one letter or number",
+        }})
+    return slug[:80]
+
+
+def _planned_upstream_provision(user: dict, req: ProvisionUpstreamRequest) -> dict:
+    slug = _normalize_customer_slug(req.customer_slug)
+    return {
+        "user_id": user["id"],
+        "email": user.get("email"),
+        "customer_slug": slug,
+        "byteplus_project_name": slug,
+        "create_project": req.create_project,
+        "create_endpoint": req.create_endpoint,
+        "create_asset_group": req.create_asset_group,
+        "rotate_endpoint_key": req.rotate_endpoint_key,
+        "endpoint_key_duration_seconds": req.endpoint_key_duration_seconds,
+    }
+
+
+def _get_endpoint_api_key(endpoint_id: str, duration_seconds: int) -> dict[str, Any]:
+    if not BYTEPLUS_ACCESSKEY or not BYTEPLUS_SECRETKEY:
+        raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_SECRET_ACCESS_KEY are required")
+    result = _call_asset_api(
+        "GetApiKey",
+        {"EndpointId": endpoint_id, "DurationSeconds": duration_seconds},
+        BYTEPLUS_ACCESSKEY,
+        BYTEPLUS_SECRETKEY,
+    )
+    api_key = (
+        extract_nested_value(result, "Result", "ApiKey")
+        or extract_nested_value(result, "ApiKey")
+        or extract_nested_value(result, "api_key")
+    )
+    expires_at = (
+        extract_nested_value(result, "Result", "ExpiresAt")
+        or extract_nested_value(result, "ExpiresAt")
+        or extract_nested_value(result, "expires_at")
+    )
+    if not api_key:
+        raise RuntimeError("GetApiKey did not return an endpoint API key")
+    return {
+        "api_key": str(api_key),
+        "expires_at": int(expires_at or (time.time() + duration_seconds)),
+    }
+
+
+def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamRequest) -> dict:
+    if not BYTEPLUS_ACCESSKEY or not BYTEPLUS_SECRETKEY:
+        raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_SECRET_ACCESS_KEY are required")
+    planned = _planned_upstream_provision(user, req)
+    slug = planned["customer_slug"]
+    project_name = planned["byteplus_project_name"]
+    project_id = ""
+    endpoint_id = _user_byteplus_endpoint_id(user)
+    asset_group_id = _user_modelark_asset_group_id(user)
+
+    if req.create_project:
+        project_result = _call_asset_api(
+            "CreateProject",
+            {"Name": project_name, "Description": f"Relay customer {slug}"},
+            BYTEPLUS_ACCESSKEY,
+            BYTEPLUS_SECRETKEY,
+        )
+        project_id = str(
+            extract_nested_value(project_result, "Result", "ProjectId")
+            or extract_nested_value(project_result, "ProjectId")
+            or extract_nested_value(project_result, "Id")
+            or ""
+        )
+    if req.create_endpoint:
+        endpoint_result = _call_asset_api(
+            "CreateEndpoint",
+            {
+                "ProjectId": project_id,
+                "ProjectName": project_name,
+                "Name": slug,
+                "Description": f"Relay customer endpoint {slug}",
+            },
+            BYTEPLUS_ACCESSKEY,
+            BYTEPLUS_SECRETKEY,
+        )
+        endpoint_id = str(
+            extract_nested_value(endpoint_result, "Result", "EndpointId")
+            or extract_nested_value(endpoint_result, "EndpointId")
+            or extract_nested_value(endpoint_result, "Id")
+            or endpoint_id
+            or ""
+        )
+    if req.create_asset_group:
+        group_result = _call_asset_api(
+            "CreateAssetGroup",
+            build_create_asset_group_body(
+                name=f"{slug}-assets",
+                description=f"Relay customer asset group {slug}",
+            ),
+            BYTEPLUS_ACCESSKEY,
+            BYTEPLUS_SECRETKEY,
+        )
+        asset_group_id = extract_asset_group_id(group_result) or asset_group_id
+
+    result: dict[str, Any] = {
+        "customer_slug": slug,
+        "byteplus_project_name": project_name,
+        "byteplus_project_id": project_id,
+        "byteplus_endpoint_id": endpoint_id,
+        "modelark_asset_group_id": asset_group_id,
+    }
+    if req.rotate_endpoint_key:
+        if not endpoint_id:
+            raise RuntimeError("endpoint id is required before rotating endpoint API key")
+        issued = _get_endpoint_api_key(endpoint_id, req.endpoint_key_duration_seconds)
+        result["endpoint_api_key"] = issued["api_key"]
+        result["byteplus_endpoint_api_key_expires_at"] = issued["expires_at"]
+    return result
+
+
+def _apply_upstream_result_to_user(
+    user: dict,
+    updates: dict[str, Any],
+    *,
+    upstream_mode: str,
+    rotation_enabled: bool,
+) -> dict:
+    now = int(time.time())
+    note_updates = {
+        "upstream_mode": upstream_mode,
+        "customer_slug": updates.get("customer_slug") or "",
+        "byteplus_project_name": updates.get("byteplus_project_name") or "",
+        "byteplus_project_id": updates.get("byteplus_project_id") or "",
+        "byteplus_endpoint_id": updates.get("byteplus_endpoint_id") or "",
+        "modelark_asset_group_id": updates.get("modelark_asset_group_id") or "",
+        "byteplus_endpoint_key_rotation_enabled": bool(rotation_enabled),
+        "byteplus_upstream_updated_at": now,
+    }
+    if updates.get("byteplus_endpoint_api_key_expires_at") is not None:
+        note_updates["byteplus_endpoint_api_key_expires_at"] = int(
+            updates["byteplus_endpoint_api_key_expires_at"]
+        )
+    if updates.get("endpoint_api_key"):
+        note_updates["byteplus_endpoint_key_last_rotated_at"] = now
+        note_updates["byteplus_endpoint_key_rotation_error"] = ""
+    note = _merge_user_note_json(user.get("note"), note_updates)
+    db = get_db()
+    try:
+        if updates.get("endpoint_api_key"):
+            db.execute(
+                "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+                (updates["endpoint_api_key"], note, user["id"]),
+            )
+        else:
+            db.execute("UPDATE users SET note=? WHERE id=?", (note, user["id"]))
+        row = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+        return dict(row)
+    finally:
+        db.close()
+
+
+def _upstream_job_response(row: sqlite3.Row | dict, upstream: Optional[dict] = None) -> dict:
+    item = dict(row)
+    if item.get("request_json"):
+        try:
+            item["request"] = json.loads(item["request_json"])
+        except Exception:
+            item["request"] = {}
+    item.pop("request_json", None)
+    item.pop("result_json", None)
+    if upstream is not None:
+        item["upstream"] = upstream
+    return item
 
 
 def _content_url_for_block(block: ContentBlock) -> str:
@@ -1455,7 +1820,7 @@ def _validate_customer_asset_access(content: list[ContentBlock], user_id: str) -
     try:
         for asset_url in asset_urls:
             rows = db.execute(
-                "SELECT DISTINCT user_id FROM uploads WHERE asset_url=?",
+                f"SELECT DISTINCT user_id FROM uploads WHERE asset_url=? AND {_active_upload_where()}",
                 (asset_url,),
             ).fetchall()
             if not rows:
@@ -1876,6 +2241,46 @@ def _register_upload_asset(url: str, purpose: str, user: Optional[dict] = None) 
     }
 
 
+def _delete_byteplus_asset(asset_id: str, user: Optional[dict] = None) -> dict:
+    ak, sk, _group_id = _server_asset_config(user)
+    return _call_asset_api("DeleteAsset", {"Id": asset_id}, ak, sk)
+
+
+def _local_upload_path_for_object_key(object_key: str) -> Optional[Path]:
+    object_key = (object_key or "").strip().replace("\\", "/")
+    if not object_key.startswith("uploads/"):
+        return None
+    relative = object_key.removeprefix("uploads/").lstrip("/")
+    if not relative or ".." in Path(relative).parts:
+        return None
+    try:
+        root = UPLOAD_DIR.resolve()
+        target = (UPLOAD_DIR / relative).resolve()
+    except Exception:
+        return None
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return None
+    return target
+
+
+def _delete_local_upload_file(row: sqlite3.Row | dict, *, now: Optional[int] = None) -> bool:
+    target = _local_upload_path_for_object_key(row["object_key"])
+    if not target:
+        return False
+    try:
+        target.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def _active_upload_where(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return f"({prefix}deleted_at IS NULL OR {prefix}deleted_at=0)"
+
+
 async def _save_upload(file: UploadFile, spec: dict) -> tuple[str, int]:
     upload_id = "upl_" + secrets.token_hex(8)
     day = time.strftime("%Y/%m/%d", time.gmtime())
@@ -1933,6 +2338,8 @@ def _upload_response_from_row(row: sqlite3.Row | dict) -> dict:
         "face_asset_whitelisted": face_whitelisted,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "deleted_at": _record_get(row, "deleted_at"),
+        "local_deleted_at": _record_get(row, "local_deleted_at"),
         "suggested_content_block": _suggested_content_block(
             purpose, content_url, role=suggested_role
         ),
@@ -2028,6 +2435,7 @@ def _find_user_whitelisted_upload_asset(user_id: str, url: str, purpose: str) ->
                WHERE user_id=? AND url=? AND purpose=?
                  AND face_asset_whitelisted=1
                  AND asset_url IS NOT NULL
+                 AND deleted_at IS NULL
                ORDER BY updated_at DESC
                LIMIT 1""",
             (user_id, url, purpose),
@@ -2136,6 +2544,312 @@ async def internal_prepare_video_content(
     _validate_customer_asset_access(content, req.user_id)
     _validate_face_asset_allowlist(content)
     return {"content": [block.model_dump(exclude_none=True) for block in content]}
+
+
+def _asset_delete_request_response(row: sqlite3.Row | dict) -> dict:
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "upload_id": row["upload_id"],
+        "asset_id": row["asset_id"],
+        "asset_url": row["asset_url"],
+        "status": row["status"],
+        "execution_mode": row["execution_mode"],
+        "reason": row["reason"],
+        "error_message": row["error_message"],
+        "byteplus_request_id": row["byteplus_request_id"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "executed_at": row["executed_at"],
+    }
+
+
+def _find_existing_active_asset_delete_request(db: sqlite3.Connection, upload_id: str) -> Optional[sqlite3.Row]:
+    return db.execute(
+        """SELECT * FROM asset_delete_requests
+           WHERE upload_id=? AND status IN ('pending_admin', 'queued', 'running')
+           ORDER BY created_at DESC LIMIT 1""",
+        (upload_id,),
+    ).fetchone()
+
+
+def _asset_delete_block_reason(db: sqlite3.Connection, row: sqlite3.Row | dict) -> Optional[str]:
+    asset_url = row["asset_url"]
+    if not asset_url:
+        return None
+    active_face = db.execute(
+        "SELECT 1 FROM face_assets WHERE asset_url=? AND is_active=1 LIMIT 1",
+        (asset_url,),
+    ).fetchone()
+    if active_face:
+        return "asset_is_active_face_whitelist"
+    active_task = db.execute(
+        """SELECT id FROM tasks
+           WHERE user_id=? AND status IN ('queued', 'running')
+             AND request_payload LIKE ?
+           ORDER BY created_at DESC LIMIT 1""",
+        (row["user_id"], f"%{asset_url}%"),
+    ).fetchone()
+    if active_task:
+        return f"asset_in_use_by_task:{active_task['id']}"
+    owners = db.execute(
+        f"""SELECT DISTINCT user_id FROM uploads
+            WHERE asset_url=? AND {_active_upload_where()}""",
+        (asset_url,),
+    ).fetchall()
+    if len({owner["user_id"] for owner in owners}) > 1:
+        return "asset_has_multiple_owners"
+    return None
+
+
+def _create_asset_delete_request(
+    db: sqlite3.Connection,
+    *,
+    row: sqlite3.Row,
+    requested_by_user_id: Optional[str],
+    execution_mode: str,
+    reason: Optional[str] = None,
+    skip_safety_checks: bool = False,
+) -> sqlite3.Row:
+    existing = _find_existing_active_asset_delete_request(db, row["id"])
+    if existing:
+        return existing
+    now = int(time.time())
+    block_reason = None if skip_safety_checks else _asset_delete_block_reason(db, row)
+    status_value = "blocked" if block_reason else (
+        "queued" if execution_mode == "auto" else "pending_admin"
+    )
+    request_id = "adr_" + secrets.token_hex(8)
+    db.execute(
+        """INSERT INTO asset_delete_requests
+           (id, user_id, upload_id, asset_id, asset_url, status,
+            requested_by_user_id, execution_mode, reason, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            request_id,
+            row["user_id"],
+            row["id"],
+            row["asset_id"] or _asset_id_from_url(row["asset_url"]),
+            row["asset_url"],
+            status_value,
+            requested_by_user_id,
+            execution_mode,
+            block_reason or reason,
+            now,
+            now,
+        ),
+    )
+    return db.execute(
+        "SELECT * FROM asset_delete_requests WHERE id=?",
+        (request_id,),
+    ).fetchone()
+
+
+def _mark_upload_deleted(db: sqlite3.Connection, row: sqlite3.Row, *, now: int) -> bool:
+    if row["deleted_at"]:
+        return False
+    local_deleted = _delete_local_upload_file(row, now=now)
+    db.execute(
+        """UPDATE uploads
+           SET deleted_at=?, local_deleted_at=COALESCE(local_deleted_at, ?), updated_at=?
+           WHERE id=?""",
+        (now, now if local_deleted else None, now, row["id"]),
+    )
+    return True
+
+
+def _execute_asset_delete_request(request_id: str, *, actor_user_id: Optional[str], actor_type: str) -> dict:
+    db = get_db()
+    try:
+        row = db.execute(
+            "SELECT * FROM asset_delete_requests WHERE id=?",
+            (request_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, {"error": {
+                "code": "asset_delete_request_not_found",
+                "message": "Asset delete request was not found",
+            }})
+        if row["status"] == "succeeded":
+            return _asset_delete_request_response(row)
+        if row["status"] in {"cancelled", "blocked"}:
+            raise HTTPException(409, {"error": {
+                "code": "asset_delete_request_not_executable",
+                "message": f"Asset delete request is {row['status']}",
+                "status": row["status"],
+            }})
+        now = int(time.time())
+        db.execute(
+            "UPDATE asset_delete_requests SET status='running', updated_at=? WHERE id=?",
+            (now, request_id),
+        )
+        upload = db.execute("SELECT * FROM uploads WHERE id=?", (row["upload_id"],)).fetchone()
+        owner = db.execute("SELECT * FROM users WHERE id=?", (row["user_id"],)).fetchone()
+    finally:
+        db.close()
+
+    request_result: dict = {}
+    try:
+        request_result = _delete_byteplus_asset(row["asset_id"], dict(owner) if owner else None)
+    except HTTPException as exc:
+        message = sanitize(json.dumps(exc.detail, ensure_ascii=False))[:1000]
+        db = get_db()
+        try:
+            now = int(time.time())
+            db.execute(
+                """UPDATE asset_delete_requests
+                   SET status='failed', error_message=?, updated_at=?
+                   WHERE id=?""",
+                (message, now, request_id),
+            )
+            updated = db.execute(
+                "SELECT * FROM asset_delete_requests WHERE id=?",
+                (request_id,),
+            ).fetchone()
+        finally:
+            db.close()
+        _audit_event(
+            "system_delete_byteplus_asset_failed",
+            actor_user_id=actor_user_id,
+            actor_type=actor_type,
+            target_type="asset_delete_request",
+            target_id=request_id,
+            metadata={"asset_url": row["asset_url"], "error": message},
+        )
+        return _asset_delete_request_response(updated)
+
+    request_id_from_upstream = (
+        extract_nested_value(request_result, "ResponseMetadata", "RequestId")
+        or extract_nested_value(request_result, "RequestId")
+        or extract_nested_value(request_result, "request_id")
+    )
+    db = get_db()
+    try:
+        now = int(time.time())
+        db.execute(
+            """UPDATE asset_delete_requests
+               SET status='succeeded', byteplus_request_id=?, updated_at=?, executed_at=?
+               WHERE id=?""",
+            (
+                sanitize(str(request_id_from_upstream))[:128] if request_id_from_upstream else None,
+                now,
+                now,
+                request_id,
+            ),
+        )
+        updated = db.execute(
+            "SELECT * FROM asset_delete_requests WHERE id=?",
+            (request_id,),
+        ).fetchone()
+    finally:
+        db.close()
+    _audit_event(
+        "system_deleted_byteplus_asset",
+        actor_user_id=actor_user_id,
+        actor_type=actor_type,
+        target_type="asset_delete_request",
+        target_id=request_id,
+        metadata={"asset_url": row["asset_url"], "byteplus_request_id": request_id_from_upstream},
+    )
+    return _asset_delete_request_response(updated)
+
+
+def _invoice_task_rows(
+    db: sqlite3.Connection,
+    *,
+    user_id: str,
+    period_start: int,
+    period_end: int,
+) -> list[sqlite3.Row]:
+    return db.execute(
+        """SELECT *
+           FROM tasks t
+           WHERE t.user_id=?
+             AND t.settled=1
+             AND t.created_at>=?
+             AND t.created_at<?
+             AND NOT EXISTS (
+               SELECT 1
+               FROM invoice_items ii
+               JOIN invoices inv ON inv.id=ii.invoice_id
+               WHERE ii.task_id=t.id AND inv.status<>'void'
+             )
+           ORDER BY t.created_at ASC, t.id ASC""",
+        (user_id, period_start, period_end),
+    ).fetchall()
+
+
+def _invoice_preview_from_rows(
+    *,
+    user_id: str,
+    period_start: int,
+    period_end: int,
+    rows: list[sqlite3.Row],
+    discount_usd: float = 0,
+) -> dict:
+    subtotal = round(sum(float(row["actual_cost_usd"] or 0) for row in rows), 6)
+    upstream = round(sum(float(row["upstream_actual_cost_usd"] or 0) for row in rows), 6)
+    discount = round(min(max(float(discount_usd or 0), 0), subtotal), 6)
+    total = round(subtotal - discount, 6)
+    return {
+        "user_id": user_id,
+        "period_start": period_start,
+        "period_end": period_end,
+        "currency": "USD",
+        "subtotal_usd": subtotal,
+        "discount_usd": discount,
+        "total_usd": total,
+        "upstream_cost_usd": upstream,
+        "gross_profit_usd": round(total - upstream, 6),
+        "task_count": len(rows),
+        "items": [
+            {
+                "task_id": row["id"],
+                "description": row["prompt_text"] or f"Video generation {row['id']}",
+                "client_model": row["client_model"],
+                "resolution": row["resolution"],
+                "duration": row["duration"],
+                "amount_usd": float(row["actual_cost_usd"] or 0),
+                "upstream_cost_usd": float(row["upstream_actual_cost_usd"] or 0),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ],
+    }
+
+
+def _invoice_response(row: sqlite3.Row | dict) -> dict:
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "invoice_no": row["invoice_no"],
+        "status": row["status"],
+        "period_start": row["period_start"],
+        "period_end": row["period_end"],
+        "currency": row["currency"],
+        "subtotal_usd": row["subtotal_usd"],
+        "discount_usd": row["discount_usd"],
+        "total_usd": row["total_usd"],
+        "upstream_cost_usd": row["upstream_cost_usd"],
+        "gross_profit_usd": row["gross_profit_usd"],
+        "task_count": row["task_count"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "paid_at": row["paid_at"],
+    }
+
+
+def _csv_response(filename: str, rows: list[dict], headers: list[str]) -> Response:
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=headers, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return Response(
+        output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ─── /auth/* (Web 登录) ──────────────────────────────────────────
@@ -2426,17 +3140,48 @@ async def list_uploads(
     try:
         rows = db.execute(
             """SELECT * FROM uploads
+               WHERE user_id=? AND deleted_at IS NULL
+               ORDER BY created_at DESC, id DESC
+               LIMIT ? OFFSET ?""",
+            (user["id"], limit, offset),
+        ).fetchall()
+        total = db.execute(
+            "SELECT COUNT(*) AS total FROM uploads WHERE user_id=? AND deleted_at IS NULL",
+            (user["id"],),
+        ).fetchone()["total"]
+        return {
+            "data": [_upload_response_from_row(row) for row in rows],
+            "limit": limit,
+            "offset": offset,
+            "total": total,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/v1/uploads/delete-requests")
+async def list_my_upload_delete_requests(
+    user=Depends(auth_user),
+    limit: int = 50,
+    offset: int = 0,
+):
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    db = get_db()
+    try:
+        rows = db.execute(
+            """SELECT * FROM asset_delete_requests
                WHERE user_id=?
                ORDER BY created_at DESC, id DESC
                LIMIT ? OFFSET ?""",
             (user["id"], limit, offset),
         ).fetchall()
         total = db.execute(
-            "SELECT COUNT(*) AS total FROM uploads WHERE user_id=?",
+            "SELECT COUNT(*) AS total FROM asset_delete_requests WHERE user_id=?",
             (user["id"],),
         ).fetchone()["total"]
         return {
-            "data": [_upload_response_from_row(row) for row in rows],
+            "data": [_asset_delete_request_response(row) for row in rows],
             "limit": limit,
             "offset": offset,
             "total": total,
@@ -2512,7 +3257,7 @@ async def get_upload(upload_id: str, user=Depends(auth_user)):
     db = get_db()
     try:
         row = db.execute(
-            "SELECT * FROM uploads WHERE id=? AND user_id=?",
+            "SELECT * FROM uploads WHERE id=? AND user_id=? AND deleted_at IS NULL",
             (upload_id, user["id"]),
         ).fetchone()
     finally:
@@ -2523,6 +3268,78 @@ async def get_upload(upload_id: str, user=Depends(auth_user)):
             "message": "Upload was not found for this account",
         }})
     return _upload_response_from_row(row)
+
+
+@app.delete("/v1/uploads/{upload_id}")
+async def delete_upload(upload_id: str, user=Depends(auth_user)):
+    db = get_db()
+    try:
+        row = db.execute(
+            "SELECT * FROM uploads WHERE id=? AND user_id=?",
+            (upload_id, user["id"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, {"error": {
+                "code": "upload_not_found",
+                "message": "Upload was not found for this account",
+            }})
+        now = int(time.time())
+        changed = _mark_upload_deleted(db, row, now=now)
+        delete_request = None
+        if row["asset_url"] and ASSET_DELETE_EXECUTION_MODE != "local_only":
+            refreshed = db.execute("SELECT * FROM uploads WHERE id=?", (upload_id,)).fetchone()
+            delete_request = _create_asset_delete_request(
+                db,
+                row=refreshed,
+                requested_by_user_id=user["id"],
+                execution_mode=ASSET_DELETE_EXECUTION_MODE,
+                reason="customer_deleted_upload",
+            )
+        _audit_event(
+            "customer_requested_upload_delete",
+            actor_user_id=user["id"],
+            actor_type="customer",
+            target_type="upload",
+            target_id=upload_id,
+            metadata={
+                "asset_url": row["asset_url"],
+                "execution_mode": ASSET_DELETE_EXECUTION_MODE,
+                "local_deleted": changed,
+                "asset_delete_request_id": delete_request["id"] if delete_request else None,
+            },
+        )
+        if delete_request:
+            _audit_event(
+                "system_created_asset_delete_request",
+                actor_user_id=user["id"],
+                actor_type="system",
+                target_type="asset_delete_request",
+                target_id=delete_request["id"],
+                metadata={
+                    "upload_id": upload_id,
+                    "asset_url": row["asset_url"],
+                    "status": delete_request["status"],
+                    "execution_mode": delete_request["execution_mode"],
+                },
+            )
+        response = {
+            "ok": True,
+            "upload_id": upload_id,
+            "deleted_at": now,
+            "asset_delete_execution_mode": ASSET_DELETE_EXECUTION_MODE,
+            "asset_delete_request": (
+                _asset_delete_request_response(delete_request) if delete_request else None
+            ),
+        }
+    finally:
+        db.close()
+    if delete_request and delete_request["status"] == "queued":
+        response["asset_delete_request"] = _execute_asset_delete_request(
+            delete_request["id"],
+            actor_user_id=user["id"],
+            actor_type="system",
+        )
+    return response
 
 
 @app.post("/v1/videos")
@@ -2953,6 +3770,7 @@ async def admin_config():
             "modelark_asset_group_name": MODELARK_ASSET_GROUP_NAME,
             "asset_auto_register_uploads": ASSET_AUTO_REGISTER_UPLOADS,
             "asset_auto_register_purposes": sorted(ASSET_AUTO_REGISTER_PURPOSES),
+            "asset_delete_execution_mode": ASSET_DELETE_EXECUTION_MODE,
             "face_asset_self_service": FACE_ASSET_SELF_SERVICE,
             "face_asset_enforce": FACE_ASSET_ENFORCE,
         },
@@ -3006,6 +3824,7 @@ async def admin_list_uploads(
     user_id: Optional[str] = None,
     purpose: Optional[str] = None,
     face_asset_whitelisted: Optional[bool] = None,
+    include_deleted: bool = False,
 ):
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
@@ -3013,6 +3832,8 @@ async def admin_list_uploads(
              LEFT JOIN users u ON up.user_id=u.id
              WHERE 1=1"""
     args: list = []
+    if not include_deleted:
+        sql += " AND up.deleted_at IS NULL"
     if user_id:
         sql += " AND up.user_id=?"
         args.append(user_id)
@@ -3072,6 +3893,182 @@ async def admin_get_upload(upload_id: str):
     return _admin_upload_response_from_row(row)
 
 
+@app.get("/admin/asset-delete-requests", dependencies=[Depends(auth_admin)])
+async def admin_list_asset_delete_requests(
+    status: Optional[str] = None,
+    user_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    sql = """FROM asset_delete_requests adr
+             LEFT JOIN users u ON adr.user_id=u.id
+             WHERE 1=1"""
+    args: list = []
+    if status:
+        sql += " AND adr.status=?"
+        args.append(status.strip().lower())
+    if user_id:
+        sql += " AND adr.user_id=?"
+        args.append(user_id)
+    db = get_db()
+    try:
+        rows = db.execute(
+            f"""SELECT adr.*, u.email AS user_email
+                {sql}
+                ORDER BY adr.created_at DESC, adr.id DESC
+                LIMIT ? OFFSET ?""",
+            args + [limit, offset],
+        ).fetchall()
+        total = db.execute(f"SELECT COUNT(*) AS total {sql}", args).fetchone()["total"]
+        data = []
+        for row in rows:
+            item = _asset_delete_request_response(row)
+            item["user_email"] = row["user_email"]
+            data.append(item)
+        return {"data": data, "limit": limit, "offset": offset, "total": total}
+    finally:
+        db.close()
+
+
+@app.post("/admin/asset-delete-requests/{request_id}/execute")
+async def admin_execute_asset_delete_request(
+    request_id: str,
+    admin=Depends(auth_admin),
+):
+    return _execute_asset_delete_request(
+        request_id,
+        actor_user_id=admin.get("id"),
+        actor_type="admin",
+    )
+
+
+@app.post("/admin/asset-delete-requests/batch-execute")
+async def admin_batch_execute_asset_delete_requests(admin=Depends(auth_admin)):
+    db = get_db()
+    try:
+        rows = db.execute(
+            """SELECT id FROM asset_delete_requests
+               WHERE status='pending_admin'
+               ORDER BY created_at ASC, id ASC
+               LIMIT 100"""
+        ).fetchall()
+    finally:
+        db.close()
+    results = [
+        _execute_asset_delete_request(
+            row["id"],
+            actor_user_id=admin.get("id"),
+            actor_type="admin",
+        )
+        for row in rows
+    ]
+    return {"data": results, "total": len(results)}
+
+
+@app.post("/admin/asset-delete-requests/{request_id}/cancel")
+async def admin_cancel_asset_delete_request(
+    request_id: str,
+    admin=Depends(auth_admin),
+):
+    db = get_db()
+    try:
+        row = db.execute(
+            "SELECT * FROM asset_delete_requests WHERE id=?",
+            (request_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(404, {"error": {
+                "code": "asset_delete_request_not_found",
+                "message": "Asset delete request was not found",
+            }})
+        if row["status"] in {"running", "succeeded"}:
+            raise HTTPException(409, {"error": {
+                "code": "asset_delete_request_not_cancellable",
+                "message": f"Asset delete request is {row['status']}",
+            }})
+        now = int(time.time())
+        db.execute(
+            "UPDATE asset_delete_requests SET status='cancelled', updated_at=? WHERE id=?",
+            (now, request_id),
+        )
+        updated = db.execute(
+            "SELECT * FROM asset_delete_requests WHERE id=?",
+            (request_id,),
+        ).fetchone()
+    finally:
+        db.close()
+    _audit_event(
+        "admin_cancelled_asset_delete_request",
+        actor_user_id=admin.get("id"),
+        actor_type="admin",
+        target_type="asset_delete_request",
+        target_id=request_id,
+        metadata={"asset_url": row["asset_url"]},
+    )
+    return _asset_delete_request_response(updated)
+
+
+@app.delete("/admin/uploads/{upload_id}")
+async def admin_delete_upload(
+    upload_id: str,
+    delete_byteplus_asset: bool = False,
+    admin=Depends(auth_admin),
+):
+    db = get_db()
+    try:
+        row = db.execute("SELECT * FROM uploads WHERE id=?", (upload_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, {"error": {
+                "code": "upload_not_found",
+                "message": "Upload was not found",
+            }})
+        now = int(time.time())
+        changed = _mark_upload_deleted(db, row, now=now)
+        delete_request = None
+        if delete_byteplus_asset and row["asset_url"]:
+            refreshed = db.execute("SELECT * FROM uploads WHERE id=?", (upload_id,)).fetchone()
+            delete_request = _create_asset_delete_request(
+                db,
+                row=refreshed,
+                requested_by_user_id=admin.get("id"),
+                execution_mode="admin_batch",
+                reason="admin_deleted_upload",
+                skip_safety_checks=True,
+            )
+        response = {
+            "ok": True,
+            "upload_id": upload_id,
+            "deleted_at": now,
+            "asset_delete_request": (
+                _asset_delete_request_response(delete_request) if delete_request else None
+            ),
+        }
+    finally:
+        db.close()
+    _audit_event(
+        "admin_deleted_customer_upload_asset",
+        actor_user_id=admin.get("id"),
+        actor_type="admin",
+        target_type="upload",
+        target_id=upload_id,
+        metadata={
+            "asset_url": row["asset_url"] if row else None,
+            "local_deleted": changed,
+            "delete_byteplus_asset": delete_byteplus_asset,
+            "asset_delete_request_id": delete_request["id"] if delete_request else None,
+        },
+    )
+    if delete_request:
+        response["asset_delete_request"] = _execute_asset_delete_request(
+            delete_request["id"],
+            actor_user_id=admin.get("id"),
+            actor_type="admin",
+        )
+    return response
+
+
 @app.get("/admin/users", dependencies=[Depends(auth_admin)])
 async def admin_list_users():
     db = get_db()
@@ -3126,7 +4123,7 @@ async def admin_get_user(user_id: str):
     uploads = db.execute(
         """SELECT *
            FROM uploads
-           WHERE user_id=?
+           WHERE user_id=? AND deleted_at IS NULL
            ORDER BY created_at DESC, id DESC
            LIMIT 20""",
         (user_id,),
@@ -3142,6 +4139,390 @@ async def admin_get_user(user_id: str):
     ).fetchone()
     u["lifetime_stats"] = dict(stats)
     return u
+
+
+@app.get("/admin/upstream/iam-capabilities", dependencies=[Depends(auth_admin)])
+async def admin_get_upstream_iam_capabilities():
+    return _upstream_capabilities()
+
+
+@app.get("/admin/upstream/provision-jobs/{job_id}", dependencies=[Depends(auth_admin)])
+async def admin_get_upstream_provision_job(job_id: str):
+    db = get_db()
+    try:
+        row = db.execute("SELECT * FROM upstream_provision_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, {"error": {
+                "code": "upstream_provision_job_not_found",
+                "message": "Provision job was not found",
+            }})
+        upstream = None
+        if row["result_json"]:
+            try:
+                upstream = json.loads(row["result_json"])
+            except Exception:
+                upstream = None
+        return _upstream_job_response(row, upstream=upstream)
+    finally:
+        db.close()
+
+
+@app.get("/admin/users/{user_id}/upstream", dependencies=[Depends(auth_admin)])
+async def admin_get_user_upstream(user_id: str):
+    db = get_db()
+    try:
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(404, {"error": {
+                "code": "user_not_found",
+                "message": "User was not found",
+            }})
+        return _user_upstream_response(user)
+    finally:
+        db.close()
+
+
+@app.patch("/admin/users/{user_id}/upstream", dependencies=[Depends(auth_admin)])
+async def admin_patch_user_upstream(user_id: str, req: UpdateUpstreamConfigRequest):
+    db = get_db()
+    try:
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(404, {"error": {
+                "code": "user_not_found",
+                "message": "User was not found",
+            }})
+        note_updates: dict[str, Any] = {"byteplus_upstream_updated_at": int(time.time())}
+        if req.upstream_mode is not None:
+            note_updates["upstream_mode"] = req.upstream_mode
+        if req.customer_slug is not None:
+            note_updates["customer_slug"] = _normalize_customer_slug(req.customer_slug)
+        if req.byteplus_project_name is not None:
+            note_updates["byteplus_project_name"] = req.byteplus_project_name.strip()
+        if req.byteplus_endpoint_id is not None:
+            note_updates["byteplus_endpoint_id"] = req.byteplus_endpoint_id.strip()
+        if req.modelark_asset_group_id is not None:
+            note_updates["modelark_asset_group_id"] = req.modelark_asset_group_id.strip()
+        if req.endpoint_key_rotation_enabled is not None:
+            note_updates["byteplus_endpoint_key_rotation_enabled"] = bool(req.endpoint_key_rotation_enabled)
+        note = _merge_user_note_json(user["note"], note_updates)
+        if req.endpoint_api_key:
+            db.execute(
+                "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+                (req.endpoint_api_key.strip(), note, user_id),
+            )
+        else:
+            db.execute("UPDATE users SET note=? WHERE id=?", (note, user_id))
+        updated = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    finally:
+        db.close()
+    _audit_event(
+        "admin_updated_customer_upstream_config",
+        actor_user_id=None,
+        actor_type="admin",
+        target_type="user",
+        target_id=user_id,
+        metadata={
+            "fields": sorted(req.model_fields_set),
+            "secret_changed": bool(req.endpoint_api_key),
+        },
+    )
+    return _user_upstream_response(updated)
+
+
+@app.post("/admin/users/{user_id}/upstream/endpoint-key/rotate", dependencies=[Depends(auth_admin)])
+async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateRequest):
+    db = get_db()
+    try:
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(404, {"error": {
+                "code": "user_not_found",
+                "message": "User was not found",
+            }})
+        endpoint_id = _user_byteplus_endpoint_id(dict(user))
+        if not endpoint_id:
+            raise HTTPException(400, {"error": {
+                "code": "endpoint_not_configured",
+                "message": "This user does not have a BytePlus endpoint id configured",
+            }})
+    finally:
+        db.close()
+
+    try:
+        issued = _get_endpoint_api_key(endpoint_id, req.duration_seconds)
+    except Exception as exc:
+        message = sanitize(str(exc))[:1000]
+        _audit_event(
+            "admin_endpoint_api_key_rotation_failed",
+            actor_user_id=None,
+            actor_type="admin",
+            target_type="user",
+            target_id=user_id,
+            metadata={"endpoint_id": endpoint_id, "error": message},
+        )
+        raise HTTPException(502, {"error": {
+            "code": "endpoint_key_rotation_failed",
+            "message": message,
+        }}) from exc
+
+    db = get_db()
+    try:
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        note = _merge_user_note_json(
+            user["note"],
+            {
+                "upstream_mode": _user_note_json(dict(user)).get("upstream_mode") or "auto_dedicated",
+                "byteplus_endpoint_api_key_expires_at": int(issued["expires_at"]),
+                "byteplus_endpoint_key_last_rotated_at": int(time.time()),
+                "byteplus_endpoint_key_rotation_error": "",
+            },
+        )
+        db.execute(
+            "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+            (issued["api_key"], note, user_id),
+        )
+        updated = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    finally:
+        db.close()
+    _audit_event(
+        "admin_rotated_endpoint_api_key",
+        actor_user_id=None,
+        actor_type="admin",
+        target_type="user",
+        target_id=user_id,
+        metadata={"endpoint_id": endpoint_id, "expires_at": int(issued["expires_at"]), "secret_changed": True},
+    )
+    return _user_upstream_response(updated)
+
+
+@app.post("/admin/users/{user_id}/upstream/provision", dependencies=[Depends(auth_admin)])
+async def admin_provision_user_upstream(user_id: str, req: ProvisionUpstreamRequest):
+    db = get_db()
+    job_id = "upj_" + secrets.token_hex(8)
+    now = int(time.time())
+    try:
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(404, {"error": {
+                "code": "user_not_found",
+                "message": "User was not found",
+            }})
+        user_dict = dict(user)
+        planned = _planned_upstream_provision(user_dict, req)
+        db.execute(
+            """INSERT INTO upstream_provision_jobs
+               (id, user_id, status, customer_slug, request_json,
+                result_json, error_message, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                job_id,
+                user_id,
+                "dry_run" if req.dry_run else "running",
+                planned["customer_slug"],
+                json.dumps(req.model_dump(), ensure_ascii=True, sort_keys=True),
+                json.dumps({"planned": planned}, ensure_ascii=True, sort_keys=True) if req.dry_run else None,
+                None,
+                now,
+                now,
+            ),
+        )
+        if req.dry_run:
+            row = db.execute("SELECT * FROM upstream_provision_jobs WHERE id=?", (job_id,)).fetchone()
+            return {**_upstream_job_response(row), "planned": planned}
+    finally:
+        db.close()
+
+    try:
+        result = _provision_customer_upstream_resources(user_dict, req)
+        updated_user = _apply_upstream_result_to_user(
+            user_dict,
+            result,
+            upstream_mode="auto_dedicated",
+            rotation_enabled=req.rotate_endpoint_key,
+        )
+        upstream_response = _user_upstream_response(updated_user)
+        db = get_db()
+        try:
+            db.execute(
+                """UPDATE upstream_provision_jobs
+                   SET status='succeeded', result_json=?, updated_at=?, finished_at=?
+                   WHERE id=?""",
+                (
+                    json.dumps(upstream_response, ensure_ascii=True, sort_keys=True),
+                    int(time.time()),
+                    int(time.time()),
+                    job_id,
+                ),
+            )
+            row = db.execute("SELECT * FROM upstream_provision_jobs WHERE id=?", (job_id,)).fetchone()
+        finally:
+            db.close()
+        _audit_event(
+            "admin_provisioned_customer_upstream",
+            actor_user_id=None,
+            actor_type="admin",
+            target_type="user",
+            target_id=user_id,
+            metadata={
+                "job_id": job_id,
+                "endpoint_id": upstream_response.get("byteplus_endpoint_id"),
+                "asset_group_id": upstream_response.get("modelark_asset_group_id"),
+                "secret_changed": bool(result.get("endpoint_api_key")),
+            },
+        )
+        return _upstream_job_response(row, upstream=upstream_response)
+    except Exception as exc:
+        message = sanitize(str(exc))[:1000]
+        db = get_db()
+        try:
+            db.execute(
+                """UPDATE upstream_provision_jobs
+                   SET status='failed', error_message=?, updated_at=?, finished_at=?
+                   WHERE id=?""",
+                (message, int(time.time()), int(time.time()), job_id),
+            )
+        finally:
+            db.close()
+        _audit_event(
+            "admin_customer_upstream_provision_failed",
+            actor_user_id=None,
+            actor_type="admin",
+            target_type="user",
+            target_id=user_id,
+            metadata={"job_id": job_id, "error": message},
+        )
+        raise HTTPException(502, {"error": {
+            "code": "upstream_provision_failed",
+            "message": message,
+            "job_id": job_id,
+        }}) from exc
+
+
+@app.get("/admin/users/{user_id}/billing/preview", dependencies=[Depends(auth_admin)])
+async def admin_preview_user_billing(user_id: str, period_start: int, period_end: int):
+    if period_end <= period_start:
+        raise HTTPException(400, {"error": {
+            "code": "invalid_billing_period",
+            "message": "period_end must be greater than period_start",
+        }})
+    db = get_db()
+    try:
+        user = db.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(404, {"error": {
+                "code": "user_not_found",
+                "message": "User was not found",
+            }})
+        rows = _invoice_task_rows(
+            db,
+            user_id=user_id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        return _invoice_preview_from_rows(
+            user_id=user_id,
+            period_start=period_start,
+            period_end=period_end,
+            rows=rows,
+        )
+    finally:
+        db.close()
+
+
+@app.post("/admin/users/{user_id}/invoices", dependencies=[Depends(auth_admin)])
+async def admin_create_user_invoice(user_id: str, req: CreateInvoiceRequest):
+    if req.period_end <= req.period_start:
+        raise HTTPException(400, {"error": {
+            "code": "invalid_billing_period",
+            "message": "period_end must be greater than period_start",
+        }})
+    db = get_db()
+    try:
+        user = db.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if not user:
+            raise HTTPException(404, {"error": {
+                "code": "user_not_found",
+                "message": "User was not found",
+            }})
+        rows = _invoice_task_rows(
+            db,
+            user_id=user_id,
+            period_start=req.period_start,
+            period_end=req.period_end,
+        )
+        preview = _invoice_preview_from_rows(
+            user_id=user_id,
+            period_start=req.period_start,
+            period_end=req.period_end,
+            rows=rows,
+            discount_usd=req.discount_usd,
+        )
+        now = int(time.time())
+        invoice_id = "inv_" + secrets.token_hex(8)
+        invoice_no = f"INV-{time.strftime('%Y%m%d', time.gmtime(now))}-{secrets.token_hex(3).upper()}"
+        db.execute(
+            """INSERT INTO invoices
+               (id, user_id, invoice_no, status, period_start, period_end,
+                currency, subtotal_usd, discount_usd, total_usd,
+                upstream_cost_usd, gross_profit_usd, task_count,
+                note, snapshot_json, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                invoice_id,
+                user_id,
+                invoice_no,
+                "draft",
+                req.period_start,
+                req.period_end,
+                "USD",
+                preview["subtotal_usd"],
+                preview["discount_usd"],
+                preview["total_usd"],
+                preview["upstream_cost_usd"],
+                preview["gross_profit_usd"],
+                preview["task_count"],
+                req.note,
+                json.dumps(preview, ensure_ascii=True),
+                now,
+                now,
+            ),
+        )
+        for item in preview["items"]:
+            db.execute(
+                """INSERT INTO invoice_items
+                   (id, invoice_id, task_id, item_type, description,
+                    client_model, resolution, duration, quantity,
+                    unit_price_usd, amount_usd, upstream_cost_usd, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "ini_" + secrets.token_hex(8),
+                    invoice_id,
+                    item["task_id"],
+                    "task",
+                    item["description"],
+                    item["client_model"],
+                    item["resolution"],
+                    item["duration"],
+                    1,
+                    item["amount_usd"],
+                    item["amount_usd"],
+                    item["upstream_cost_usd"],
+                    now,
+                ),
+            )
+        invoice = db.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+    finally:
+        db.close()
+    _audit_event(
+        "admin_created_customer_invoice",
+        actor_user_id=None,
+        actor_type="admin",
+        target_type="invoice",
+        target_id=invoice_id,
+        metadata={"invoice_id": invoice_id, "user_id": user_id, "task_count": preview["task_count"]},
+    )
+    return _invoice_response(invoice)
 
 
 @app.post("/admin/users", dependencies=[Depends(auth_admin)])
@@ -3300,6 +4681,58 @@ async def admin_rotate_user_api_key(user_id: str):
     }
 
 
+@app.post("/admin/users/{user_id}/password/reset", dependencies=[Depends(auth_admin)])
+async def admin_reset_user_password(user_id: str, req: AdminPasswordResetRequest):
+    db = get_db()
+    user = db.execute("SELECT id, email, note FROM users WHERE id=?", (user_id,)).fetchone()
+    if not user:
+        raise HTTPException(404, {"error": {
+            "code": "user_not_found",
+            "message": "User was not found",
+        }})
+    if req.generate:
+        new_password = secrets.token_urlsafe(18)
+        temporary_password: Optional[str] = new_password
+    else:
+        if not req.new_password:
+            raise HTTPException(400, {"error": {
+                "code": "password_required",
+                "message": "new_password is required when generate=false",
+            }})
+        new_password = req.new_password
+        temporary_password = None
+    now = int(time.time())
+    note = _merge_user_note_json(
+        user["note"],
+        {"must_change_password": bool(req.force_change_on_next_login)},
+    )
+    db.execute(
+        "UPDATE users SET password_hash=?, password_changed_at=?, note=? WHERE id=?",
+        (hash_password(new_password), now, note, user_id),
+    )
+    db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+    _audit_event(
+        "admin_reset_password",
+        actor_user_id=None,
+        actor_type="admin",
+        target_type="user",
+        target_id=user_id,
+        metadata={
+            "generated": bool(req.generate),
+            "temporary_password_returned": bool(temporary_password),
+            "force_change_on_next_login": bool(req.force_change_on_next_login),
+        },
+    )
+    return {
+        "ok": True,
+        "temporary_password": temporary_password,
+        "password_changed_at": now,
+        "sessions_revoked": True,
+        "force_change_on_next_login": bool(req.force_change_on_next_login),
+        "shown_once": bool(temporary_password),
+    }
+
+
 @app.post("/admin/users/{user_id}/topup", dependencies=[Depends(auth_admin)])
 async def admin_topup(user_id: str, req: TopupReq):
     db = get_db()
@@ -3335,6 +4768,95 @@ async def admin_disable_user(user_id: str):
         metadata={"is_active": False},
     )
     return {"ok": True, "id": user_id, "is_active": False}
+
+
+@app.get("/admin/invoices/{invoice_id}/export", dependencies=[Depends(auth_admin)])
+async def admin_export_invoice(invoice_id: str, format: str = "csv", view: str = "customer"):
+    if format != "csv":
+        raise HTTPException(400, {"error": {
+            "code": "unsupported_invoice_export_format",
+            "message": "Only CSV export is available in this release",
+        }})
+    if view not in {"customer", "internal"}:
+        raise HTTPException(400, {"error": {
+            "code": "invalid_invoice_export_view",
+            "message": "view must be customer or internal",
+        }})
+    db = get_db()
+    try:
+        invoice = db.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+        if not invoice:
+            raise HTTPException(404, {"error": {
+                "code": "invoice_not_found",
+                "message": "Invoice was not found",
+            }})
+        items = db.execute(
+            """SELECT *
+               FROM invoice_items
+               WHERE invoice_id=?
+               ORDER BY created_at ASC, id ASC""",
+            (invoice_id,),
+        ).fetchall()
+    finally:
+        db.close()
+    rows = []
+    for item in items:
+        amount = float(item["amount_usd"] or 0)
+        upstream_cost = float(item["upstream_cost_usd"] or 0)
+        row = {
+            "task_id": item["task_id"],
+            "description": item["description"],
+            "model": item["client_model"],
+            "resolution": item["resolution"],
+            "duration": item["duration"],
+            "amount_usd": f"{amount:.6f}",
+        }
+        if view == "internal":
+            row["upstream_cost_usd"] = f"{upstream_cost:.6f}"
+            row["gross_profit_usd"] = f"{(amount - upstream_cost):.6f}"
+        rows.append(row)
+    headers = ["task_id", "description", "model", "resolution", "duration", "amount_usd"]
+    if view == "internal":
+        headers += ["upstream_cost_usd", "gross_profit_usd"]
+    _audit_event(
+        "admin_exported_customer_invoice",
+        actor_user_id=None,
+        actor_type="admin",
+        target_type="invoice",
+        target_id=invoice_id,
+        metadata={"invoice_id": invoice_id, "view": view, "format": format},
+    )
+    filename = f"invoice-{invoice['invoice_no']}-{view}.csv"
+    return _csv_response(filename, rows, headers)
+
+
+@app.post("/admin/invoices/{invoice_id}/mark-paid", dependencies=[Depends(auth_admin)])
+async def admin_mark_invoice_paid(invoice_id: str):
+    db = get_db()
+    try:
+        invoice = db.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+        if not invoice:
+            raise HTTPException(404, {"error": {
+                "code": "invoice_not_found",
+                "message": "Invoice was not found",
+            }})
+        now = int(time.time())
+        db.execute(
+            "UPDATE invoices SET status='paid', paid_at=?, updated_at=? WHERE id=?",
+            (now, now, invoice_id),
+        )
+        updated = db.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,)).fetchone()
+    finally:
+        db.close()
+    _audit_event(
+        "admin_marked_customer_invoice_paid",
+        actor_user_id=None,
+        actor_type="admin",
+        target_type="invoice",
+        target_id=invoice_id,
+        metadata={"invoice_id": invoice_id},
+    )
+    return _invoice_response(updated)
 
 
 def _format_audit_event(row: sqlite3.Row | dict) -> dict:

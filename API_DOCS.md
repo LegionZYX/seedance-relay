@@ -317,6 +317,27 @@ curl https://video.example.com/v1/uploads/from-url \
   -d '{"url": "https://example.com/reference.jpg", "purpose": "image"}'
 ```
 
+删除自己的素材：
+
+```bash
+curl https://video.example.com/v1/uploads/upl_a1b2c3d4e5f6a7b8 \
+  -X DELETE \
+  -H "Authorization: Bearer $KEY"
+```
+
+如果素材已经注册成 `asset://...`，Relay 会按 `ASSET_DELETE_EXECUTION_MODE`
+创建 BytePlus asset 删除请求。默认 `admin_batch` 模式下，素材会立即从客户素材库隐藏，
+BytePlus asset 由管理员后台批量执行删除。
+
+查看自己的删除请求：
+
+```bash
+curl https://video.example.com/v1/uploads/delete-requests \
+  -H "Authorization: Bearer $KEY"
+```
+
+默认 `admin_batch` 模式下，管理员会在后台批量处理待删除 asset；客户不需要也不会接触管理员密钥或 BytePlus 权限。
+
 ## 10. 账号自助
 
 修改登录密码：

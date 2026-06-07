@@ -90,6 +90,42 @@ class StaticAdminUiTests(unittest.TestCase):
         self.assertIn("rotatedKey: null", admin_html)
         self.assertIn("rotatedKey: false", admin_html)
 
+    def test_admin_ui_uses_dedicated_customer_password_reset_endpoint(self):
+        admin_html = (PROJECT_DIR / "static/admin.html").read_text(encoding="utf-8")
+
+        self.assertIn("resetCustomerPassword", admin_html)
+        self.assertIn("生成临时密码", admin_html)
+        self.assertIn("/password/reset", admin_html)
+        self.assertIn("temporary_password", admin_html)
+        self.assertIn("force_change_on_next_login", admin_html)
+        self.assertIn("客户临时密码已生成", admin_html)
+
+    def test_admin_ui_exposes_invoice_preview_save_and_export_controls(self):
+        admin_html = (PROJECT_DIR / "static/admin.html").read_text(encoding="utf-8")
+
+        self.assertIn("billingForm", admin_html)
+        self.assertIn("previewBilling", admin_html)
+        self.assertIn("saveInvoice", admin_html)
+        self.assertIn("exportInvoice", admin_html)
+        self.assertIn("markInvoicePaid", admin_html)
+        self.assertIn("/billing/preview", admin_html)
+        self.assertIn("/invoices", admin_html)
+        self.assertIn("/export?format=csv&view=customer", admin_html)
+        self.assertIn("/export?format=csv&view=internal", admin_html)
+        self.assertIn("/mark-paid", admin_html)
+
+    def test_admin_ui_exposes_customer_endpoint_controls(self):
+        admin_html = (PROJECT_DIR / "static/admin.html").read_text(encoding="utf-8")
+
+        self.assertIn("Customer Endpoint", admin_html)
+        self.assertIn("upstreamForm", admin_html)
+        self.assertIn("saveUpstreamConfig", admin_html)
+        self.assertIn("provisionCustomerEndpoint", admin_html)
+        self.assertIn("rotateEndpointKey", admin_html)
+        self.assertIn("/upstream/provision", admin_html)
+        self.assertIn("/upstream/endpoint-key/rotate", admin_html)
+        self.assertIn("endpoint_key_rotation_enabled", admin_html)
+
     def test_admin_ui_template_has_no_obvious_broken_attributes_or_tags(self):
         admin_html = (PROJECT_DIR / "static/admin.html").read_text(encoding="utf-8")
 

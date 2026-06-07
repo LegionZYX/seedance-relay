@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -1618,6 +1619,72 @@ class Alpha1SpecControlTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 422, response.text)
+
+    def test_admin_password_reset_endpoint_generates_temporary_password_and_flags_change(self):
+        user = self.create_user("admin-reset-generate@example.test")
+        stale_session = self.server.create_session(user["id"])
+
+        response = self.client.post(
+            f"/admin/users/{user['id']}/password/reset",
+            headers=self.admin_headers(),
+            json={"generate": True, "force_change_on_next_login": True},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["shown_once"])
+        self.assertGreaterEqual(len(body["temporary_password"]), 10)
+        self.assertNotIn("password_hash", response.text)
+
+        stale_session_me = self.client.get(
+            "/auth/me",
+            headers={"Cookie": f"relay_session={stale_session}"},
+        )
+        self.assertEqual(stale_session_me.status_code, 401, stale_session_me.text)
+
+        login = self.client.post(
+            "/auth/login",
+            json={
+                "email": "admin-reset-generate@example.test",
+                "password": body["temporary_password"],
+            },
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+
+        db = self.server.get_db()
+        row = db.execute("SELECT note FROM users WHERE id=?", (user["id"],)).fetchone()
+        db.close()
+        note = json.loads(row["note"])
+        self.assertTrue(note["must_change_password"])
+
+    def test_admin_password_reset_endpoint_accepts_manual_password_without_echoing_it(self):
+        user = self.create_user("admin-reset-manual@example.test")
+
+        response = self.client.post(
+            f"/admin/users/{user['id']}/password/reset",
+            headers=self.admin_headers(),
+            json={
+                "generate": False,
+                "new_password": "manual-reset-password",
+                "force_change_on_next_login": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertIsNone(body.get("temporary_password"))
+        self.assertNotIn("manual-reset-password", response.text)
+
+        login = self.client.post(
+            "/auth/login",
+            json={
+                "email": "admin-reset-manual@example.test",
+                "password": "manual-reset-password",
+            },
+        )
+        self.assertEqual(login.status_code, 200, login.text)
 
     def test_admin_api_key_rotation_revokes_existing_customer_sessions(self):
         user = self.create_user("admin-rotate-session@example.test")

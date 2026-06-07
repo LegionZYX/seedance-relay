@@ -30,6 +30,7 @@ class UploadEndpointTests(unittest.TestCase):
         os.environ.pop("FACE_ASSET_SELF_SERVICE", None)
         os.environ.pop("FACE_ASSET_ENFORCE", None)
         os.environ.pop("FACE_ASSET_ALLOWLIST", None)
+        os.environ.pop("ASSET_DELETE_EXECUTION_MODE", None)
 
         if str(PROJECT_DIR) not in sys.path:
             sys.path.insert(0, str(PROJECT_DIR))
@@ -294,6 +295,113 @@ class UploadEndpointTests(unittest.TestCase):
         self.assertEqual(own_detail.json()["id"], mine.json()["id"])
         self.assertEqual(other_detail.status_code, 404, other_detail.text)
         self.assertEqual(other_detail.json()["detail"]["error"]["code"], "upload_not_found")
+
+    def test_customer_can_delete_own_local_upload_and_it_is_hidden(self):
+        upload = self.client.post(
+            "/v1/uploads",
+            headers=self.auth_headers(),
+            files={"file": ("mine.jpg", b"\xff\xd8\xff\xe0mine", "image/jpeg")},
+        )
+        self.assertEqual(upload.status_code, 200, upload.text)
+        body = upload.json()
+        saved = Path(os.environ["UPLOAD_DIR"]) / body["object_key"].replace("uploads/", "")
+        self.assertTrue(saved.exists())
+
+        deleted = self.client.delete(
+            f"/v1/uploads/{body['id']}",
+            headers=self.auth_headers(),
+        )
+
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertTrue(deleted.json()["ok"])
+        self.assertIsNone(deleted.json()["asset_delete_request"])
+        self.assertFalse(saved.exists())
+
+        listed = self.client.get("/v1/uploads", headers=self.auth_headers())
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["data"], [])
+
+        fetched = self.client.get(
+            f"/v1/uploads/{body['id']}",
+            headers=self.auth_headers(),
+        )
+        self.assertEqual(fetched.status_code, 404, fetched.text)
+
+    def test_customer_delete_asset_upload_creates_idempotent_admin_request(self):
+        self.server.ASSET_AUTO_REGISTER_UPLOADS = True
+        self.server.ASSET_AUTO_REGISTER_PURPOSES = {"image"}
+        self.server.ASSET_DELETE_EXECUTION_MODE = "admin_batch"
+
+        def fake_register(url, purpose, user=None):
+            return {
+                "asset_id": "asset-delete-me",
+                "asset_url": "asset://asset-delete-me",
+                "asset_status": "created",
+            }
+
+        self.server._register_upload_asset = fake_register
+        upload = self.client.post(
+            "/v1/uploads",
+            headers=self.auth_headers(),
+            files={"file": ("mine.jpg", b"\xff\xd8\xff\xe0mine", "image/jpeg")},
+        )
+        self.assertEqual(upload.status_code, 200, upload.text)
+        upload_id = upload.json()["id"]
+
+        first = self.client.delete(f"/v1/uploads/{upload_id}", headers=self.auth_headers())
+        second = self.client.delete(f"/v1/uploads/{upload_id}", headers=self.auth_headers())
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        first_req = first.json()["asset_delete_request"]
+        second_req = second.json()["asset_delete_request"]
+        self.assertEqual(first_req["id"], second_req["id"])
+        self.assertEqual(first_req["status"], "pending_admin")
+        self.assertEqual(first_req["asset_url"], "asset://asset-delete-me")
+
+        requests = self.client.get(
+            "/v1/uploads/delete-requests",
+            headers=self.auth_headers(),
+        )
+        self.assertEqual(requests.status_code, 200, requests.text)
+        self.assertEqual(requests.json()["total"], 1)
+
+    def test_auto_asset_delete_executes_byteplus_delete_adapter(self):
+        self.server.ASSET_AUTO_REGISTER_UPLOADS = True
+        self.server.ASSET_AUTO_REGISTER_PURPOSES = {"image"}
+        self.server.ASSET_DELETE_EXECUTION_MODE = "auto"
+        deleted_assets = []
+
+        def fake_register(url, purpose, user=None):
+            return {
+                "asset_id": "asset-auto-delete",
+                "asset_url": "asset://asset-auto-delete",
+                "asset_status": "created",
+            }
+
+        def fake_delete(asset_id, user=None):
+            deleted_assets.append((asset_id, user["id"] if user else None))
+            return {"RequestId": "req-delete-1"}
+
+        self.server._register_upload_asset = fake_register
+        self.server._delete_byteplus_asset = fake_delete
+        upload = self.client.post(
+            "/v1/uploads",
+            headers=self.auth_headers(),
+            files={"file": ("mine.jpg", b"\xff\xd8\xff\xe0mine", "image/jpeg")},
+        )
+        self.assertEqual(upload.status_code, 200, upload.text)
+
+        deleted = self.client.delete(
+            f"/v1/uploads/{upload.json()['id']}",
+            headers=self.auth_headers(),
+        )
+
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        request = deleted.json()["asset_delete_request"]
+        self.assertEqual(request["status"], "succeeded")
+        self.assertEqual(request["byteplus_request_id"], "req-delete-1")
+        self.assertEqual(deleted_assets, [("asset-auto-delete", "u_upload")])
 
     def test_admin_can_list_all_uploads_and_filter_by_user(self):
         other_api_key = "sk-upload-other"
