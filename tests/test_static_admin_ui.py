@@ -114,10 +114,15 @@ class StaticAdminUiTests(unittest.TestCase):
         self.assertIn("/export?format=csv&view=internal", admin_html)
         self.assertIn("/mark-paid", admin_html)
 
-    def test_admin_ui_exposes_customer_endpoint_controls(self):
+    def test_admin_ui_exposes_customer_project_endpoint_map_controls(self):
         admin_html = (PROJECT_DIR / "static/admin.html").read_text(encoding="utf-8")
 
-        self.assertIn("Customer Endpoint", admin_html)
+        self.assertIn("Customer Project Resources", admin_html)
+        self.assertIn("Model Endpoint Map", admin_html)
+        self.assertIn("endpointMapRows", admin_html)
+        self.assertIn("endpointMappingMissingModels", admin_html)
+        self.assertIn("byteplus_endpoint_map", admin_html)
+        self.assertIn("mapping missing", admin_html)
         self.assertIn("upstreamForm", admin_html)
         self.assertIn("saveUpstreamConfig", admin_html)
         self.assertIn("provisionCustomerEndpoint", admin_html)
@@ -125,6 +130,8 @@ class StaticAdminUiTests(unittest.TestCase):
         self.assertIn("/upstream/provision", admin_html)
         self.assertIn("/upstream/endpoint-key/rotate", admin_html)
         self.assertIn("endpoint_key_rotation_enabled", admin_html)
+        self.assertNotIn("shared = ", admin_html)
+        self.assertNotIn("auto_dedicated =", admin_html)
 
     def test_admin_ui_template_has_no_obvious_broken_attributes_or_tags(self):
         admin_html = (PROJECT_DIR / "static/admin.html").read_text(encoding="utf-8")

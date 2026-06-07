@@ -25,13 +25,14 @@ Keep these values aligned:
 ```text
 Region: ap-southeast-1
 Project: default, or the same ProjectName used for both assets and endpoint
-Endpoint model: dreamina-seedance-2-0, version 260128
-Endpoint moderation: Skip, if operator policy allows this
+Endpoint model: follow Relay upstream config (`BYTEPLUS_ENDPOINT_MODEL_NAME` / `BYTEPLUS_ENDPOINT_MODEL_VERSION`; current verified example is dreamina-seedance-2-0, version 260128)
+Endpoint moderation: Skip
 Asset group project: same project as the endpoint
 ```
 
 The client-facing model remains the native BytePlus model id, for example
-`dreamina-seedance-2-0-260128`. In IAM upstream mode, Relay forwards the
+`dreamina-seedance-2-0-260128` or `dreamina-seedance-2-0-fast-260128`.
+In IAM upstream mode, Relay forwards the
 configured Endpoint ID to BytePlus while keeping the client model id in local
 task/accounting records.
 
@@ -67,6 +68,12 @@ sensitive.
 asset registration. Current BytePlus runtime SDKs require an API key for
 `content_generation.tasks.create`, so generation should use an endpoint-scoped
 key returned by IAM `GetApiKey`.
+
+If the admin UI or upstream provision endpoint is unavailable, follow
+`docs/ops/alpha2-byteplus-dedicated-endpoint-ai-runbook.md`. That runbook records
+the verified fallback sequence: IAM `GetProject/CreateProject`, ModelArk
+`CreateEndpoint`, `GetEndpoint`, `CreateAssetGroup` with `GroupType=AIGC`, and
+`GetApiKey` with `ResourceType=endpoint`.
 
 For a temporary IP-only deployment, set `PUBLIC_DOMAIN` to the bare IP and
 `PUBLIC_BASE_URL` to `http://<ip>`. Switch `PUBLIC_BASE_URL` back to

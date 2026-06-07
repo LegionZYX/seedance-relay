@@ -138,6 +138,36 @@ class UpstreamAdminTests(unittest.TestCase):
         self.assertEqual(row["byteplus_api_key"], "rotated-endpoint-key")
         self.assertEqual(json.loads(row["note"])["byteplus_endpoint_api_key_expires_at"], 1234567890)
 
+    def test_admin_manual_endpoint_key_rotation_uses_endpoint_map_when_present(self):
+        db = self.server.get_db()
+        note = json.loads(db.execute("SELECT note FROM users WHERE id=?", (self.user_id,)).fetchone()["note"])
+        note["byteplus_endpoint_map"] = {
+            "dreamina-seedance-2-0-260128": "ep-standard",
+            "dreamina-seedance-2-0-fast-260128": "ep-fast",
+        }
+        db.execute("UPDATE users SET note=? WHERE id=?", (json.dumps(note), self.user_id))
+        db.close()
+
+        def fake_get_endpoint_api_key(endpoint_ids, duration_seconds):
+            self.assertEqual(set(endpoint_ids), {"ep-standard", "ep-fast"})
+            self.assertEqual(duration_seconds, 60)
+            return {"api_key": "rotated-map-key", "expires_at": 1234567890}
+
+        self.server._get_endpoint_api_key = fake_get_endpoint_api_key
+
+        rotated = self.client.post(
+            f"/admin/users/{self.user_id}/upstream/endpoint-key/rotate",
+            headers=self.admin_headers(),
+            json={"duration_seconds": 60},
+        )
+
+        self.assertEqual(rotated.status_code, 200, rotated.text)
+        self.assertNotIn("rotated-map-key", rotated.text)
+        db = self.server.get_db()
+        row = db.execute("SELECT byteplus_api_key FROM users WHERE id=?", (self.user_id,)).fetchone()
+        db.close()
+        self.assertEqual(row["byteplus_api_key"], "rotated-map-key")
+
     def test_endpoint_key_request_uses_resource_ids_contract(self):
         calls = []
 

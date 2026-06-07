@@ -910,20 +910,20 @@
           <div class="info-box" style="margin-bottom:18px;">
             <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:12px;">
               <div>
-                <b>Customer Endpoint</b>
-                <div style="font-size:12px; margin-top:3px;">shared = 普通客户；auto_dedicated = 独立 project / endpoint / asset group。</div>
+                <b>Customer Project Resources</b>
+                <div style="font-size:12px; margin-top:3px;">One customer uses one BytePlus Project, one AIGC AssetGroup, and a Model Endpoint Map for enabled models.</div>
               </div>
-              <el-tag :type="upstreamForm.upstream_mode === 'auto_dedicated' ? 'success' : 'info'" effect="light">
-                {{ upstreamForm.upstream_mode || 'shared' }}
+              <el-tag :type="upstreamForm.byteplus_project_name ? 'success' : 'warning'" effect="light">
+                {{ upstreamForm.byteplus_project_name ? 'project configured' : 'project missing' }}
               </el-tag>
             </div>
             <el-row :gutter="10">
               <el-col :span="8">
-                <el-form-item label="Mode">
+                <el-form-item label="resource_mode">
                   <el-select v-model="upstreamForm.upstream_mode" style="width:100%">
-                    <el-option label="shared" value="shared" />
-                    <el-option label="manual_dedicated" value="manual_dedicated" />
-                    <el-option label="auto_dedicated" value="auto_dedicated" />
+                    <el-option label="not provisioned" value="shared" />
+                    <el-option label="manual resources" value="manual_dedicated" />
+                    <el-option label="auto provisioned resources" value="auto_dedicated" />
                   </el-select>
                 </el-form-item>
               </el-col>
@@ -935,12 +935,39 @@
               <el-col :span="8"><el-form-item label="asset_group_id"><el-input v-model="upstreamForm.modelark_asset_group_id" placeholder="group-..." /></el-form-item></el-col>
               <el-col :span="8"><el-form-item label="endpoint key"><el-input v-model="upstreamForm.endpoint_api_key" :placeholder="upstreamForm.endpoint_api_key_masked ? `当前: ${upstreamForm.endpoint_api_key_masked}` : '留空不改'" /></el-form-item></el-col>
             </el-row>
+            <div style="margin:8px 0 12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <b>Model Endpoint Map</b>
+                <el-tag size="small" :type="endpointMappingMissingModels.length ? 'warning' : 'success'" effect="plain">
+                  {{ endpointMapRows.length }} mapped / {{ endpointMappingMissingModels.length }} mapping missing
+                </el-tag>
+              </div>
+              <el-table v-if="endpointMapRows.length" :data="endpointMapRows" size="small" border style="width:100%">
+                <el-table-column prop="model_id" label="model_id" min-width="220" />
+                <el-table-column prop="endpoint_id" label="endpoint_id" min-width="180">
+                  <template #default="{ row }"><span class="mono">{{ row.endpoint_id }}</span></template>
+                </el-table-column>
+              </el-table>
+              <div v-else class="credential-box">
+                <div class="credential-label">Model Endpoint Map</div>
+                <div class="credential-value">No endpoint mapping stored yet</div>
+              </div>
+              <el-alert
+                v-if="endpointMappingMissingModels.length"
+                type="warning"
+                :closable="false"
+                show-icon
+                style="margin-top:8px;"
+              >
+                <template #title>mapping missing: {{ endpointMappingMissingModels.join(", ") }}</template>
+              </el-alert>
+            </div>
             <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
               <el-checkbox v-model="upstreamForm.endpoint_key_rotation_enabled">自动轮换 endpoint key</el-checkbox>
-              <el-button size="small" :loading="loading.upstream" @click="saveUpstreamConfig">保存 Endpoint 配置</el-button>
+              <el-button size="small" :loading="loading.upstream" @click="saveUpstreamConfig">保存 Project 资源配置</el-button>
               <el-button size="small" plain :loading="loading.provision" @click="provisionCustomerEndpoint(true)">Dry run</el-button>
-              <el-button size="small" type="primary" :loading="loading.provision" @click="provisionCustomerEndpoint(false)">创建独立 Endpoint</el-button>
-              <el-button size="small" type="warning" plain :loading="loading.rotateEndpointKey" :disabled="!upstreamForm.byteplus_endpoint_id" @click="rotateEndpointKey">轮换 endpoint key</el-button>
+              <el-button size="small" type="primary" :loading="loading.provision" @click="provisionCustomerEndpoint(false)">创建 Project Endpoints</el-button>
+              <el-button size="small" type="warning" plain :loading="loading.rotateEndpointKey" :disabled="!endpointMapRows.length && !upstreamForm.byteplus_endpoint_id" @click="rotateEndpointKey">轮换 endpoint key</el-button>
             </div>
             <div v-if="upstreamForm.byteplus_endpoint_api_key_expires_at" style="font-size:12px; color:var(--text-muted); margin-top:8px;">
               expires: {{ fmtTs(upstreamForm.byteplus_endpoint_api_key_expires_at) }}
@@ -1152,6 +1179,19 @@ const App = {
         this.adminConfig?.iam?.byteplus_access_key_id_configured &&
         this.adminConfig?.iam?.byteplus_access_key_secret_configured
       );
+    },
+    endpointMapRows() {
+      const map = this.upstreamForm?.byteplus_endpoint_map || {};
+      return Object.entries(map)
+        .filter(([modelId, endpointId]) => modelId && endpointId)
+        .map(([model_id, endpoint_id]) => ({ model_id, endpoint_id }));
+    },
+    endpointMappingMissingModels() {
+      const mapped = new Set(this.endpointMapRows.map(row => row.model_id));
+      const enabled = this.editForm?.enabled_models_default
+        ? (this.allModels || []).filter(m => !m.is_alias).map(m => m.id)
+        : (this.editForm?.enabled_models || []);
+      return enabled.filter(modelId => modelId && !mapped.has(modelId));
     },
   },
   methods: {
@@ -1381,6 +1421,7 @@ const App = {
           byteplus_project_name: upstream.byteplus_project_name || upstream.customer_slug || "",
           byteplus_endpoint_id: upstream.byteplus_endpoint_id || "",
           modelark_asset_group_id: upstream.modelark_asset_group_id || "",
+          byteplus_endpoint_map: upstream.byteplus_endpoint_map || {},
           endpoint_api_key: "",
           endpoint_api_key_masked: upstream.endpoint_api_key_masked || "",
           endpoint_key_rotation_enabled: !!upstream.endpoint_key_rotation_enabled,
@@ -1475,7 +1516,7 @@ const App = {
         };
         const r = await this.api(`/admin/users/${this.editing.id}/upstream`, { method: "PATCH", body: JSON.stringify(body) });
         this.upstreamForm = { ...this.upstreamForm, ...r, endpoint_api_key: "" };
-        ElMessage.success("Endpoint 配置已保存");
+        ElMessage.success("Project 资源配置已保存");
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.upstream = false; }
     },
@@ -1488,8 +1529,8 @@ const App = {
       if (!dryRun) {
         try {
           await ElMessageBox.confirm(
-            `确认为 ${this.editing.email || this.editing.id} 创建独立 BytePlus endpoint？`,
-            "创建独立 Endpoint",
+            `确认为 ${this.editing.email || this.editing.id} 创建客户 Project endpoints？`,
+            "创建 Project Endpoints",
             { type: "warning" },
           );
         } catch { return; }
@@ -1510,12 +1551,12 @@ const App = {
         });
         this.upstreamJob = r;
         if (r.upstream) this.upstreamForm = { ...this.upstreamForm, ...r.upstream, endpoint_api_key: "" };
-        ElMessage.success(dryRun ? "Dry run 已完成" : "独立 Endpoint 已创建");
+        ElMessage.success(dryRun ? "Dry run 已完成" : "Project endpoints 已创建");
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.provision = false; }
     },
     async rotateEndpointKey() {
-      if (!this.editing?.id || !this.upstreamForm.byteplus_endpoint_id) return;
+      if (!this.editing?.id || (!this.endpointMapRows.length && !this.upstreamForm.byteplus_endpoint_id)) return;
       try {
         await ElMessageBox.confirm(
           `确认轮换 ${this.editing.email || this.editing.id} 的 endpoint API key？`,

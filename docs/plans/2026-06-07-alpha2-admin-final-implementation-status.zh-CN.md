@@ -17,12 +17,22 @@
 - provision job 查询：`GET /admin/upstream/provision-jobs/{job_id}`。
 - 单客户 endpoint API key 手动轮换：`POST /admin/users/{user_id}/upstream/endpoint-key/rotate`。
 - 管理后台客户详情页已增加 Customer Endpoint 配置区，可保存配置、dry-run、创建独立 endpoint、开启自动轮换、手动轮换 endpoint key。
+- 独立 endpoint 创建已按真实流程修正：Project 走 IAM `GetProject/CreateProject`，Endpoint/AssetGroup/GetApiKey 走 ModelArk；`CreateAssetGroup` 固定带 `GroupType=AIGC`，Endpoint 和素材注册固定 `Moderation.Strategy=Skip`。
+- 客户模型权限默认同步 `NATIVE_MODEL_IDS`，包含 `dreamina-seedance-2-0-fast-260128`、1.5、1.0 pro、1.0 fast、lite t2v/i2v。
+- dedicated 客户已支持 per-model endpoint mapping：`users.note.byteplus_endpoint_map` 可把客户可见模型映射到不同 BytePlus endpoint；生成时按请求模型选择 endpoint，未配置映射的模型返回 `endpoint_not_configured_for_model`，不会误打默认 endpoint。
+- 后台自动开通 job 已按客户可用模型创建 per-model endpoints，并写入 `users.note.byteplus_endpoint_map`；`users.note.byteplus_endpoint_id` 仅作为兼容主 endpoint 字段保留。
+- 管理后台客户详情已从旧的 Customer Endpoint 升级叙事收敛为 Customer Project Resources / Model Endpoint Map，能展示 mapping 状态和缺失告警。
+- 批量模型升级脚本已新增：`deploy/upgrade_model_endpoints.py`，支持 dry-run、指定客户、创建新模型 endpoint、JSON merge 更新 `byteplus_endpoint_map`，且不覆盖 asset group、key rotation、billing 等 note 字段。
+- endpoint key 手动轮换和自动轮换已支持 endpoint map：存在 `byteplus_endpoint_map` 时，按全部 endpoint ids 请求 endpoint-scoped key；没有 map 时继续兼容旧 `byteplus_endpoint_id`。
+- Peter 已按多 endpoint 模式开通并验证 4 个 Running endpoint：`dreamina-seedance-2-0-260128`、`seedance-1-5-pro-251215`、`seedance-1-0-pro-250528`、`seedance-1-0-pro-fast-251015`；BytePlus endpoint 均为 `Moderation.Strategy=Skip`。
+- 已修复两个线上发现的问题：普通保存用户表单不再覆盖 upstream note 字段导致自动轮换对勾消失；新账号开通独立 endpoint 不再错误调用 ModelArk `CreateProject`。
 - `.env.relay.example`、`README.md`、`API_DOCS.md` 已补充相关开关与使用说明。
+- 已新增后台失效应急手册：`docs/ops/alpha2-byteplus-dedicated-endpoint-ai-runbook.md`，记录真实 IAM Project + ModelArk Endpoint + AIGC AssetGroup + GetApiKey 执行顺序。
 - 自动化测试已覆盖素材删除、密码重置、账单、endpoint key 自动轮换、upstream 管理接口、静态 UI 回归。
 
 ## 部分完成 / 后置
 
-- BytePlus 控制面 adapter 已集中到 `_provision_customer_upstream_resources`；如果 BytePlus OpenAPI 的真实字段名与当前 adapter 不一致，只需要调整该 adapter。
+- BytePlus 控制面 adapter 已集中到 `_provision_customer_upstream_resources`；当前已按真实 IAM Project 创建方式修正。如果 BytePlus OpenAPI 后续字段变化，只需要调整该 adapter 和应急 runbook。
 - 账单导出当前完成 CSV；XLSX / PDF 后置。
 - 本地上传文件自动 retention 清理后置；当前已支持删除与本地软删除字段。
 
@@ -33,6 +43,7 @@
 ## 当前测试口径
 
 - `tests/test_upstream_admin.py` 覆盖 IAM capability、客户 upstream 配置、dry-run/真实 provision job、endpoint key 手动轮换与密钥脱敏。
+- `tests/test_iam_upstream.py` 覆盖 dedicated 客户按 `byteplus_endpoint_map` 路由到对应 endpoint，以及未映射模型不调用上游。
 - `tests/test_endpoint_key_rotation.py` 覆盖 endpoint key 到期自动轮换、失败保留旧 key、失败错误脱敏。
 - `tests/test_billing.py` 覆盖账单预览、保存、客户/内部 CSV 导出、标记 paid。
 - `tests/test_uploads.py` 覆盖素材注册、客户隔离、客户删除与 BytePlus asset 删除请求。

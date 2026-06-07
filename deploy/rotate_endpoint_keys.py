@@ -53,35 +53,34 @@ def _dump_note(note: dict[str, Any]) -> str:
     return json.dumps(note, ensure_ascii=True, sort_keys=True)
 
 
-def get_endpoint_api_key(endpoint_id: str, duration_seconds: int) -> dict[str, Any]:
+def _endpoint_ids_from_note(note: dict[str, Any]) -> list[str]:
+    raw_map = note.get("byteplus_endpoint_map")
+    if isinstance(raw_map, dict):
+        endpoint_ids = [
+            str(endpoint_id or "").strip()
+            for endpoint_id in raw_map.values()
+            if str(endpoint_id or "").strip()
+        ]
+        if endpoint_ids:
+            return endpoint_ids
+    endpoint_id = str(note.get("byteplus_endpoint_id") or "").strip()
+    return [endpoint_id] if endpoint_id else []
+
+
+def _endpoint_target_for_note(note: dict[str, Any]) -> str | list[str]:
+    endpoint_ids = _endpoint_ids_from_note(note)
+    if len(endpoint_ids) == 1 and not isinstance(note.get("byteplus_endpoint_map"), dict):
+        return endpoint_ids[0]
+    return endpoint_ids
+
+
+def get_endpoint_api_key(endpoint_id: str | list[str], duration_seconds: int) -> dict[str, Any]:
     """Provider adapter.
 
     Tests monkeypatch this function. Production uses the same signed BytePlus
     OpenAPI helper used by asset registration.
     """
-    ak = os.getenv("BYTEPLUS_ACCESS_KEY_ID", os.getenv("BYTEPLUS_ACCESSKEY", "")).strip()
-    sk = os.getenv("BYTEPLUS_ACCESS_KEY_SECRET", os.getenv("BYTEPLUS_SECRETKEY", "")).strip()
-    if not ak or not sk:
-        raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_ACCESS_KEY_SECRET are required")
-    result = relay_server._call_asset_api(
-        "GetApiKey",
-        {"EndpointId": endpoint_id, "DurationSeconds": duration_seconds},
-        ak,
-        sk,
-    )
-    api_key = (
-        relay_server.extract_nested_value(result, "Result", "ApiKey")
-        or relay_server.extract_nested_value(result, "ApiKey")
-        or relay_server.extract_nested_value(result, "api_key")
-    )
-    expires_at = (
-        relay_server.extract_nested_value(result, "Result", "ExpiresAt")
-        or relay_server.extract_nested_value(result, "ExpiresAt")
-        or relay_server.extract_nested_value(result, "expires_at")
-    )
-    if not api_key:
-        raise RuntimeError("GetApiKey did not return an endpoint API key")
-    return {"api_key": str(api_key), "expires_at": int(expires_at or (time.time() + duration_seconds))}
+    return relay_server._get_endpoint_api_key(endpoint_id, duration_seconds)
 
 
 def _is_due(note: dict[str, Any], *, now: int, threshold_seconds: int) -> bool:
@@ -89,7 +88,7 @@ def _is_due(note: dict[str, Any], *, now: int, threshold_seconds: int) -> bool:
         return False
     if not note.get("byteplus_endpoint_key_rotation_enabled"):
         return False
-    if not str(note.get("byteplus_endpoint_id") or "").strip():
+    if not _endpoint_ids_from_note(note):
         return False
     expires_at = int(note.get("byteplus_endpoint_api_key_expires_at") or 0)
     return expires_at <= 0 or expires_at - now <= threshold_seconds
@@ -117,12 +116,17 @@ def rotate_due_endpoint_keys(now: int | None = None) -> dict[str, Any]:
             continue
         result["checked"] += 1
         user_id = row["id"]
-        endpoint_id = str(note.get("byteplus_endpoint_id") or "").strip()
+        endpoint_target = _endpoint_target_for_note(note)
         if dry_run:
-            result["data"].append({"user_id": user_id, "endpoint_id": endpoint_id, "status": "dry_run"})
+            result["data"].append({
+                "user_id": user_id,
+                "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+                "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+                "status": "dry_run",
+            })
             continue
         try:
-            issued = get_endpoint_api_key(endpoint_id, duration_seconds)
+            issued = get_endpoint_api_key(endpoint_target, duration_seconds)
             expires_at = int(issued["expires_at"])
             note.update({
                 "byteplus_endpoint_api_key_expires_at": expires_at,
@@ -140,10 +144,20 @@ def rotate_due_endpoint_keys(now: int | None = None) -> dict[str, Any]:
                 actor_type="system",
                 target_type="user",
                 target_id=user_id,
-                metadata={"endpoint_id": endpoint_id, "expires_at": expires_at, "secret_changed": True},
+                metadata={
+                    "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+                    "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+                    "expires_at": expires_at,
+                    "secret_changed": True,
+                },
             )
             result["rotated"] += 1
-            result["data"].append({"user_id": user_id, "endpoint_id": endpoint_id, "status": "rotated"})
+            result["data"].append({
+                "user_id": user_id,
+                "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+                "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+                "status": "rotated",
+            })
         except Exception as exc:
             message = relay_server.sanitize(str(exc))[:1000]
             note["byteplus_endpoint_key_rotation_error"] = message
@@ -154,10 +168,19 @@ def rotate_due_endpoint_keys(now: int | None = None) -> dict[str, Any]:
                 actor_type="system",
                 target_type="user",
                 target_id=user_id,
-                metadata={"endpoint_id": endpoint_id, "error": message},
+                metadata={
+                    "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+                    "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+                    "error": message,
+                },
             )
             result["failed"] += 1
-            result["data"].append({"user_id": user_id, "endpoint_id": endpoint_id, "status": "failed"})
+            result["data"].append({
+                "user_id": user_id,
+                "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+                "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+                "status": "failed",
+            })
 
     db.close()
     return result

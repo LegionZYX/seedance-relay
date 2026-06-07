@@ -4521,8 +4521,10 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
                 "code": "user_not_found",
                 "message": "User was not found",
             }})
-        endpoint_id = _user_byteplus_endpoint_id(dict(user))
-        if not endpoint_id:
+        user_dict = dict(user)
+        endpoint_ids = list(_user_byteplus_endpoint_map(user_dict).values())
+        endpoint_target: str | list[str] = endpoint_ids or _user_byteplus_endpoint_id(user_dict)
+        if not endpoint_target:
             raise HTTPException(400, {"error": {
                 "code": "endpoint_not_configured",
                 "message": "This user does not have a BytePlus endpoint id configured",
@@ -4531,7 +4533,7 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
         db.close()
 
     try:
-        issued = _get_endpoint_api_key(endpoint_id, req.duration_seconds)
+        issued = _get_endpoint_api_key(endpoint_target, req.duration_seconds)
     except Exception as exc:
         message = sanitize(str(exc))[:1000]
         _audit_event(
@@ -4540,7 +4542,11 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
             actor_type="admin",
             target_type="user",
             target_id=user_id,
-            metadata={"endpoint_id": endpoint_id, "error": message},
+            metadata={
+                "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+                "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+                "error": message,
+            },
         )
         raise HTTPException(502, {"error": {
             "code": "endpoint_key_rotation_failed",
@@ -4572,7 +4578,12 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
         actor_type="admin",
         target_type="user",
         target_id=user_id,
-        metadata={"endpoint_id": endpoint_id, "expires_at": int(issued["expires_at"]), "secret_changed": True},
+        metadata={
+            "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+            "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+            "expires_at": int(issued["expires_at"]),
+            "secret_changed": True,
+        },
     )
     return _user_upstream_response(updated)
 
