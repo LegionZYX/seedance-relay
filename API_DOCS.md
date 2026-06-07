@@ -1,11 +1,11 @@
-# Example Video Relay API
+# Seedance3 Relay API
 
 面向签约客户的 Seedance 视频生成 API 文档。
 
 Base URL:
 
 ```text
-https://video.example.com
+https://seedance3.eu
 ```
 
 ## 1. 快速开始
@@ -15,7 +15,7 @@ https://video.example.com
 ```bash
 export KEY="sk_your_relay_api_key"
 
-curl https://video.example.com/v1/videos \
+curl https://seedance3.eu/v1/videos \
   -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
@@ -47,7 +47,7 @@ curl https://video.example.com/v1/videos \
 轮询任务：
 
 ```bash
-curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
+curl https://seedance3.eu/v1/videos/vid_a3f9c1b2d8e4f7a6 \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -57,7 +57,7 @@ curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
 {
   "id": "vid_a3f9c1b2d8e4f7a6",
   "status": "succeeded",
-  "video_url": "https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content"
+  "video_url": "https://seedance3.eu/v1/videos/vid_a3f9c1b2d8e4f7a6/content"
 }
 ```
 
@@ -65,7 +65,7 @@ curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
 
 ```bash
 curl -L -o video.mp4 \
-  https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
+  https://seedance3.eu/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -86,7 +86,7 @@ Authorization: Bearer sk-your-relay-api-key
 默认使用字节 API 原生 `model id`。如果管理员主动配置了别名并给你的账号启用，`/v1/models` 会返回别名，你也可以直接用别名提交；否则请按原生 ID 调用。
 
 ```bash
-curl https://video.example.com/v1/models
+curl https://seedance3.eu/v1/models
 ```
 
 响应示例：
@@ -128,7 +128,7 @@ curl https://video.example.com/v1/models
 ## 4. 价格与余额
 
 ```bash
-curl https://video.example.com/v1/pricing \
+curl https://seedance3.eu/v1/pricing \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -166,7 +166,7 @@ final_cost     = upstream_actual_cost * task_price_multiplier_snapshot
 查看账号：
 
 ```bash
-curl https://video.example.com/v1/me \
+curl https://seedance3.eu/v1/me \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -184,7 +184,7 @@ curl https://video.example.com/v1/me \
 ## 5. 提交前预估
 
 ```bash
-curl https://video.example.com/v1/videos/estimate \
+curl https://seedance3.eu/v1/videos/estimate \
   -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
@@ -231,8 +231,8 @@ POST /v1/videos
 ```json
 [
   {"type": "text", "text": "clean commercial video"},
-  {"type": "image_url", "image_url": {"url": "https://video.example.com/uploads/upl_123.jpg"}, "role": "first_frame"},
-  {"type": "video_url", "video_url": {"url": "https://video.example.com/uploads/upl_456.mp4"}, "role": "reference_video"}
+  {"type": "image_url", "image_url": {"url": "https://seedance3.eu/uploads/upl_123.jpg"}, "role": "first_frame"},
+  {"type": "video_url", "video_url": {"url": "https://seedance3.eu/uploads/upl_456.mp4"}, "role": "reference_video"}
 ]
 ```
 
@@ -243,14 +243,14 @@ Relay 会校验结构、模型能力、素材归属和余额。Relay 不做额�
 查询单个任务：
 
 ```bash
-curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6 \
+curl https://seedance3.eu/v1/videos/vid_a3f9c1b2d8e4f7a6 \
   -H "Authorization: Bearer $KEY"
 ```
 
 列出自己的任务：
 
 ```bash
-curl "https://video.example.com/v1/videos?limit=20&offset=0&status=succeeded" \
+curl "https://seedance3.eu/v1/videos?limit=20&offset=0&status=succeeded" \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -266,10 +266,10 @@ HEAD /v1/videos/{id}/content
 视频内容通过 Relay 代理返回，支持浏览器播放需要的 `Range`：
 
 ```bash
-curl -I https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
+curl -I https://seedance3.eu/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
   -H "Authorization: Bearer $KEY"
 
-curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
+curl https://seedance3.eu/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
   -H "Authorization: Bearer $KEY" \
   -H "Range: bytes=0-1048575" \
   -o part.mp4
@@ -282,7 +282,7 @@ curl https://video.example.com/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
 上传本地文件：
 
 ```bash
-curl https://video.example.com/v1/uploads \
+curl https://seedance3.eu/v1/uploads \
   -X POST \
   -H "Authorization: Bearer $KEY" \
   -F "file=@reference.jpg;type=image/jpeg"
@@ -293,14 +293,14 @@ curl https://video.example.com/v1/uploads \
 ```json
 {
   "id": "upl_a1b2c3d4e5f6a7b8",
-  "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
+  "url": "https://seedance3.eu/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg",
   "content_type": "image/jpeg",
   "size_bytes": 123456,
   "purpose": "image",
   "suggested_content_block": {
     "type": "image_url",
     "image_url": {
-      "url": "https://video.example.com/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg"
+      "url": "https://seedance3.eu/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg"
     },
     "role": "first_frame"
   }
@@ -310,17 +310,17 @@ curl https://video.example.com/v1/uploads \
 从 URL 导入素材：
 
 ```bash
-curl https://video.example.com/v1/uploads/from-url \
+curl https://seedance3.eu/v1/uploads/from-url \
   -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/reference.jpg", "purpose": "image"}'
+  -d '{"url": "https://seedance3.eu/uploads/2026/06/02/upl_a1b2c3d4e5f6a7b8.jpg", "purpose": "image"}'
 ```
 
 删除自己的素材：
 
 ```bash
-curl https://video.example.com/v1/uploads/upl_a1b2c3d4e5f6a7b8 \
+curl https://seedance3.eu/v1/uploads/upl_a1b2c3d4e5f6a7b8 \
   -X DELETE \
   -H "Authorization: Bearer $KEY"
 ```
@@ -332,7 +332,7 @@ BytePlus asset 由管理员后台批量执行删除。
 查看自己的删除请求：
 
 ```bash
-curl https://video.example.com/v1/uploads/delete-requests \
+curl https://seedance3.eu/v1/uploads/delete-requests \
   -H "Authorization: Bearer $KEY"
 ```
 
@@ -343,7 +343,7 @@ curl https://video.example.com/v1/uploads/delete-requests \
 修改登录密码：
 
 ```bash
-curl https://video.example.com/auth/change-password \
+curl https://seedance3.eu/auth/change-password \
   -X POST \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
@@ -353,7 +353,7 @@ curl https://video.example.com/auth/change-password \
 轮换自己的 Relay API Key：
 
 ```bash
-curl https://video.example.com/v1/me/api-key/rotate \
+curl https://seedance3.eu/v1/me/api-key/rotate \
   -X POST \
   -H "Authorization: Bearer $KEY"
 ```
@@ -408,3 +408,99 @@ curl https://video.example.com/v1/me/api-key/rotate \
 - 任务列表、任务详情、视频内容和素材列表都按客户隔离。
 - 公开文档不包含上游 URL、账号标签、内部路由、策略配置、密钥或内部运维备注。
 - 生成结果默认不永久保存在 Relay 服务器；视频内容通过 Relay 代理读取上游结果。
+
+## 13. 低审查内容生成规范
+
+本节用于签约客户了解“低审查”内容的正确接入方式。这里的“低审查”不是无规则生成，也不是绕过平台风控；它表示 Relay 不额外增加客户侧内容开关，最终是否生成成功仍取决于已启用模型、客户账号配置、素材授权和上游返回结果。
+
+### 13.1 适用范围
+
+- 仅限成年人参与、成年人观看或成年人业务场景。
+- 只使用客户自己拥有版权、肖像授权、商用授权或明确可使用的素材。
+- 真人、脸部、身体参考素材应先通过素材库上传，并按账号归属生成 `asset://...` 引用。
+- 生成请求仍然使用标准接口：`POST https://seedance3.eu/v1/videos`。
+
+### 13.2 禁止范围
+
+- 不得提交未成年人、疑似未成年人、校园未成年语境或无法确认年龄的真人素材。
+- 不得提交非自愿、偷拍、胁迫、泄露隐私、报复性传播、深度伪造冒充真实个人的内容。
+- 不得提交违法交易、暴力胁迫、性剥削、人口贩卖或其他违法场景。
+- 不得把他人照片、公开视频、社媒素材当作已授权素材使用。
+
+### 13.3 推荐流程
+
+1. 使用客户自己的 Relay API Key 上传参考素材。
+2. 在素材库确认返回 `asset_url`，优先使用 `asset://...`，不要长期依赖临时公网图片 URL。
+3. 用 `POST /v1/videos/estimate` 先预估成本。
+4. 用 `POST /v1/videos` 创建任务。
+5. 用 `GET /v1/videos/{id}` 查询状态。
+6. 用 `GET /v1/videos/{id}/content` 下载或播放结果。
+
+### 13.4 上传授权素材
+
+```bash
+export KEY="sk_your_relay_api_key"
+
+curl https://seedance3.eu/v1/uploads \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -F "file=@authorized-adult-reference.jpg;type=image/jpeg" \
+  -F "face_allowlist=true" \
+  -F "face_asset_label=authorized-adult-reference"
+```
+
+上传成功后，优先复制响应里的：
+
+```json
+{
+  "asset_id": "asset_xxx",
+  "asset_url": "asset://asset_xxx",
+  "suggested_content_block": {
+    "type": "image_url",
+    "image_url": {"url": "asset://asset_xxx"},
+    "role": "reference_image"
+  }
+}
+```
+
+### 13.5 生成请求示例
+
+```bash
+curl https://seedance3.eu/v1/videos \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "dreamina-seedance-2-0-260128",
+    "content": [
+      {
+        "type": "text",
+        "text": "adult-only cinematic editorial video, private studio setting, consenting adult performer, soft lighting, no minors, no public location"
+      },
+      {
+        "type": "image_url",
+        "image_url": {"url": "asset://asset_xxx"},
+        "role": "reference_image"
+      }
+    ],
+    "resolution": "720p",
+    "ratio": "16:9",
+    "duration": 5,
+    "generate_audio": false,
+    "extra_body": {
+      "real_person_mode": true,
+      "audience": "adult"
+    }
+  }'
+```
+
+### 13.6 素材与账号隔离
+
+- 客户只能看到、删除、引用自己账号上传的素材。
+- 其他客户的 `asset://...` 即使被复制进请求，也会被 Relay 拒绝。
+- Relay 不向客户暴露 BytePlus project、endpoint、asset group、endpoint API key或内部平台密钥。
+- 生成结果默认仍走 Relay 白标地址，例如 `https://seedance3.eu/v1/videos/{id}/content`。
+
+### 13.7 失败处理
+
+如果上游拒绝生成，Relay 会返回安全摘要，不会暴露上游密钥或原始内部 URL。客户可以调整素材授权、提示词、模型或联系管理员检查该账号可用模型与 endpoint 配置。

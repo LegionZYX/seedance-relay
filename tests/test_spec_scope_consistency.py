@@ -128,7 +128,10 @@ class SpecScopeConsistencyTests(unittest.TestCase):
             docs,
         )
         self.assertNotIn("所有 `/v1/*` 客户接口都使用 Relay API Key", docs)
-        models_curl = docs.split("curl https://video.example.com/v1/models", 1)[1].split(
+        self.assertIn("https://seedance3.eu", docs)
+        self.assertIn("## 13. 低审查内容生成规范", docs)
+        self.assertNotIn("https://video.example.com", docs)
+        models_curl = docs.split("curl https://seedance3.eu/v1/models", 1)[1].split(
             "```",
             1,
         )[0]

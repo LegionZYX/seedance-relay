@@ -863,7 +863,7 @@
               </el-alert>
               <div class="code-block" style="margin-top:18px;">
 <span class="comment"># 创建视频任务</span>
-curl https://video.example.com/v1/videos \
+curl https://seedance3.eu/v1/videos \
   -X POST \
   -H "Authorization: Bearer <span class="string">$KEY</span>" \
   -H "Content-Type: application/json" \
@@ -956,11 +956,11 @@ const App = {
       docsHtml: "",
       guideUploadCurl: `KEY="sk_xxxxxxxxxxxxxxxx"
 
-curl -X POST https://video.example.com/v1/uploads \\
+curl -X POST https://seedance3.eu/v1/uploads \\
   -H "Authorization: Bearer $KEY" \\
   -F "file=@portrait.jpg;type=image/jpeg" \\
   -F "face_allowlist=true"`,
-      guideNativeCurl: `curl -X POST https://video.example.com/v1/videos \\
+      guideNativeCurl: `curl -X POST https://seedance3.eu/v1/videos \\
   -H "Authorization: Bearer $KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -977,7 +977,7 @@ curl -X POST https://video.example.com/v1/uploads \\
     "ratio": "16:9",
     "duration": 5
   }'`,
-      guideRealPersonCurl: `curl -X POST https://video.example.com/v1/videos \\
+      guideRealPersonCurl: `curl -X POST https://seedance3.eu/v1/videos \\
   -H "Authorization: Bearer $KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -1020,7 +1020,7 @@ curl -X POST https://video.example.com/v1/uploads \\
     { "type": "text", "text": "The scene slowly comes alive, subtle camera push-in, cinematic" },
     {
       "type": "image_url",
-      "image_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.jpg" },
+      "image_url": { "url": "https://seedance3.eu/uploads/YYYY/MM/DD/upl_xxx.jpg" },
       "role": "first_frame"
     }
   ],
@@ -1085,7 +1085,7 @@ curl -X POST https://video.example.com/v1/uploads \\
     { "type": "text", "text": "Keep the motion rhythm, change the visual style to warm cinematic street photography" },
     {
       "type": "video_url",
-      "video_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_xxx.mp4" },
+      "video_url": { "url": "https://seedance3.eu/uploads/YYYY/MM/DD/upl_xxx.mp4" },
       "role": "reference_video"
     }
   ],
@@ -1121,7 +1121,7 @@ curl -X POST https://video.example.com/v1/uploads \\
     },
     {
       "type": "audio_url",
-      "audio_url": { "url": "https://video.example.com/uploads/YYYY/MM/DD/upl_voice.mp3" },
+      "audio_url": { "url": "https://seedance3.eu/uploads/YYYY/MM/DD/upl_voice.mp3" },
       "role": "reference_audio"
     }
   ],
