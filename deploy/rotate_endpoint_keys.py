@@ -74,6 +74,28 @@ def _endpoint_target_for_note(note: dict[str, Any]) -> str | list[str]:
     return endpoint_ids
 
 
+def _model_endpoint_key_map_from_issued(
+    issued: dict[str, Any],
+    note: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    raw_by_endpoint = issued.get("endpoint_key_map_by_endpoint")
+    raw_endpoint_map = note.get("byteplus_endpoint_map")
+    if not isinstance(raw_by_endpoint, dict) or not isinstance(raw_endpoint_map, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for model_id, endpoint_id in raw_endpoint_map.items():
+        model = str(model_id or "").strip()
+        endpoint = str(endpoint_id or "").strip()
+        entry = raw_by_endpoint.get(endpoint)
+        if model and endpoint and isinstance(entry, dict) and entry.get("api_key"):
+            out[model] = {
+                "endpoint_id": endpoint,
+                "api_key": str(entry["api_key"]),
+                "expires_at": entry.get("expires_at"),
+            }
+    return out
+
+
 def get_endpoint_api_key(endpoint_id: str | list[str], duration_seconds: int) -> dict[str, Any]:
     """Provider adapter.
 
@@ -133,7 +155,11 @@ def rotate_due_endpoint_keys(now: int | None = None) -> dict[str, Any]:
                 "byteplus_endpoint_key_last_rotated_at": now,
                 "byteplus_endpoint_key_next_rotate_at": max(now, expires_at - threshold_seconds),
                 "byteplus_endpoint_key_rotation_error": "",
+                "byteplus_endpoint_key_mode": issued.get("key_mode") or "multi",
             })
+            endpoint_key_map = _model_endpoint_key_map_from_issued(issued, note)
+            if endpoint_key_map:
+                note["byteplus_endpoint_key_map"] = endpoint_key_map
             db.execute(
                 "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
                 (issued["api_key"], _dump_note(note), user_id),

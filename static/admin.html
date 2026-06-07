@@ -429,6 +429,51 @@
             </el-row>
           </div>
           <div class="panel panel-pad" style="margin-top:8px">
+            <h3 style="margin:0 0 12px; font-size:15px; display:flex; align-items:center; gap:8px;">
+              <el-icon><CircleCheck /></el-icon> Endpoint Map Health
+            </h3>
+            <el-table :data="endpointHealth" size="small" style="width:100%" empty-text="No endpoint map health data">
+              <el-table-column label="Customer" min-width="180">
+                <template #default="{ row }">
+                  <b>{{ row.email || row.user_id }}</b>
+                  <div style="font-size:12px;color:var(--muted);">{{ row.user_id }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="Status" width="110">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.status === 'ok' ? 'success' : 'warning'">{{ row.status }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Missing mappings" min-width="220">
+                <template #default="{ row }">{{ (row.missing_models || []).join(', ') || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="Key mode" width="150">
+                <template #default="{ row }">
+                  {{ row.endpoint_key_mode || '-' }}
+                  <el-tag v-if="row.endpoint_key_map_configured" size="small" effect="plain">key map</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+          <div class="panel panel-pad" style="margin-top:8px">
+            <h3 style="margin:0 0 12px; font-size:15px; display:flex; align-items:center; gap:8px;">
+              <el-icon><InfoFilled /></el-icon> Quota Center Reminders
+            </h3>
+            <el-row :gutter="12">
+              <el-col v-for="item in quotaReminders" :key="item.resource" :xs="24" :sm="8">
+                <div class="info-box">
+                  <b>{{ item.resource }}</b>
+                  <div style="margin-top:8px">
+                    <el-tag :type="item.status === 'warning' ? 'warning' : 'success'" effect="light">
+                      {{ item.used }} / {{ item.warn_at || '-' }}
+                    </el-tag>
+                  </div>
+                  <div style="font-size:12px; margin-top:8px;">{{ item.reminder }}</div>
+                </div>
+              </el-col>
+            </el-row>
+          </div>
+          <div class="panel panel-pad" style="margin-top:8px">
             <h3 style="margin:0 0 10px; font-size:15px; display:flex; align-items:center; gap:8px;">
               <el-icon><InfoFilled /></el-icon> 指标说明
             </h3>
@@ -1023,8 +1068,11 @@
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
               <el-button size="small" :loading="loading.billing" @click="previewBilling">预览账单</el-button>
               <el-button size="small" type="primary" :loading="loading.billing" @click="saveInvoice">保存账单</el-button>
-              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('customer')">导出客户 CSV</el-button>
-              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('internal')">导出内部 CSV</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('customer', 'csv')">导出客户 CSV</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('customer', 'xlsx')">客户 XLSX</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('customer', 'pdf')">客户 PDF</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('internal', 'csv')">导出内部 CSV</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('internal', 'xlsx')">内部 XLSX</el-button>
               <el-button size="small" type="success" plain :disabled="!savedInvoice || savedInvoice.status === 'paid'" @click="markInvoicePaid">标记已付款</el-button>
             </div>
           </el-col>
@@ -1135,12 +1183,14 @@ const App = {
       allModels: [],
       uploads: [],
       uploadStats: {},
+      endpointHealth: [],
+      quotaReminders: [],
       uploadFilters: { user_id: "", purpose: "", face_asset_whitelisted: "" },
       reconcile: [],
       tasks: [],
       auditEvents: [],
       auditFilters: { action: "", target_id: "" },
-      loading: { stats: false, config: false, users: false, uploads: false, reconcile: false, tasks: false, audit: false, newUser: false, saveUser: false, rotateKey: false, resetPassword: false, billing: false, docs: false, upstream: false, provision: false, rotateEndpointKey: false },
+      loading: { stats: false, config: false, health: false, users: false, uploads: false, reconcile: false, tasks: false, audit: false, newUser: false, saveUser: false, rotateKey: false, resetPassword: false, billing: false, docs: false, upstream: false, provision: false, rotateEndpointKey: false },
       docsHtml: "",
 
       dialogs: { newUser: false, editUser: false, created: false, rotatedKey: false },
@@ -1275,7 +1325,7 @@ const App = {
     // ─── Tabs ───
     switchTab(name) {
       this.tab = name;
-      if (name === "stats") { this.loadStats(); this.loadConfig(); }
+      if (name === "stats") { this.loadStats(); this.loadConfig(); this.loadOperationalHealth(); }
       if (name === "users") this.loadUsers();
       if (name === "uploads") this.loadUploads();
       if (name === "reconcile") this.loadReconcile();
@@ -1315,6 +1365,16 @@ const App = {
       try { this.adminConfig = await this.api("/admin/config"); }
       catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.config = false; }
+    },
+    async loadOperationalHealth() {
+      this.loading.health = true;
+      try {
+        const health = await this.api("/admin/upstream/endpoint-map-health?limit=20");
+        const quota = await this.api("/admin/upstream/quota-reminders");
+        this.endpointHealth = health.data || [];
+        this.quotaReminders = quota.data || [];
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.health = false; }
     },
     async loadUsers() {
       this.loading.users = true;
@@ -1611,9 +1671,9 @@ const App = {
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.billing = false; }
     },
-    async exportInvoice(view) {
+    async exportInvoice(view, format="csv") {
       if (!this.savedInvoice?.id) return;
-      const suffix = view === "internal" ? "/export?format=csv&view=internal" : "/export?format=csv&view=customer";
+      const suffix = `/export?format=${format}&view=${view}`;
       window.open(`/admin/invoices/${this.savedInvoice.id}${suffix}`, "_blank", "noopener");
     },
     async markInvoicePaid() {

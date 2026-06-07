@@ -380,11 +380,15 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | `ENDPOINT_KEY_ROTATION_DAYS_BEFORE_EXPIRY` | `5` | 距离过期多少天以内触发轮换 |
 | `ENDPOINT_KEY_DURATION_SECONDS` | `2592000` | 新 endpoint API key 有效期秒数 |
 | `ENDPOINT_KEY_ROTATION_DRY_RUN` | `false` | 只检查待轮换客户，不写 DB、不调用上游 |
+| `ENDPOINT_KEY_RESOURCE_MODE` | `multi` | endpoint key 生成方式：`multi` / `per_endpoint` / `auto`；上游不支持多 endpoint ResourceIds 时用 per-endpoint key map |
 | `ASSET_AUTO_REGISTER_UPLOADS` | `false` | 服务端是否自动把上传 URL 注册成 `asset://...` |
 | `ASSET_AUTO_REGISTER_PURPOSES` | `image,video,audio` | 开关启用后哪些上传类型自动注册 |
 | `ASSET_AUTO_REGISTER_WAIT_SECONDS` | `0` | 是否等待 asset 变 Active；0 表示只创建不等待 |
 | `ASSET_AUTO_REGISTER_SKIP_MODERATION` | `true` | CreateAsset 时默认传 skip moderation |
 | `ASSET_DELETE_EXECUTION_MODE` | `admin_batch` | 客户删除素材后的 BytePlus asset 删除方式：`local_only` / `admin_batch` / `auto` |
+| `BYTEPLUS_PROJECT_QUOTA_WARN_AT` | `0` | 后台 Quota Center reminder 的 Project 本地计数提醒阈值；0 表示关闭 |
+| `BYTEPLUS_ENDPOINT_QUOTA_WARN_AT` | `0` | 后台 Quota Center reminder 的 endpoint 本地计数提醒阈值；0 表示关闭 |
+| `BYTEPLUS_ASSET_GROUP_QUOTA_WARN_AT` | `0` | 后台 Quota Center reminder 的 AssetGroup 本地计数提醒阈值；0 表示关闭 |
 | `BYTEPLUS_ACCESS_KEY_ID` | 空 | 服务端 asset registry AK，用户不可见 |
 | `BYTEPLUS_ACCESS_KEY_SECRET` | 空 | 服务端 asset registry SK，用户不可见 |
 | `MODELARK_ASSET_GROUP_ID` | 空 | 服务端 asset group，用户不可见 |

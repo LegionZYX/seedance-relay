@@ -250,6 +250,25 @@ Expected: PASS。
 6. endpoint map 健康检查面板。
 7. Project / endpoint / AssetGroup 配额监控和 Quota Center 提醒。
 
+### Alpha3 Task 8 当前实现状态
+
+截至本轮 Alpha3 实现，Task 8 已补齐以下可本地验收的持续项：
+
+- P1 Admin UI 收敛：后台已展示 Customer Project Resources / Model Endpoint Map、Endpoint Map Health、Quota Center Reminders，静态 UI 测试覆盖入口。
+- P1 批量模型升级：`deploy/upgrade_model_endpoints.py` 支持 dry-run、指定客户、创建新模型 endpoint、JSON merge 更新 `byteplus_endpoint_map`。
+- P1 上传 retention：`deploy/cleanup_upload_files.py` 只清理已注册 `asset://...` 且超过保留期的本地上传临时文件，DB 记录和 asset 关系保留。
+- P1 provision job 细步：`upstream_provision_jobs` 返回 `current_step` 与 `progress`，覆盖 dry-run、执行成功和失败路径。
+- P1 per-endpoint key fallback：`ENDPOINT_KEY_RESOURCE_MODE=per_endpoint|auto` 支持写入 `users.note.byteplus_endpoint_key_map`，生成时按模型/endpoint 选择对应 key，API/UI 只返回脱敏状态。
+- P2 账单增强：CSV / XLSX / PDF 导出、管理员账单筛选、客户账单列表和详情已实现；客户视图不暴露 upstream cost / gross profit。
+- P2 asset delete worker：`deploy/process_asset_delete_requests.py` 可异步处理 `queued` 删除请求。
+- P2 endpoint map health panel：`GET /admin/upstream/endpoint-map-health` 和后台面板已实现。
+- P2 Quota reminder：`GET /admin/upstream/quota-reminders` 和后台面板已实现本地计数提醒。
+
+仍需外部确认或后续增强：
+
+- BytePlus Quota Center 实时 API 尚未接入；当前是基于本地已配置 Project / endpoint / AssetGroup 数量的提醒。
+- 模型升级“审计导出”为脚本执行报告与 audit event；如需单独报表文件，可后续再扩展。
+
 ### Backlog Review Rule
 
 每完成一个 Alpha3 主线提交后，都要回看 Task 8：

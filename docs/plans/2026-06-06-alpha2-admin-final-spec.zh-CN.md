@@ -9,7 +9,7 @@
 - 素材生命周期第一版：上传后可自动注册 asset、客户素材隔离、客户删除自己的素材、创建 BytePlus asset 删除请求、管理员批量/强制执行删除入口。
 - 客户素材库 UI：客户可以在素材库删除自己的素材。
 - 管理员协助客户重置密码：专用 `POST /admin/users/{user_id}/password/reset`，支持生成临时密码、手动重置、撤销 session、写审计。
-- 账单第一版：账单预览、保存、客户 CSV 导出、内部 CSV 导出、标记 paid。
+- 账单第一版：账单预览、保存、客户/内部 CSV 导出、XLSX 导出、客户 PDF 导出、账单筛选、客户账单视图、标记 paid。
 - 管理后台账单入口：客户详情里可以选账期、预览、保存、导出、标记 paid。
 - endpoint key 自动轮换脚本：`deploy/rotate_endpoint_keys.py`，支持 dry-run、到期前轮换、失败保留旧 key、写审计。
 - 公开配置文档：`.env.relay.example` / `README.md` / `API_DOCS.md` 已补充相关开关和客户侧接口。
@@ -20,11 +20,12 @@
 - 管理后台客户详情页 Customer Endpoint 配置区：可保存配置、dry-run、创建独立 endpoint、开启自动轮换、手动轮换 endpoint key。
 - 已修复两个线上发现的问题：普通保存用户表单不再覆盖 upstream note 字段导致“自动轮换 endpoint key”对勾消失；新账号开通独立 endpoint 不再错误调用 ModelArk `CreateProject`，改为 IAM `GetProject/CreateProject`。
 - 测试：新增素材删除、密码重置、账单、endpoint key 自动轮换、静态 UI 回归测试。
+- Alpha3 已补齐：`deploy/cleanup_upload_files.py` 上传 retention 清理、`deploy/process_asset_delete_requests.py` 异步 asset delete worker、provision job `current_step/progress`、per-endpoint key map fallback、endpoint map health panel、Quota Center reminder、客户账单视图。
 
 部分完成：
 
-- 账单导出已完成 CSV；XLSX / PDF 后置。
-- 本地上传文件自动 retention 清理后置。
+- 账单导出已支持 CSV / XLSX / PDF；客户视图不暴露 `upstream_cost_usd` 或 `gross_profit_usd`。
+- 本地上传文件 retention 清理已由 `deploy/cleanup_upload_files.py` 支持，默认 dry-run，只有已注册 `asset://...` 且超过保留期的本地临时文件会被清理，DB 素材记录保留。
 
 未完成：
 
@@ -114,7 +115,7 @@ Relay 管理后台
 - 客户自己看到 BytePlus 内部资源。
 - 把 endpoint API key 设置为永久不过期。
 - 把生成视频长期保存到本服务器。
-- 完整 PDF 账单第一版强制上线，PDF 可后置。
+- 账单导出第一版已支持 CSV / XLSX / PDF；客户视图必须隐藏内部成本和毛利。
 
 ## 3. 客户上游模式
 
@@ -1021,7 +1022,7 @@ POST /admin/invoices/{invoice_id}/mark-paid
 - 同一任务不能重复进入两张未作废账单。
 - 客户版导出不包含 BytePlus 成本、毛利、endpoint id、key。
 - 内部版导出包含 BytePlus 成本和毛利。
-- 第一版先做 CSV；XLSX 第二步；PDF 后置。
+- 第一版支持 CSV / XLSX / PDF；客户视图不得暴露 `upstream_cost_usd` 或 `gross_profit_usd`。
 
 文件命名：
 
@@ -1259,7 +1260,7 @@ admin_marked_customer_invoice_paid
 4. 客户版 CSV 导出。
 5. 后台账单区块。
 6. 内部版 XLSX 导出。
-7. PDF 导出后置。
+7. 客户版 PDF 导出。
 
 ## 15. 最终结论（本轮收敛后）
 

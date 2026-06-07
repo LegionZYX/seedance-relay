@@ -372,6 +372,18 @@ curl https://seedance3.eu/v1/me/api-key/rotate \
 
 旧 Key 会立即失效。
 
+### 10.1 账单查询
+
+客户只能查询自己的账单，响应不包含 `upstream_cost_usd` / `gross_profit_usd`。
+
+```bash
+curl https://seedance3.eu/v1/invoices?status=draft \
+  -H "Authorization: Bearer $KEY"
+
+curl https://seedance3.eu/v1/invoices/inv_xxx \
+  -H "Authorization: Bearer $KEY"
+```
+
 ## 11. 常见错误
 
 错误响应格式：

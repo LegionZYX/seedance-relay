@@ -191,6 +191,75 @@ class UpstreamAdminTests(unittest.TestCase):
             "sk": "sk-test",
         }])
 
+    def test_admin_rotate_endpoint_key_can_store_per_endpoint_key_map_without_leaking(self):
+        models = list(self.server.DEFAULT_CUSTOMER_MODEL_IDS)[:2]
+        note = {
+            "upstream_mode": "auto_dedicated",
+            "customer_slug": "upstream",
+            "byteplus_project_name": "upstream",
+            "byteplus_endpoint_id": "ep-standard",
+            "byteplus_endpoint_map": {
+                models[0]: "ep-standard",
+                models[1]: "ep-fast",
+            },
+            "byteplus_endpoint_key_rotation_enabled": True,
+        }
+        db = self.server.get_db()
+        db.execute(
+            "UPDATE users SET note=?, byteplus_api_key=? WHERE id=?",
+            (json.dumps(note), "old-key", self.user_id),
+        )
+        db.close()
+        self.server.ENDPOINT_KEY_RESOURCE_MODE = "per_endpoint"
+        calls = []
+
+        def fake_call_asset_api(action, body, ak, sk):
+            calls.append(body)
+            resource_ids = body["ResourceIds"]
+            self.assertEqual(len(resource_ids), 1)
+            endpoint_id = resource_ids[0]
+            return {"ApiKey": f"secret-key-for-{endpoint_id}", "ExpiresAt": 3333333333}
+
+        self.server._call_asset_api = fake_call_asset_api
+
+        rotated = self.client.post(
+            f"/admin/users/{self.user_id}/upstream/endpoint-key/rotate",
+            headers=self.admin_headers(),
+            json={"duration_seconds": 3600},
+        )
+
+        self.assertEqual(rotated.status_code, 200, rotated.text)
+        self.assertNotIn("secret-key-for-ep-standard", rotated.text)
+        self.assertNotIn("secret-key-for-ep-fast", rotated.text)
+        body = rotated.json()
+        self.assertEqual(body["endpoint_key_mode"], "per_endpoint")
+        self.assertTrue(body["endpoint_key_map_configured"])
+        self.assertEqual(set(body["endpoint_key_map"]), set(models))
+        self.assertEqual(
+            body["endpoint_key_map"][models[0]]["api_key_masked"],
+            "secret...ndard",
+        )
+        self.assertEqual(
+            [call["ResourceIds"] for call in calls],
+            [["ep-standard"], ["ep-fast"]],
+        )
+
+        db = self.server.get_db()
+        row = db.execute("SELECT byteplus_api_key, note FROM users WHERE id=?", (self.user_id,)).fetchone()
+        db.close()
+        self.assertEqual(row["byteplus_api_key"], "secret-key-for-ep-standard")
+        stored_note = json.loads(row["note"])
+        self.assertEqual(stored_note["byteplus_endpoint_key_mode"], "per_endpoint")
+        self.assertEqual(
+            stored_note["byteplus_endpoint_key_map"][models[1]]["api_key"],
+            "secret-key-for-ep-fast",
+        )
+
+        user_detail = self.client.get(f"/admin/users/{self.user_id}", headers=self.admin_headers())
+        self.assertEqual(user_detail.status_code, 200, user_detail.text)
+        self.assertNotIn("secret-key-for-ep-standard", user_detail.text)
+        self.assertNotIn("secret-key-for-ep-fast", user_detail.text)
+
     def test_admin_can_create_dry_run_and_mocked_provision_job(self):
         dry_run = self.client.post(
             f"/admin/users/{self.user_id}/upstream/provision",
@@ -207,6 +276,8 @@ class UpstreamAdminTests(unittest.TestCase):
         self.assertEqual(dry_run.status_code, 200, dry_run.text)
         dry = dry_run.json()
         self.assertEqual(dry["status"], "dry_run")
+        self.assertEqual(dry["current_step"], "dry_run")
+        self.assertEqual(dry["progress"], 100)
         self.assertEqual(dry["planned"]["customer_slug"], "peterlv")
 
         def fake_provision(user, req):
@@ -237,6 +308,8 @@ class UpstreamAdminTests(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.text)
         body = created.json()
         self.assertEqual(body["status"], "succeeded")
+        self.assertEqual(body["current_step"], "persist_customer_config")
+        self.assertEqual(body["progress"], 100)
         self.assertEqual(body["upstream"]["byteplus_endpoint_id"], "ep-peter")
         self.assertEqual(body["upstream"]["endpoint_api_key_masked"], "peter-...t-key")
         self.assertNotIn("peter-endpoint-key", created.text)
@@ -244,13 +317,15 @@ class UpstreamAdminTests(unittest.TestCase):
         db = self.server.get_db()
         row = db.execute("SELECT byteplus_api_key, note FROM users WHERE id=?", (self.user_id,)).fetchone()
         job = db.execute(
-            "SELECT status FROM upstream_provision_jobs WHERE user_id=? AND status='succeeded' LIMIT 1",
+            "SELECT status, current_step, progress FROM upstream_provision_jobs WHERE user_id=? AND status='succeeded' LIMIT 1",
             (self.user_id,),
         ).fetchone()
         db.close()
         self.assertEqual(row["byteplus_api_key"], "peter-endpoint-key")
         self.assertEqual(json.loads(row["note"])["modelark_asset_group_id"], "group-peter")
         self.assertEqual(job["status"], "succeeded")
+        self.assertEqual(job["current_step"], "persist_customer_config")
+        self.assertEqual(job["progress"], 100)
 
     def test_provision_creates_aigc_asset_group_inside_customer_project(self):
         calls = []

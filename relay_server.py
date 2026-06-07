@@ -38,11 +38,14 @@ import asyncio
 import json
 import csv
 import io
+import zipfile
+import inspect
 import bcrypt
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Optional, AsyncIterator, List, Tuple
+from typing import Any, Optional, AsyncIterator, List, Tuple, Callable
 from urllib.parse import urlparse, unquote, quote
+from xml.sax.saxutils import escape as xml_escape
 
 import httpx
 from fastapi import (
@@ -78,6 +81,9 @@ UPSTREAM_BASE_URL = os.getenv("UPSTREAM_BASE_URL",
 UPSTREAM_AUTH_MODE = os.getenv("UPSTREAM_AUTH_MODE", "api_key").strip().lower() or "api_key"
 UPSTREAM_ENDPOINT_ID = os.getenv("UPSTREAM_ENDPOINT_ID", "").strip()
 UPSTREAM_ENDPOINT_API_KEY = os.getenv("UPSTREAM_ENDPOINT_API_KEY", "").strip()
+ENDPOINT_KEY_RESOURCE_MODE = os.getenv("ENDPOINT_KEY_RESOURCE_MODE", "multi").strip().lower() or "multi"
+if ENDPOINT_KEY_RESOURCE_MODE not in {"multi", "per_endpoint", "auto"}:
+    ENDPOINT_KEY_RESOURCE_MODE = "multi"
 BYTEPLUS_ACCESSKEY = os.getenv(
     "BYTEPLUS_ACCESSKEY",
     os.getenv("BYTEPLUS_ACCESS_KEY", os.getenv("BYTEPLUS_ACCESS_KEY_ID", "")),
@@ -856,6 +862,8 @@ CREATE TABLE IF NOT EXISTS upstream_provision_jobs (
     id                       TEXT PRIMARY KEY,
     user_id                  TEXT NOT NULL,
     status                   TEXT NOT NULL,
+    current_step             TEXT,
+    progress                 INTEGER NOT NULL DEFAULT 0,
     customer_slug            TEXT,
     request_json             TEXT NOT NULL,
     result_json              TEXT,
@@ -924,6 +932,8 @@ MIGRATIONS = [
     "ALTER TABLE uploads ADD COLUMN asset_group_id TEXT",
     "ALTER TABLE uploads ADD COLUMN asset_project_name TEXT",
     "ALTER TABLE uploads ADD COLUMN asset_group_type TEXT",
+    "ALTER TABLE upstream_provision_jobs ADD COLUMN current_step TEXT",
+    "ALTER TABLE upstream_provision_jobs ADD COLUMN progress INTEGER NOT NULL DEFAULT 0",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)",
 ]
 
@@ -1569,6 +1579,8 @@ _UPSTREAM_NOTE_KEYS = {
     "byteplus_endpoint_id",
     "byteplus_endpoint_map",
     "byteplus_endpoint_map_updated_at",
+    "byteplus_endpoint_key_map",
+    "byteplus_endpoint_key_mode",
     "modelark_asset_group_id",
     "byteplus_endpoint_key_rotation_enabled",
     "byteplus_endpoint_api_key_expires_at",
@@ -1626,6 +1638,90 @@ def _user_byteplus_endpoint_map(user: Optional[dict]) -> dict[str, str]:
     return out
 
 
+def _user_byteplus_endpoint_key_map(user: Optional[dict]) -> dict[str, dict[str, Any]]:
+    raw = _user_note_json(user).get("byteplus_endpoint_key_map")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for model_id, entry in raw.items():
+        model = str(model_id or "").strip()
+        if not model:
+            continue
+        if isinstance(entry, dict):
+            api_key = str(entry.get("api_key") or "").strip()
+            endpoint_id = str(entry.get("endpoint_id") or "").strip()
+            if api_key:
+                out[model] = {
+                    "endpoint_id": endpoint_id,
+                    "api_key": api_key,
+                    "expires_at": entry.get("expires_at"),
+                }
+        else:
+            api_key = str(entry or "").strip()
+            if api_key:
+                out[model] = {"endpoint_id": "", "api_key": api_key, "expires_at": None}
+    return out
+
+
+def _masked_endpoint_key_map(user: Optional[dict]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for model_id, entry in _user_byteplus_endpoint_key_map(user).items():
+        out[model_id] = {
+            "endpoint_id": entry.get("endpoint_id") or "",
+            "api_key_masked": _masked_secret(entry.get("api_key"), prefix=6, suffix=5),
+            "expires_at": entry.get("expires_at"),
+        }
+    return out
+
+
+def _scrub_user_note_for_response(raw_note: Optional[str]) -> Optional[str]:
+    raw = (raw_note or "").strip()
+    if not raw:
+        return raw_note
+    note = _user_note_json({"note": raw})
+    if not note:
+        return raw_note
+    raw_key_map = note.get("byteplus_endpoint_key_map")
+    if isinstance(raw_key_map, dict):
+        redacted = {}
+        for model_id, entry in raw_key_map.items():
+            if isinstance(entry, dict):
+                redacted[model_id] = {
+                    key: value
+                    for key, value in entry.items()
+                    if key != "api_key"
+                }
+                if entry.get("api_key"):
+                    redacted[model_id]["api_key_masked"] = _masked_secret(
+                        entry.get("api_key"), prefix=6, suffix=5
+                    )
+            elif entry:
+                redacted[model_id] = {"api_key_masked": _masked_secret(entry, prefix=6, suffix=5)}
+        note["byteplus_endpoint_key_map"] = redacted
+    return json.dumps(note, ensure_ascii=True, sort_keys=True)
+
+
+def _endpoint_api_key_for_selected_model(
+    user: Optional[dict],
+    client_model: str,
+    real_model: str,
+    endpoint_id: str,
+) -> str:
+    key_map = _user_byteplus_endpoint_key_map(user)
+    if not key_map:
+        return ""
+    for candidate in (client_model, real_model, endpoint_id):
+        entry = key_map.get(candidate)
+        if entry and entry.get("api_key"):
+            return str(entry["api_key"]).strip()
+    for entry in key_map.values():
+        if endpoint_id and str(entry.get("endpoint_id") or "").strip() == endpoint_id:
+            api_key = str(entry.get("api_key") or "").strip()
+            if api_key:
+                return api_key
+    return ""
+
+
 def _user_byteplus_endpoint_id_for_model(user: Optional[dict], client_model: str, real_model: str) -> str:
     endpoint_map = _user_byteplus_endpoint_map(user)
     if endpoint_map:
@@ -1661,6 +1757,9 @@ def _user_upstream_response(user: dict | sqlite3.Row) -> dict:
         "byteplus_endpoint_id": note.get("byteplus_endpoint_id") or "",
         "byteplus_endpoint_map": _user_byteplus_endpoint_map(user_dict),
         "modelark_asset_group_id": note.get("modelark_asset_group_id") or "",
+        "endpoint_key_mode": note.get("byteplus_endpoint_key_mode") or "multi",
+        "endpoint_key_map_configured": bool(_user_byteplus_endpoint_key_map(user_dict)),
+        "endpoint_key_map": _masked_endpoint_key_map(user_dict),
         "endpoint_key_rotation_enabled": _truthy_note_value(note.get("byteplus_endpoint_key_rotation_enabled")),
         "byteplus_endpoint_api_key_expires_at": note.get("byteplus_endpoint_api_key_expires_at"),
         "byteplus_endpoint_key_last_rotated_at": note.get("byteplus_endpoint_key_last_rotated_at"),
@@ -1683,6 +1782,125 @@ def _upstream_capabilities() -> dict:
         "can_create_asset_group": iam_configured,
         "can_rotate_endpoint_key": iam_configured,
     }
+
+
+def _endpoint_map_health_for_user(user: sqlite3.Row | dict) -> dict[str, Any]:
+    user_dict = dict(user)
+    enabled_models = _enabled_models_for_user(user_dict)
+    endpoint_map = _user_byteplus_endpoint_map(user_dict)
+    enabled_set = set(enabled_models)
+    mapped_models = [model for model in enabled_models if endpoint_map.get(model)]
+    missing_models = [model for model in enabled_models if not endpoint_map.get(model)]
+    extra_models = sorted(model for model in endpoint_map if model not in enabled_set)
+    endpoint_counts: dict[str, int] = {}
+    for endpoint_id in endpoint_map.values():
+        endpoint_counts[endpoint_id] = endpoint_counts.get(endpoint_id, 0) + 1
+    duplicate_endpoint_ids = sorted(
+        endpoint_id for endpoint_id, count in endpoint_counts.items() if count > 1
+    )
+    note = _user_note_json(user_dict)
+    warnings = []
+    if not note.get("byteplus_project_name"):
+        warnings.append("missing_project")
+    if not note.get("modelark_asset_group_id"):
+        warnings.append("missing_asset_group")
+    if missing_models:
+        warnings.append("missing_model_endpoint_mapping")
+    if extra_models:
+        warnings.append("extra_model_endpoint_mapping")
+    if duplicate_endpoint_ids:
+        warnings.append("duplicate_endpoint_ids")
+    if not (user_dict.get("byteplus_api_key") or _user_byteplus_endpoint_key_map(user_dict)):
+        warnings.append("missing_endpoint_key")
+    return {
+        "user_id": user_dict["id"],
+        "email": user_dict.get("email"),
+        "status": "ok" if not warnings else "warning",
+        "warnings": warnings,
+        "enabled_models": enabled_models,
+        "mapped_models": mapped_models,
+        "missing_models": missing_models,
+        "extra_models": extra_models,
+        "duplicate_endpoint_ids": duplicate_endpoint_ids,
+        "endpoint_map_size": len(endpoint_map),
+        "project_configured": bool(note.get("byteplus_project_name")),
+        "asset_group_configured": bool(note.get("modelark_asset_group_id")),
+        "endpoint_key_configured": bool(user_dict.get("byteplus_api_key")),
+        "endpoint_key_mode": note.get("byteplus_endpoint_key_mode") or "multi",
+        "endpoint_key_map_configured": bool(_user_byteplus_endpoint_key_map(user_dict)),
+        "endpoint_key_map": _masked_endpoint_key_map(user_dict),
+        "key_rotation_error": note.get("byteplus_endpoint_key_rotation_error") or "",
+    }
+
+
+def _env_int_value(name: str, default: int = 0) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _quota_reminder_item(resource: str, used: int, warn_at: int) -> dict[str, Any]:
+    status_value = "warning" if warn_at > 0 and used >= warn_at else "ok"
+    return {
+        "resource": resource,
+        "used": used,
+        "warn_at": warn_at,
+        "status": status_value,
+        "reminder": (
+            "Check BytePlus Quota Center before provisioning more customer resources"
+            if status_value == "warning"
+            else "Below configured warning threshold"
+        ),
+    }
+
+
+def _upstream_quota_reminders() -> dict[str, Any]:
+    db = get_db()
+    try:
+        rows = db.execute(
+            "SELECT id, note FROM users WHERE is_active=1"
+        ).fetchall()
+    finally:
+        db.close()
+    projects: set[str] = set()
+    endpoints: set[str] = set()
+    asset_groups: set[str] = set()
+    for row in rows:
+        note = _user_note_json(dict(row))
+        project_name = str(note.get("byteplus_project_name") or "").strip()
+        if project_name:
+            projects.add(project_name)
+        asset_group_id = str(note.get("modelark_asset_group_id") or "").strip()
+        if asset_group_id:
+            asset_groups.add(asset_group_id)
+        endpoint_id = str(note.get("byteplus_endpoint_id") or "").strip()
+        if endpoint_id:
+            endpoints.add(endpoint_id)
+        endpoint_map = note.get("byteplus_endpoint_map")
+        if isinstance(endpoint_map, dict):
+            for value in endpoint_map.values():
+                endpoint = str(value or "").strip()
+                if endpoint:
+                    endpoints.add(endpoint)
+    data = [
+        _quota_reminder_item(
+            "projects",
+            len(projects),
+            _env_int_value("BYTEPLUS_PROJECT_QUOTA_WARN_AT", 0),
+        ),
+        _quota_reminder_item(
+            "endpoints",
+            len(endpoints),
+            _env_int_value("BYTEPLUS_ENDPOINT_QUOTA_WARN_AT", 0),
+        ),
+        _quota_reminder_item(
+            "asset_groups",
+            len(asset_groups),
+            _env_int_value("BYTEPLUS_ASSET_GROUP_QUOTA_WARN_AT", 0),
+        ),
+    ]
+    return {"data": data, "checked_customers": len(rows)}
 
 
 def _normalize_customer_slug(value: str) -> str:
@@ -1857,23 +2075,7 @@ def _wait_endpoint_ready(endpoint_id: str, project_name: str) -> None:
     raise RuntimeError(f"Endpoint {endpoint_id} did not become Running; last_status={last_status}")
 
 
-def _get_endpoint_api_key(endpoint_id: str | list[str], duration_seconds: int) -> dict[str, Any]:
-    if not BYTEPLUS_ACCESSKEY or not BYTEPLUS_SECRETKEY:
-        raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_SECRET_ACCESS_KEY are required")
-    endpoint_ids = endpoint_id if isinstance(endpoint_id, list) else [endpoint_id]
-    endpoint_ids = [str(item).strip() for item in endpoint_ids if str(item).strip()]
-    if not endpoint_ids:
-        raise RuntimeError("endpoint id is required before rotating endpoint API key")
-    result = _call_asset_api(
-        "GetApiKey",
-        {
-            "DurationSeconds": duration_seconds,
-            "ResourceType": "endpoint",
-            "ResourceIds": endpoint_ids,
-        },
-        BYTEPLUS_ACCESSKEY,
-        BYTEPLUS_SECRETKEY,
-    )
+def _extract_endpoint_api_key_payload(result: dict[str, Any], duration_seconds: int) -> dict[str, Any]:
     api_key = (
         extract_nested_value(result, "Result", "ApiKey")
         or extract_nested_value(result, "ApiKey")
@@ -1894,7 +2096,88 @@ def _get_endpoint_api_key(endpoint_id: str | list[str], duration_seconds: int) -
     }
 
 
-def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamRequest) -> dict:
+def _request_endpoint_api_key(endpoint_ids: list[str], duration_seconds: int) -> dict[str, Any]:
+    result = _call_asset_api(
+        "GetApiKey",
+        {
+            "DurationSeconds": duration_seconds,
+            "ResourceType": "endpoint",
+            "ResourceIds": endpoint_ids,
+        },
+        BYTEPLUS_ACCESSKEY,
+        BYTEPLUS_SECRETKEY,
+    )
+    return _extract_endpoint_api_key_payload(result, duration_seconds)
+
+
+def _get_per_endpoint_api_key_map(endpoint_ids: list[str], duration_seconds: int) -> dict[str, Any]:
+    endpoint_key_map: dict[str, dict[str, Any]] = {}
+    first: Optional[dict[str, Any]] = None
+    for endpoint_id in endpoint_ids:
+        issued = _request_endpoint_api_key([endpoint_id], duration_seconds)
+        endpoint_key_map[endpoint_id] = {
+            "endpoint_id": endpoint_id,
+            "api_key": issued["api_key"],
+            "expires_at": issued["expires_at"],
+        }
+        if first is None:
+            first = issued
+    if first is None:
+        raise RuntimeError("endpoint id is required before rotating endpoint API key")
+    return {
+        "api_key": first["api_key"],
+        "expires_at": min(int(item["expires_at"]) for item in endpoint_key_map.values()),
+        "endpoint_key_map_by_endpoint": endpoint_key_map,
+        "key_mode": "per_endpoint",
+    }
+
+
+def _get_endpoint_api_key(endpoint_id: str | list[str], duration_seconds: int) -> dict[str, Any]:
+    if not BYTEPLUS_ACCESSKEY or not BYTEPLUS_SECRETKEY:
+        raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_SECRET_ACCESS_KEY are required")
+    endpoint_ids = endpoint_id if isinstance(endpoint_id, list) else [endpoint_id]
+    endpoint_ids = [str(item).strip() for item in endpoint_ids if str(item).strip()]
+    if not endpoint_ids:
+        raise RuntimeError("endpoint id is required before rotating endpoint API key")
+    if ENDPOINT_KEY_RESOURCE_MODE == "per_endpoint" and len(endpoint_ids) > 1:
+        return _get_per_endpoint_api_key_map(endpoint_ids, duration_seconds)
+    try:
+        issued = _request_endpoint_api_key(endpoint_ids, duration_seconds)
+        return issued
+    except Exception:
+        if ENDPOINT_KEY_RESOURCE_MODE == "auto" and len(endpoint_ids) > 1:
+            return _get_per_endpoint_api_key_map(endpoint_ids, duration_seconds)
+        raise
+
+
+def _model_endpoint_key_map_from_issued(
+    issued: dict[str, Any],
+    endpoint_map: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    raw = issued.get("endpoint_key_map_by_endpoint")
+    if not isinstance(raw, dict) or not endpoint_map:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for model_id, endpoint_id in endpoint_map.items():
+        entry = raw.get(endpoint_id)
+        if isinstance(entry, dict) and entry.get("api_key"):
+            out[model_id] = {
+                "endpoint_id": endpoint_id,
+                "api_key": str(entry["api_key"]),
+                "expires_at": entry.get("expires_at"),
+            }
+    return out
+
+
+def _provision_customer_upstream_resources(
+    user: dict,
+    req: ProvisionUpstreamRequest,
+    on_step: Optional[Callable[[str, int], None]] = None,
+) -> dict:
+    def step(name: str, progress: int) -> None:
+        if on_step:
+            on_step(name, progress)
+
     if not BYTEPLUS_ACCESSKEY or not BYTEPLUS_SECRETKEY:
         raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_SECRET_ACCESS_KEY are required")
     planned = _planned_upstream_provision(user, req)
@@ -1906,6 +2189,7 @@ def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamReq
     asset_group_id = _user_modelark_asset_group_id(user)
 
     if req.create_project:
+        step("ensure_project", 15)
         project_result = _ensure_byteplus_project(
             project_name,
             display_name=project_name,
@@ -1918,6 +2202,7 @@ def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamReq
             or ""
         )
     if req.create_endpoint:
+        step("create_endpoints", 35)
         for client_model in _enabled_models_for_user(user):
             endpoint_result = _call_asset_api(
                 "CreateEndpoint",
@@ -1935,8 +2220,10 @@ def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamReq
                 endpoint_map[client_model] = created_endpoint_id
                 if not endpoint_id:
                     endpoint_id = created_endpoint_id
+                step("wait_endpoints", 55)
                 _wait_endpoint_ready(created_endpoint_id, project_name)
     if req.create_asset_group:
+        step("ensure_asset_group", 75)
         group_result = _call_asset_api(
             "CreateAssetGroup",
             build_create_asset_group_body(
@@ -1958,12 +2245,17 @@ def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamReq
         "modelark_asset_group_id": asset_group_id,
     }
     if req.rotate_endpoint_key:
+        step("generate_key", 90)
         endpoint_ids = list(endpoint_map.values()) or ([endpoint_id] if endpoint_id else [])
         if not endpoint_ids:
             raise RuntimeError("endpoint id is required before rotating endpoint API key")
         issued = _get_endpoint_api_key(endpoint_ids, req.endpoint_key_duration_seconds)
         result["endpoint_api_key"] = issued["api_key"]
         result["byteplus_endpoint_api_key_expires_at"] = issued["expires_at"]
+        result["byteplus_endpoint_key_mode"] = issued.get("key_mode") or "multi"
+        endpoint_key_map = _model_endpoint_key_map_from_issued(issued, endpoint_map)
+        if endpoint_key_map:
+            result["byteplus_endpoint_key_map"] = endpoint_key_map
     return result
 
 
@@ -1982,10 +2274,13 @@ def _apply_upstream_result_to_user(
         "byteplus_project_id": updates.get("byteplus_project_id") or "",
         "byteplus_endpoint_id": updates.get("byteplus_endpoint_id") or "",
         "byteplus_endpoint_map": updates.get("byteplus_endpoint_map") or {},
+        "byteplus_endpoint_key_mode": updates.get("byteplus_endpoint_key_mode") or "multi",
         "modelark_asset_group_id": updates.get("modelark_asset_group_id") or "",
         "byteplus_endpoint_key_rotation_enabled": bool(rotation_enabled),
         "byteplus_upstream_updated_at": now,
     }
+    if updates.get("byteplus_endpoint_key_map"):
+        note_updates["byteplus_endpoint_key_map"] = updates["byteplus_endpoint_key_map"]
     if updates.get("byteplus_endpoint_api_key_expires_at") is not None:
         note_updates["byteplus_endpoint_api_key_expires_at"] = int(
             updates["byteplus_endpoint_api_key_expires_at"]
@@ -2021,6 +2316,35 @@ def _upstream_job_response(row: sqlite3.Row | dict, upstream: Optional[dict] = N
     if upstream is not None:
         item["upstream"] = upstream
     return item
+
+
+def _update_upstream_provision_job_step(job_id: str, current_step: str, progress: int) -> None:
+    progress = max(0, min(100, int(progress)))
+    db = get_db()
+    try:
+        db.execute(
+            """UPDATE upstream_provision_jobs
+               SET current_step=?, progress=?, updated_at=?
+               WHERE id=?""",
+            (current_step, progress, int(time.time()), job_id),
+        )
+    finally:
+        db.close()
+
+
+def _call_customer_upstream_provisioner(
+    user: dict,
+    req: ProvisionUpstreamRequest,
+    on_step: Callable[[str, int], None],
+) -> dict:
+    provisioner = _provision_customer_upstream_resources
+    try:
+        signature = inspect.signature(provisioner)
+        if "on_step" in signature.parameters:
+            return provisioner(user, req, on_step=on_step)
+    except (TypeError, ValueError):
+        pass
+    return provisioner(user, req)
 
 
 def _content_url_for_block(block: ContentBlock) -> str:
@@ -2206,13 +2530,24 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
         return t
 
     # 用提交时使用的 BytePlus key 来查询(因为 task 是用那把 key 创建的)
-    user_row = db.execute("SELECT byteplus_api_key, markup_pct, price_multiplier FROM users WHERE id=?",
+    user_row = db.execute("SELECT byteplus_api_key, markup_pct, price_multiplier, note FROM users WHERE id=?",
                           (user_id,)).fetchone()
     user_endpoint_id = ""
+    user_dict = dict(user_row) if user_row else {}
     if user_row:
-        user_for_note = db.execute("SELECT note FROM users WHERE id=?", (user_id,)).fetchone()
-        user_endpoint_id = _user_byteplus_endpoint_id(dict(user_for_note)) if user_for_note else ""
-    user_bp_key = user_row["byteplus_api_key"] if user_row else None
+        client_model = str(t.get("client_model") or "")
+        real_model = MODEL_MAP.get(client_model, str(t.get("upstream_model") or ""))
+        try:
+            user_endpoint_id = _user_byteplus_endpoint_id_for_model(user_dict, client_model, real_model)
+        except HTTPException:
+            user_endpoint_id = _user_byteplus_endpoint_id(user_dict)
+    user_endpoint_key = _endpoint_api_key_for_selected_model(
+        user_dict,
+        str(t.get("client_model") or ""),
+        MODEL_MAP.get(str(t.get("client_model") or ""), str(t.get("upstream_model") or "")),
+        user_endpoint_id,
+    )
+    user_bp_key = user_endpoint_key or (user_row["byteplus_api_key"] if user_row else None)
     bp_key = user_bp_key
     if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
         if user_endpoint_id and user_bp_key:
@@ -3120,6 +3455,40 @@ def _invoice_response(row: sqlite3.Row | dict) -> dict:
     }
 
 
+def _customer_invoice_response(row: sqlite3.Row | dict) -> dict:
+    return {
+        "id": row["id"],
+        "invoice_no": row["invoice_no"],
+        "status": row["status"],
+        "period_start": row["period_start"],
+        "period_end": row["period_end"],
+        "currency": row["currency"],
+        "subtotal_usd": row["subtotal_usd"],
+        "discount_usd": row["discount_usd"],
+        "total_usd": row["total_usd"],
+        "task_count": row["task_count"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "paid_at": row["paid_at"],
+    }
+
+
+def _customer_invoice_item_response(row: sqlite3.Row | dict) -> dict:
+    return {
+        "id": row["id"],
+        "task_id": row["task_id"],
+        "item_type": row["item_type"],
+        "description": row["description"],
+        "client_model": row["client_model"],
+        "resolution": row["resolution"],
+        "duration": row["duration"],
+        "quantity": row["quantity"],
+        "unit_price_usd": row["unit_price_usd"],
+        "amount_usd": row["amount_usd"],
+        "created_at": row["created_at"],
+    }
+
+
 def _csv_response(filename: str, rows: list[dict], headers: list[str]) -> Response:
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=headers, extrasaction="ignore")
@@ -3129,6 +3498,124 @@ def _csv_response(filename: str, rows: list[dict], headers: list[str]) -> Respon
     return Response(
         output.getvalue(),
         media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _excel_column_name(index: int) -> str:
+    name = ""
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
+
+
+def _xlsx_response(filename: str, rows: list[dict], headers: list[str]) -> Response:
+    sheet_rows = [headers] + [[row.get(header, "") for header in headers] for row in rows]
+    xml_rows = []
+    for row_index, values in enumerate(sheet_rows, start=1):
+        cells = []
+        for column_index, value in enumerate(values, start=1):
+            ref = f"{_excel_column_name(column_index)}{row_index}"
+            text = xml_escape("" if value is None else str(value))
+            cells.append(f'<c r="{ref}" t="inlineStr"><is><t>{text}</t></is></c>')
+        xml_rows.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+    worksheet = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<sheetData>{"".join(xml_rows)}</sheetData>'
+        "</worksheet>"
+    )
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Invoice" sheetId="1" r:id="rId1"/></sheets>'
+        "</workbook>"
+    )
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/>'
+        "</Relationships>"
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="xl/workbook.xml"/>'
+        "</Relationships>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("xl/workbook.xml", workbook)
+        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        zf.writestr("xl/worksheets/sheet1.xml", worksheet)
+    return Response(
+        buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _pdf_escape(text: str) -> str:
+    return str(text).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _pdf_response(filename: str, title: str, rows: list[dict], headers: list[str]) -> Response:
+    lines = [title, " | ".join(headers)]
+    lines.extend(" | ".join(str(row.get(header, "")) for header in headers) for row in rows)
+    drawing = ["BT", "/F1 9 Tf", "72 760 Td"]
+    for line in lines[:58]:
+        safe = _pdf_escape(line[:120]).encode("latin-1", "replace").decode("latin-1")
+        drawing.append(f"({safe}) Tj")
+        drawing.append("0 -12 Td")
+    drawing.append("ET")
+    stream = "\n".join(drawing).encode("latin-1", "replace")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    output = io.BytesIO()
+    output.write(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(output.tell())
+        output.write(f"{index} 0 obj\n".encode("ascii"))
+        output.write(obj)
+        output.write(b"\nendobj\n")
+    xref_at = output.tell()
+    output.write(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    output.write(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.write(f"{offset:010d} 00000 n \n".encode("ascii"))
+    output.write(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_at}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return Response(
+        output.getvalue(),
+        media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -3330,6 +3817,69 @@ async def get_pricing(user=Depends(optional_auth_user)):
             "1080p 的每秒 token 数为像素比例外推估算；480p/720p 来自实测。",
         ],
     }
+
+
+@app.get("/v1/invoices")
+async def customer_list_invoices(
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    user=Depends(auth_user),
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    clauses = ["user_id=?"]
+    args: list[Any] = [user["id"]]
+    if status:
+        clauses.append("status=?")
+        args.append(status.strip().lower())
+    where = " AND ".join(clauses)
+    db = get_db()
+    try:
+        rows = db.execute(
+            f"""SELECT *
+                FROM invoices
+                WHERE {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?""",
+            args + [limit, offset],
+        ).fetchall()
+        total = db.execute(f"SELECT COUNT(*) AS total FROM invoices WHERE {where}", args).fetchone()["total"]
+    finally:
+        db.close()
+    return {
+        "data": [_customer_invoice_response(row) for row in rows],
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+    }
+
+
+@app.get("/v1/invoices/{invoice_id}")
+async def customer_get_invoice(invoice_id: str, user=Depends(auth_user)):
+    db = get_db()
+    try:
+        invoice = db.execute(
+            "SELECT * FROM invoices WHERE id=? AND user_id=?",
+            (invoice_id, user["id"]),
+        ).fetchone()
+        if not invoice:
+            raise HTTPException(404, {"error": {
+                "code": "invoice_not_found",
+                "message": "Invoice was not found",
+            }})
+        items = db.execute(
+            """SELECT *
+               FROM invoice_items
+               WHERE invoice_id=?
+               ORDER BY created_at ASC, id ASC""",
+            (invoice_id,),
+        ).fetchall()
+    finally:
+        db.close()
+    response = _customer_invoice_response(invoice)
+    response["items"] = [_customer_invoice_item_response(item) for item in items]
+    return response
 
 
 @app.post("/v1/uploads")
@@ -3664,7 +4214,8 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
         }})
 
     user_endpoint_id = _user_byteplus_endpoint_id_for_model(user, client_model, real_model)
-    user_bp_key = (user.get("byteplus_api_key") or "").strip()
+    user_endpoint_key = _endpoint_api_key_for_selected_model(user, client_model, real_model, user_endpoint_id)
+    user_bp_key = user_endpoint_key or (user.get("byteplus_api_key") or "").strip()
     bp_key = user_bp_key or UPSTREAM_API_KEY
     if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
         if user_endpoint_id and user_bp_key:
@@ -4369,6 +4920,7 @@ async def admin_list_users():
         item["enabled_models"] = _enabled_models_for_user(item)
         item["api_key"] = _masked_secret(item.get("api_key"), prefix=6, suffix=6)
         item["byteplus_api_key"] = _masked_secret(item.get("byteplus_api_key"))
+        item["note"] = _scrub_user_note_for_response(item.get("note"))
         data.append(item)
     return {"data": data}
 
@@ -4390,6 +4942,7 @@ async def admin_get_user(user_id: str):
     # 脱敏 BytePlus key, 只显示前 8 后 4
     if u.get("byteplus_api_key"):
         u["byteplus_api_key"] = _masked_secret(u["byteplus_api_key"])
+    u["note"] = _scrub_user_note_for_response(u.get("note"))
     u.pop("password_hash", None)
 
     # 该用户最近 20 个任务
@@ -4425,6 +4978,42 @@ async def admin_get_user(user_id: str):
 @app.get("/admin/upstream/iam-capabilities", dependencies=[Depends(auth_admin)])
 async def admin_get_upstream_iam_capabilities():
     return _upstream_capabilities()
+
+
+@app.get("/admin/upstream/endpoint-map-health", dependencies=[Depends(auth_admin)])
+async def admin_get_endpoint_map_health(
+    user_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    clauses = ["is_active=1"]
+    args: list[Any] = []
+    if user_id:
+        clauses.append("id=?")
+        args.append(user_id)
+    where = " AND ".join(clauses)
+    db = get_db()
+    try:
+        rows = db.execute(
+            f"""SELECT id, email, enabled_models, byteplus_api_key, note
+                FROM users
+                WHERE {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?""",
+            args + [limit, offset],
+        ).fetchall()
+        total = db.execute(f"SELECT COUNT(*) AS total FROM users WHERE {where}", args).fetchone()["total"]
+    finally:
+        db.close()
+    data = [_endpoint_map_health_for_user(row) for row in rows]
+    return {"data": data, "limit": limit, "offset": offset, "total": total}
+
+
+@app.get("/admin/upstream/quota-reminders", dependencies=[Depends(auth_admin)])
+async def admin_get_upstream_quota_reminders():
+    return _upstream_quota_reminders()
 
 
 @app.get("/admin/upstream/provision-jobs/{job_id}", dependencies=[Depends(auth_admin)])
@@ -4556,14 +5145,20 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
     db = get_db()
     try:
         user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        user_endpoint_map = _user_byteplus_endpoint_map(dict(user))
+        note_updates: dict[str, Any] = {
+            "upstream_mode": _user_note_json(dict(user)).get("upstream_mode") or "auto_dedicated",
+            "byteplus_endpoint_api_key_expires_at": int(issued["expires_at"]),
+            "byteplus_endpoint_key_last_rotated_at": int(time.time()),
+            "byteplus_endpoint_key_rotation_error": "",
+            "byteplus_endpoint_key_mode": issued.get("key_mode") or "multi",
+        }
+        endpoint_key_map = _model_endpoint_key_map_from_issued(issued, user_endpoint_map)
+        if endpoint_key_map:
+            note_updates["byteplus_endpoint_key_map"] = endpoint_key_map
         note = _merge_user_note_json(
             user["note"],
-            {
-                "upstream_mode": _user_note_json(dict(user)).get("upstream_mode") or "auto_dedicated",
-                "byteplus_endpoint_api_key_expires_at": int(issued["expires_at"]),
-                "byteplus_endpoint_key_last_rotated_at": int(time.time()),
-                "byteplus_endpoint_key_rotation_error": "",
-            },
+            note_updates,
         )
         db.execute(
             "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
@@ -4604,13 +5199,15 @@ async def admin_provision_user_upstream(user_id: str, req: ProvisionUpstreamRequ
         planned = _planned_upstream_provision(user_dict, req)
         db.execute(
             """INSERT INTO upstream_provision_jobs
-               (id, user_id, status, customer_slug, request_json,
+               (id, user_id, status, current_step, progress, customer_slug, request_json,
                 result_json, error_message, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 job_id,
                 user_id,
                 "dry_run" if req.dry_run else "running",
+                "dry_run" if req.dry_run else "validate_customer",
+                100 if req.dry_run else 5,
                 planned["customer_slug"],
                 json.dumps(req.model_dump(), ensure_ascii=True, sort_keys=True),
                 json.dumps({"planned": planned}, ensure_ascii=True, sort_keys=True) if req.dry_run else None,
@@ -4626,19 +5223,25 @@ async def admin_provision_user_upstream(user_id: str, req: ProvisionUpstreamRequ
         db.close()
 
     try:
-        result = _provision_customer_upstream_resources(user_dict, req)
+        result = _call_customer_upstream_provisioner(
+            user_dict,
+            req,
+            on_step=lambda step, progress: _update_upstream_provision_job_step(job_id, step, progress),
+        )
         updated_user = _apply_upstream_result_to_user(
             user_dict,
             result,
             upstream_mode="auto_dedicated",
             rotation_enabled=req.rotate_endpoint_key,
         )
+        _update_upstream_provision_job_step(job_id, "persist_customer_config", 95)
         upstream_response = _user_upstream_response(updated_user)
         db = get_db()
         try:
             db.execute(
                 """UPDATE upstream_provision_jobs
-                   SET status='succeeded', result_json=?, updated_at=?, finished_at=?
+                   SET status='succeeded', current_step='persist_customer_config',
+                       progress=100, result_json=?, updated_at=?, finished_at=?
                    WHERE id=?""",
                 (
                     json.dumps(upstream_response, ensure_ascii=True, sort_keys=True),
@@ -4670,7 +5273,8 @@ async def admin_provision_user_upstream(user_id: str, req: ProvisionUpstreamRequ
         try:
             db.execute(
                 """UPDATE upstream_provision_jobs
-                   SET status='failed', error_message=?, updated_at=?, finished_at=?
+                   SET status='failed', current_step=COALESCE(current_step, 'failed'),
+                       error_message=?, updated_at=?, finished_at=?
                    WHERE id=?""",
                 (message, int(time.time()), int(time.time()), job_id),
             )
@@ -5062,12 +5666,67 @@ async def admin_disable_user(user_id: str):
     return {"ok": True, "id": user_id, "is_active": False}
 
 
+@app.get("/admin/invoices", dependencies=[Depends(auth_admin)])
+async def admin_list_invoices(
+    user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    period_start: Optional[int] = None,
+    period_end: Optional[int] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    clauses = ["1=1"]
+    args: list[Any] = []
+    if user_id:
+        clauses.append("inv.user_id=?")
+        args.append(user_id)
+    if status:
+        clauses.append("inv.status=?")
+        args.append(status.strip().lower())
+    if period_start is not None:
+        clauses.append("inv.period_end>=?")
+        args.append(period_start)
+    if period_end is not None:
+        clauses.append("inv.period_start<=?")
+        args.append(period_end)
+    where = " AND ".join(clauses)
+    db = get_db()
+    try:
+        rows = db.execute(
+            f"""SELECT inv.*, u.email AS user_email
+                FROM invoices inv
+                LEFT JOIN users u ON inv.user_id=u.id
+                WHERE {where}
+                ORDER BY inv.created_at DESC, inv.id DESC
+                LIMIT ? OFFSET ?""",
+            args + [limit, offset],
+        ).fetchall()
+        total = db.execute(
+            f"""SELECT COUNT(*) AS total
+                FROM invoices inv
+                LEFT JOIN users u ON inv.user_id=u.id
+                WHERE {where}""",
+            args,
+        ).fetchone()["total"]
+    finally:
+        db.close()
+    data = []
+    for row in rows:
+        item = _invoice_response(row)
+        item["user_email"] = row["user_email"]
+        data.append(item)
+    return {"data": data, "limit": limit, "offset": offset, "total": total}
+
+
 @app.get("/admin/invoices/{invoice_id}/export", dependencies=[Depends(auth_admin)])
 async def admin_export_invoice(invoice_id: str, format: str = "csv", view: str = "customer"):
-    if format != "csv":
+    format = (format or "csv").strip().lower()
+    if format not in {"csv", "xlsx", "pdf"}:
         raise HTTPException(400, {"error": {
             "code": "unsupported_invoice_export_format",
-            "message": "Only CSV export is available in this release",
+            "message": "format must be csv, xlsx, or pdf",
         }})
     if view not in {"customer", "internal"}:
         raise HTTPException(400, {"error": {
@@ -5118,8 +5777,13 @@ async def admin_export_invoice(invoice_id: str, format: str = "csv", view: str =
         target_id=invoice_id,
         metadata={"invoice_id": invoice_id, "view": view, "format": format},
     )
-    filename = f"invoice-{invoice['invoice_no']}-{view}.csv"
-    return _csv_response(filename, rows, headers)
+    base_filename = f"invoice-{invoice['invoice_no']}-{view}"
+    if format == "xlsx":
+        return _xlsx_response(f"{base_filename}.xlsx", rows, headers)
+    if format == "pdf":
+        title = f"Invoice {invoice['invoice_no']} ({view})"
+        return _pdf_response(f"{base_filename}.pdf", title, rows, headers)
+    return _csv_response(f"{base_filename}.csv", rows, headers)
 
 
 @app.post("/admin/invoices/{invoice_id}/mark-paid", dependencies=[Depends(auth_admin)])
