@@ -181,7 +181,7 @@ func (e *endpointKeyMapEntry) UnmarshalJSON(data []byte) error {
 		ExpiresAt  any    `json:"expires_at"`
 	}
 	if err := json.Unmarshal(data, &obj); err != nil {
-		return err
+		return nil
 	}
 	e.EndpointID = strings.TrimSpace(obj.EndpointID)
 	e.APIKey = strings.TrimSpace(obj.APIKey)
