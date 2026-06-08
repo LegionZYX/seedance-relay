@@ -157,7 +157,36 @@ type createVideoRequest struct {
 }
 
 type customerNote struct {
-	BytePlusEndpointID string `json:"byteplus_endpoint_id"`
+	BytePlusEndpointID      string                         `json:"byteplus_endpoint_id"`
+	BytePlusEndpointMap     map[string]string              `json:"byteplus_endpoint_map"`
+	BytePlusEndpointKeyMap  map[string]endpointKeyMapEntry `json:"byteplus_endpoint_key_map"`
+	BytePlusEndpointKeyMode string                         `json:"byteplus_endpoint_key_mode"`
+}
+
+type endpointKeyMapEntry struct {
+	EndpointID string `json:"endpoint_id"`
+	APIKey     string `json:"api_key"`
+	ExpiresAt  any    `json:"expires_at"`
+}
+
+func (e *endpointKeyMapEntry) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err == nil {
+		e.APIKey = strings.TrimSpace(raw)
+		return nil
+	}
+	var obj struct {
+		EndpointID string `json:"endpoint_id"`
+		APIKey     string `json:"api_key"`
+		ExpiresAt  any    `json:"expires_at"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	e.EndpointID = strings.TrimSpace(obj.EndpointID)
+	e.APIKey = strings.TrimSpace(obj.APIKey)
+	e.ExpiresAt = obj.ExpiresAt
+	return nil
 }
 
 var allowedContentBlockTypes = map[string]bool{
@@ -351,7 +380,11 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		))
 		return
 	}
-	upstreamKey, upstreamModel := s.customerUpstream(user, model.UpstreamID)
+	upstreamKey, upstreamModel, upstreamErr := s.customerUpstream(user, req.Model, model.UpstreamID)
+	if upstreamErr != nil {
+		writeJSON(w, http.StatusBadRequest, upstreamErr)
+		return
+	}
 	if upstreamKey == "" {
 		writeJSON(w, http.StatusServiceUnavailable, errorBody("no_upstream_key", "Service not configured: contact administrator"))
 		return
@@ -604,7 +637,10 @@ func (s *Server) getVideo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) refreshTask(r *http.Request, user *store.User, task *store.Task) (*store.Task, error) {
-	upstreamKey, _ := s.customerUpstream(user, task.UpstreamModel)
+	upstreamKey, _, upstreamErr := s.customerUpstream(user, task.ClientModel, task.UpstreamModel)
+	if upstreamErr != nil {
+		return task, nil
+	}
 	if upstreamKey == "" {
 		return task, nil
 	}
@@ -1130,7 +1166,7 @@ func modelAccess(user *store.User) []string {
 	return user.EnabledModels
 }
 
-func (s *Server) customerUpstream(user *store.User, fallbackModel string) (string, string) {
+func (s *Server) customerUpstream(user *store.User, clientModel, fallbackModel string) (string, string, map[string]any) {
 	upstreamKey := strings.TrimSpace(s.cfg.UpstreamAPIKey)
 	upstreamModel := fallbackModel
 	customerKey := ""
@@ -1140,9 +1176,25 @@ func (s *Server) customerUpstream(user *store.User, fallbackModel string) (strin
 	if user != nil && user.Note.Valid && strings.TrimSpace(user.Note.String) != "" {
 		var note customerNote
 		if err := json.Unmarshal([]byte(user.Note.String), &note); err == nil {
-			if endpointID := strings.TrimSpace(note.BytePlusEndpointID); endpointID != "" {
+			if endpointID, hasMap, ok := selectedEndpointID(note, clientModel, fallbackModel); hasMap {
+				if !ok {
+					return "", "", errorBodyWithFields(
+						"endpoint_not_configured_for_model",
+						"This dedicated customer endpoint is not configured for the selected model",
+						map[string]any{"model": clientModel},
+					)
+				}
 				upstreamModel = endpointID
-				if customerKey != "" {
+				if endpointKey := endpointAPIKeyForSelectedModel(note, clientModel, fallbackModel, endpointID); endpointKey != "" {
+					upstreamKey = endpointKey
+				} else if customerKey != "" {
+					upstreamKey = customerKey
+				}
+			} else if endpointID := strings.TrimSpace(note.BytePlusEndpointID); endpointID != "" {
+				upstreamModel = endpointID
+				if endpointKey := endpointAPIKeyForSelectedModel(note, clientModel, fallbackModel, endpointID); endpointKey != "" {
+					upstreamKey = endpointKey
+				} else if customerKey != "" {
 					upstreamKey = customerKey
 				}
 			}
@@ -1151,7 +1203,50 @@ func (s *Server) customerUpstream(user *store.User, fallbackModel string) (strin
 	if upstreamModel == fallbackModel && customerKey != "" && !isEndpointAuthMode(s.cfg.UpstreamAuthMode) {
 		upstreamKey = customerKey
 	}
-	return upstreamKey, upstreamModel
+	return upstreamKey, upstreamModel, nil
+}
+
+func selectedEndpointID(note customerNote, clientModel, fallbackModel string) (string, bool, bool) {
+	endpointMap := cleanStringMap(note.BytePlusEndpointMap)
+	if len(endpointMap) == 0 {
+		return "", false, false
+	}
+	for _, candidate := range []string{clientModel, fallbackModel} {
+		if endpointID := endpointMap[strings.TrimSpace(candidate)]; endpointID != "" {
+			return endpointID, true, true
+		}
+	}
+	return "", true, false
+}
+
+func endpointAPIKeyForSelectedModel(note customerNote, clientModel, fallbackModel, endpointID string) string {
+	if len(note.BytePlusEndpointKeyMap) == 0 {
+		return ""
+	}
+	for _, candidate := range []string{clientModel, fallbackModel, endpointID} {
+		entry, ok := note.BytePlusEndpointKeyMap[strings.TrimSpace(candidate)]
+		if ok && strings.TrimSpace(entry.APIKey) != "" {
+			return strings.TrimSpace(entry.APIKey)
+		}
+	}
+	for _, entry := range note.BytePlusEndpointKeyMap {
+		if endpointID != "" && strings.TrimSpace(entry.EndpointID) == endpointID && strings.TrimSpace(entry.APIKey) != "" {
+			return strings.TrimSpace(entry.APIKey)
+		}
+	}
+	return ""
+}
+
+func cleanStringMap(raw map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range raw {
+		k := strings.TrimSpace(key)
+		v := strings.TrimSpace(value)
+		if k != "" && v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func isEndpointAuthMode(mode string) bool {

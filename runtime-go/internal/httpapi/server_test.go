@@ -1552,6 +1552,198 @@ func TestCreateVideoUsesCustomerEndpointFromUserNote(t *testing.T) {
 	}
 }
 
+func TestCreateVideoRoutesCustomerEndpointMapByClientModel(t *testing.T) {
+	var gotAuthorization string
+	var gotUpstreamPayload map[string]any
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotUpstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-customer-endpoint-map"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		var gotPreparePayload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"content": gotPreparePayload["content"]})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-customer-endpoint-map",
+		"u_customer_endpoint_map",
+		`["dreamina-seedance-2-0-260128","seedance-1-5-pro-251215"]`,
+		10,
+		1.0,
+		"customer-map-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_customer_endpoint_map", `{
+		"byteplus_endpoint_id":"ep-default-standard",
+		"byteplus_endpoint_map":{
+			"dreamina-seedance-2-0-260128":"ep-standard",
+			"seedance-1-5-pro-251215":"ep-seedance15"
+		}
+	}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"seedance-1-5-pro-251215",
+		"content":[{"type":"text","text":"customer endpoint map routing"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-customer-endpoint-map")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if gotAuthorization != "Bearer customer-map-key" {
+		t.Fatalf("authorization = %q", gotAuthorization)
+	}
+	if gotUpstreamPayload["model"] != "ep-seedance15" {
+		t.Fatalf("upstream model = %#v payload=%#v", gotUpstreamPayload["model"], gotUpstreamPayload)
+	}
+}
+
+func TestCreateVideoUsesEndpointKeyMapForSelectedModel(t *testing.T) {
+	var gotAuthorization string
+	var gotUpstreamPayload map[string]any
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotUpstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-customer-endpoint-key-map"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		var gotPreparePayload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"content": gotPreparePayload["content"]})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-customer-endpoint-key-map",
+		"u_customer_endpoint_key_map",
+		`["dreamina-seedance-2-0-260128","dreamina-seedance-2-0-fast-260128"]`,
+		10,
+		1.0,
+		"legacy-map-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_customer_endpoint_key_map", `{
+		"byteplus_endpoint_id":"ep-default-standard",
+		"byteplus_endpoint_map":{
+			"dreamina-seedance-2-0-260128":"ep-standard",
+			"dreamina-seedance-2-0-fast-260128":"ep-fast"
+		},
+		"byteplus_endpoint_key_map":{
+			"dreamina-seedance-2-0-260128":{"endpoint_id":"ep-standard","api_key":"standard-endpoint-key","expires_at":3333333333},
+			"dreamina-seedance-2-0-fast-260128":{"endpoint_id":"ep-fast","api_key":"fast-endpoint-key","expires_at":3333333333}
+		},
+		"byteplus_endpoint_key_mode":"per_endpoint"
+	}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-fast-260128",
+		"content":[{"type":"text","text":"selected endpoint key routing"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-customer-endpoint-key-map")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if gotAuthorization != "Bearer fast-endpoint-key" {
+		t.Fatalf("authorization = %q", gotAuthorization)
+	}
+	if gotUpstreamPayload["model"] != "ep-fast" {
+		t.Fatalf("upstream model = %#v payload=%#v", gotUpstreamPayload["model"], gotUpstreamPayload)
+	}
+}
+
+func TestCreateVideoRejectsUnmappedCustomerEndpointMapModel(t *testing.T) {
+	upstreamCalled := false
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		writeJSON(w, http.StatusOK, map[string]string{"id": "should-not-create"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		var gotPreparePayload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"content": gotPreparePayload["content"]})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-customer-endpoint-map-missing",
+		"u_customer_endpoint_map_missing",
+		`["dreamina-seedance-2-0-260128","dreamina-seedance-2-0-fast-260128"]`,
+		10,
+		1.0,
+		"customer-map-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_customer_endpoint_map_missing", `{
+		"byteplus_endpoint_id":"ep-default-standard",
+		"byteplus_endpoint_map":{
+			"dreamina-seedance-2-0-260128":"ep-standard"
+		}
+	}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-fast-260128",
+		"content":[{"type":"text","text":"must not fall back"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-customer-endpoint-map-missing")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "endpoint_not_configured_for_model") {
+		t.Fatalf("body missing endpoint_not_configured_for_model: %s", body)
+	}
+	if upstreamCalled {
+		t.Fatalf("unmapped endpoint map request called upstream")
+	}
+}
+
 func TestCreateVideoDelegatesRealPersonMaterializationBeforeUpstream(t *testing.T) {
 	var gotPrepareAuth string
 	var gotPreparePayload map[string]any
