@@ -2892,17 +2892,121 @@ def _create_and_cache_asset_group(ak: str, sk: str, project_name: str) -> str:
     return group_id
 
 
+def _asset_customer_slug(user: dict) -> str:
+    note = _user_note_json(user)
+    raw = (
+        note.get("customer_slug")
+        or note.get("byteplus_project_name")
+        or str(user.get("email") or "").split("@", 1)[0]
+        or user.get("id")
+        or secrets.token_hex(4)
+    )
+    try:
+        return _normalize_customer_slug(str(raw))
+    except HTTPException:
+        return _normalize_customer_slug(str(user.get("id") or secrets.token_hex(4)))
+
+
+def _persist_user_asset_registry_config(user_id: str, updates: dict[str, Any]) -> dict:
+    db = get_db()
+    try:
+        row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, {"error": {
+                "code": "user_not_found",
+                "message": "User not found while saving asset registry config",
+            }})
+        note = _merge_user_note_json(row["note"], updates)
+        db.execute("UPDATE users SET note=? WHERE id=?", (note, user_id))
+        updated = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        return dict(updated)
+    finally:
+        db.close()
+
+
+def _ensure_user_asset_registry_config(
+    user: Optional[dict],
+    ak: str,
+    sk: str,
+    group_id: str,
+    project_name: str,
+) -> tuple[str, str]:
+    if group_id and project_name:
+        return group_id, project_name
+    if not user or not user.get("id") or not ak or not sk or not MODELARK_ASSET_AUTO_CREATE_GROUP:
+        return group_id, project_name
+
+    slug = _asset_customer_slug(user)
+    project_name = project_name or slug
+    _ensure_byteplus_project(
+        project_name,
+        display_name=project_name,
+        description=f"Relay customer {slug}",
+    )
+    if not group_id:
+        result = _call_asset_api(
+            "CreateAssetGroup",
+            build_create_asset_group_body(
+                name=f"{slug}-assets",
+                description=f"Relay customer asset group {slug}",
+                project_name=project_name,
+            ),
+            ak,
+            sk,
+        )
+        group_id = extract_asset_group_id(result)
+        if not group_id:
+            raise HTTPException(502, {"error": {
+                "code": "asset_group_registry_error",
+                "message": "Asset group registry did not return a group id",
+            }})
+
+    updates: dict[str, Any] = {
+        "customer_slug": slug,
+        "byteplus_project_name": project_name,
+        "modelark_asset_group_id": group_id,
+        "byteplus_upstream_updated_at": int(time.time()),
+    }
+    refreshed = _persist_user_asset_registry_config(str(user["id"]), updates)
+    user.clear()
+    user.update(refreshed)
+    return group_id, project_name
+
+
 def _server_asset_config(user: Optional[dict] = None) -> tuple[str, str, str, str]:
     ak = os.getenv("BYTEPLUS_ACCESS_KEY_ID", "").strip()
     sk = os.getenv("BYTEPLUS_ACCESS_KEY_SECRET", "").strip()
-    project_name = _user_byteplus_project_name(user) or MODELARK_PROJECT_NAME
     group_id = (
         _user_modelark_asset_group_id(user)
         or os.getenv("MODELARK_ASSET_GROUP_ID", "").strip()
         or _get_setting(_ASSET_GROUP_SETTING_KEY)
     )
+    user_project_name = _user_byteplus_project_name(user)
+    should_create_user_asset_group = (
+        bool(user and user.get("id"))
+        and MODELARK_ASSET_AUTO_CREATE_GROUP
+        and not group_id
+    )
+    project_name = user_project_name or ("" if should_create_user_asset_group else MODELARK_PROJECT_NAME)
     if ak and sk and not group_id and MODELARK_ASSET_AUTO_CREATE_GROUP:
-        group_id = _create_and_cache_asset_group(ak, sk, project_name)
+        if user and user.get("id"):
+            group_id, project_name = _ensure_user_asset_registry_config(
+                user,
+                ak,
+                sk,
+                group_id,
+                project_name,
+            )
+        elif project_name:
+            group_id = _create_and_cache_asset_group(ak, sk, project_name)
+    if ak and sk and user and user.get("id") and MODELARK_ASSET_AUTO_CREATE_GROUP:
+        group_id, project_name = _ensure_user_asset_registry_config(
+            user,
+            ak,
+            sk,
+            group_id,
+            project_name,
+        )
     missing = [
         name for name, value in (
             ("BYTEPLUS_ACCESS_KEY_ID", ak),

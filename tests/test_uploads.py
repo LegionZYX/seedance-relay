@@ -173,6 +173,64 @@ class UploadEndpointTests(unittest.TestCase):
         self.assertEqual(body["asset_group_id"], "group-upload")
         self.assertEqual(body["group_type"], "AIGC")
 
+    def test_upload_auto_provisions_missing_customer_asset_group(self):
+        self.server._register_upload_asset = self.original_register_upload_asset
+        self.server.ASSET_CREATE_RETRY_DELAYS = []
+        self.server.MODELARK_PROJECT_NAME = "global-project"
+        self.server.BYTEPLUS_ACCESSKEY = "ak"
+        self.server.BYTEPLUS_SECRETKEY = "sk"
+        os.environ["BYTEPLUS_ACCESS_KEY_ID"] = "ak"
+        os.environ["BYTEPLUS_ACCESS_KEY_SECRET"] = "sk"
+        os.environ.pop("MODELARK_ASSET_GROUP_ID", None)
+        ensured_projects = []
+        calls = []
+
+        def fake_ensure_project(project_name, display_name, description):
+            ensured_projects.append({
+                "project_name": project_name,
+                "display_name": display_name,
+                "description": description,
+            })
+            return {"ProjectName": project_name, "ProjectId": "project-created"}
+
+        def fake_call_asset_api(action, body, ak, sk):
+            calls.append({"action": action, "body": body})
+            if action == "CreateAssetGroup":
+                self.assertEqual(body["ProjectName"], "upload")
+                return {"Result": {"GroupId": "group-auto-upload"}}
+            if action == "CreateAsset":
+                self.assertEqual(body["ProjectName"], "upload")
+                self.assertEqual(body["GroupId"], "group-auto-upload")
+                return {"Result": {"AssetId": "asset-auto-provisioned", "Status": "Active"}}
+            raise AssertionError(action)
+
+        self.server._ensure_byteplus_project = fake_ensure_project
+        self.server._call_asset_api = fake_call_asset_api
+
+        response = self.client.post(
+            "/v1/uploads",
+            headers=self.auth_headers(),
+            files={"file": ("portrait.jpg", b"\xff\xd8\xff\xe0seedance", "image/jpeg")},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["asset_id"], "asset-auto-provisioned")
+        self.assertEqual(body["asset_url"], "asset://asset-auto-provisioned")
+        self.assertEqual(body["asset_group_id"], "group-auto-upload")
+        self.assertEqual(body["project_name"], "upload")
+        self.assertEqual(body["group_type"], "AIGC")
+        self.assertEqual(ensured_projects[0]["project_name"], "upload")
+        self.assertEqual([call["action"] for call in calls], ["CreateAssetGroup", "CreateAsset"])
+
+        db = self.server.get_db()
+        try:
+            row = db.execute("SELECT note FROM users WHERE id=?", ("u_upload",)).fetchone()
+        finally:
+            db.close()
+        self.assertIn('"byteplus_project_name": "upload"', row["note"])
+        self.assertIn('"modelark_asset_group_id": "group-auto-upload"', row["note"])
+
     def test_upload_rejects_non_whitelisted_mime(self):
         response = self.client.post(
             "/v1/uploads",

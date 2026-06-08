@@ -393,11 +393,11 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | `BYTEPLUS_ASSET_GROUP_QUOTA_WARN_AT` | `0` | 后台 Quota Center reminder 的 AssetGroup 本地计数提醒阈值；0 表示关闭 |
 | `BYTEPLUS_ACCESS_KEY_ID` | 空 | 服务端 asset registry AK，用户不可见 |
 | `BYTEPLUS_ACCESS_KEY_SECRET` | 空 | 服务端 asset registry SK，用户不可见 |
-| `MODELARK_ASSET_GROUP_ID` | 空 | 服务端 asset group，用户不可见 |
-| `MODELARK_ASSET_AUTO_CREATE_GROUP` | `true` | 缺少 `MODELARK_ASSET_GROUP_ID` 时自动调用 `CreateAssetGroup` 并缓存到 SQLite |
+| `MODELARK_ASSET_GROUP_ID` | 空 | 可选固定素材组；留空时优先使用客户自己的 AIGC 素材组，缺失则自动创建并写回客户配置 |
+| `MODELARK_ASSET_AUTO_CREATE_GROUP` | `true` | 客户缺少素材组时自动创建 BytePlus Project / AIGC Asset Group 并写回 `users.note` |
 | `MODELARK_ASSET_GROUP_NAME` | `relay-face-assets` | 自动创建素材组时使用的名称 |
 | `MODELARK_ASSET_GROUP_DESCRIPTION` | `Relay self-service face asset whitelist` | 自动创建素材组描述 |
-| `MODELARK_PROJECT_NAME` | 空 | 可选 Project 名；留空时不传 |
+| `MODELARK_PROJECT_NAME` | 空 | 可选固定 Project 名；留空时按客户 slug 自动创建/使用客户自己的 Project |
 | `FACE_ASSET_ENFORCE` | `false` | 是否启用人脸/真人素材白名单闸门 |
 | `FACE_ASSET_SELF_SERVICE` | `false` | 是否允许客户通过 `face_allowlist=true` 自助注册并加入白名单 |
 | `FACE_ASSET_ALLOWLIST` | 空 | 逗号分隔的 `asset://...` 白名单 |
