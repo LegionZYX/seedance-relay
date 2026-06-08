@@ -709,6 +709,144 @@ func TestCreateVideoPostsNativePayloadAndHoldsBalance(t *testing.T) {
 	}
 }
 
+func TestCreateVideoWritesSuccessRequestLog(t *testing.T) {
+	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-log-success"})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey("sk-log-success", "u_log_success", "", 10, 1.0, "ark-log-success"); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"A logged product demo."}],
+		"resolution":"480p",
+		"ratio":"16:9",
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-log-success")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "runtime-log-test")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%v", resp.StatusCode, body)
+	}
+
+	log, err := db.TestLatestRequestLog("u_log_success", "video_create_success")
+	if err != nil {
+		t.Fatalf("latest log: %v", err)
+	}
+	if log.TaskID.String != body["id"].(string) {
+		t.Fatalf("log task id = %q, want %q", log.TaskID.String, body["id"].(string))
+	}
+	if log.Model.String != "dreamina-seedance-2-0-260128" {
+		t.Fatalf("log model = %q", log.Model.String)
+	}
+	if log.PromptText.String != "A logged product demo." {
+		t.Fatalf("log prompt = %q", log.PromptText.String)
+	}
+	if log.StatusCode.Int64 != 200 {
+		t.Fatalf("log status = %d", log.StatusCode.Int64)
+	}
+}
+
+func TestCreateVideoWritesFailedRequestLogForUpstreamError(t *testing.T) {
+	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "req-upstream-log-failed")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "boom"})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithBalance("sk-log-failed", "u_log_failed", "", 10, 1.0); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"A failed logged request."}],
+		"resolution":"480p",
+		"ratio":"16:9",
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-log-failed")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+
+	log, err := db.TestLatestRequestLog("u_log_failed", "video_create_failed")
+	if err != nil {
+		t.Fatalf("latest log: %v", err)
+	}
+	if log.ErrorCode.String != "upstream_error" {
+		t.Fatalf("error code = %q", log.ErrorCode.String)
+	}
+	if log.UpstreamRequestID.String != "req-upstream-log-failed" {
+		t.Fatalf("request id = %q", log.UpstreamRequestID.String)
+	}
+	if log.StatusCode.Int64 != 502 {
+		t.Fatalf("log status = %d", log.StatusCode.Int64)
+	}
+}
+
+func TestCreateVideoWritesRejectedRequestLog(t *testing.T) {
+	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithBalance("sk-log-rejected", "u_log_rejected", "", 0.01, 1.0); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"A rejected logged request."}],
+		"resolution":"480p",
+		"ratio":"16:9",
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-log-rejected")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPaymentRequired {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+
+	log, err := db.TestLatestRequestLog("u_log_rejected", "video_create_rejected")
+	if err != nil {
+		t.Fatalf("latest log: %v", err)
+	}
+	if log.ErrorCode.String != "insufficient_balance" {
+		t.Fatalf("error code = %q", log.ErrorCode.String)
+	}
+	if log.StatusCode.Int64 != 402 {
+		t.Fatalf("log status = %d", log.StatusCode.Int64)
+	}
+}
+
 func TestCreateVideoForwardsDefaultDurationUsedForBilling(t *testing.T) {
 	var gotPayload map[string]any
 	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {

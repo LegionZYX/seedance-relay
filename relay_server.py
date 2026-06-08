@@ -638,6 +638,53 @@ def _audit_event(action: str, *, actor_user_id: Optional[str], actor_type: str,
     )
 
 
+def _request_log(*, user_id: Optional[str], task_id: Optional[str], route: str,
+                 action: str, model: Optional[str] = None, prompt_text: Optional[str] = None,
+                 request_payload: Optional[Any] = None, status_code: Optional[int] = None,
+                 error_code: Optional[str] = None, upstream_request_id: Optional[str] = None,
+                 request: Optional[Request] = None) -> None:
+    try:
+        if isinstance(request_payload, str):
+            payload_text = request_payload
+        elif request_payload is None:
+            payload_text = ""
+        else:
+            payload_text = json.dumps(request_payload, ensure_ascii=False)
+        payload_text = payload_text[:20000]
+        ip = ""
+        user_agent = ""
+        if request is not None:
+            xff = (request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+            ip = xff or (request.client.host if request.client else "")
+            user_agent = (request.headers.get("user-agent") or "")[:500]
+        db = get_db()
+        db.execute(
+            """INSERT INTO request_logs
+               (id, user_id, task_id, route, action, model, prompt_text,
+                request_payload, status_code, error_code, upstream_request_id,
+                ip, user_agent, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "log_" + secrets.token_hex(12),
+                user_id,
+                task_id,
+                route,
+                action,
+                model,
+                (prompt_text or "")[:500],
+                payload_text,
+                status_code,
+                error_code,
+                upstream_request_id,
+                ip[:128],
+                user_agent,
+                int(time.time()),
+            ),
+        )
+    except Exception:
+        pass
+
+
 def _reserve_balance_if_available(user_id: str, amount: float) -> bool:
     db = get_db()
     try:
@@ -895,6 +942,23 @@ CREATE TABLE IF NOT EXISTS audit_events (
     created_at     INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS request_logs (
+    id                  TEXT PRIMARY KEY,
+    user_id             TEXT,
+    task_id             TEXT,
+    route               TEXT,
+    action              TEXT,
+    model               TEXT,
+    prompt_text         TEXT,
+    request_payload     TEXT,
+    status_code         INTEGER,
+    error_code          TEXT,
+    upstream_request_id TEXT,
+    ip                  TEXT,
+    user_agent          TEXT,
+    created_at          INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_user      ON tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_upstream  ON tasks(upstream_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status    ON tasks(status);
@@ -909,6 +973,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_delete_requests_upload_active
 CREATE INDEX IF NOT EXISTS idx_invoices_user_period ON invoices(user_id, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_invoice_items_task ON invoice_items(task_id);
 CREATE INDEX IF NOT EXISTS idx_upstream_provision_jobs_user ON upstream_provision_jobs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_request_logs_task ON request_logs(task_id);
+CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_request_logs_action ON request_logs(action);
 """
 
 # 现有 DB 升级到新 schema (添加新字段, 已存在则跳过)
@@ -940,6 +1008,26 @@ MIGRATIONS = [
     "ALTER TABLE upstream_provision_jobs ADD COLUMN current_step TEXT",
     "ALTER TABLE upstream_provision_jobs ADD COLUMN progress INTEGER NOT NULL DEFAULT 0",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+    """CREATE TABLE IF NOT EXISTS request_logs (
+        id                  TEXT PRIMARY KEY,
+        user_id             TEXT,
+        task_id             TEXT,
+        route               TEXT,
+        action              TEXT,
+        model               TEXT,
+        prompt_text         TEXT,
+        request_payload     TEXT,
+        status_code         INTEGER,
+        error_code          TEXT,
+        upstream_request_id TEXT,
+        ip                  TEXT,
+        user_agent          TEXT,
+        created_at          INTEGER NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_request_logs_task ON request_logs(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_request_logs_action ON request_logs(action)",
 ]
 
 
@@ -4442,7 +4530,7 @@ async def delete_upload(upload_id: str, user=Depends(auth_user)):
 
 
 @app.post("/v1/videos")
-async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
+async def create_video(req: CreateVideoRequest, request: Request, user=Depends(auth_user)):
     client_model = req.model
     if client_model not in MODEL_MAP:
         raise HTTPException(400, {"error": {
@@ -4474,6 +4562,18 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
     your_max_cost = _with_multiplier(est.max_cost_usd, price_multiplier)
 
     if user["balance_usd"] < your_max_cost:
+        _request_log(
+            user_id=user["id"],
+            task_id=None,
+            route="/v1/videos",
+            action="video_create_rejected",
+            model=client_model,
+            prompt_text=next((b.text for b in content if b.type == "text" and b.text), ""),
+            request_payload=req.model_dump(exclude_none=True),
+            status_code=402,
+            error_code="insufficient_balance",
+            request=request,
+        )
         raise HTTPException(402, {"error": {
             "code": "insufficient_balance",
             "message": f"This request needs ${your_max_cost:.4f} reserved, "
@@ -4533,6 +4633,18 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
         r = await _create_upstream_task(payload, bp_key)
     except Exception:
         _refund_reserved_balance(user["id"], your_max_cost)
+        _request_log(
+            user_id=user["id"],
+            task_id=None,
+            route="/v1/videos",
+            action="video_create_failed",
+            model=client_model,
+            prompt_text=next((b.text for b in content if b.type == "text" and b.text), ""),
+            request_payload=payload,
+            status_code=502,
+            error_code="upstream_error",
+            request=request,
+        )
         raise HTTPException(502, {"error": {
             "code": "upstream_error",
             "message": "upstream request failed",
@@ -4546,6 +4658,19 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
         request_id = _upstream_request_id(getattr(r, "headers", {}))
         if request_id:
             error["request_id"] = request_id
+        _request_log(
+            user_id=user["id"],
+            task_id=None,
+            route="/v1/videos",
+            action="video_create_failed",
+            model=client_model,
+            prompt_text=next((b.text for b in content if b.type == "text" and b.text), ""),
+            request_payload=payload,
+            status_code=502,
+            error_code="upstream_error",
+            upstream_request_id=request_id,
+            request=request,
+        )
         raise HTTPException(502, {"error": error})
     upstream_id = (r.json() or {}).get("id")
     if not upstream_id:
@@ -4580,6 +4705,17 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
     finally:
         db.close()
 
+    _request_log(
+        user_id=user["id"],
+        task_id=our_id,
+        route="/v1/videos",
+        action="video_create_success",
+        model=client_model,
+        prompt_text=prompt_text,
+        request_payload=payload,
+        status_code=200,
+        request=request,
+    )
     return {
         "id": our_id, "model": client_model, "status": "queued",
         "estimated_cost_usd": estimated_to_user,
@@ -6143,6 +6279,48 @@ async def admin_audit_events(limit: int = 50, offset: int = 0,
     ).fetchone()["c"]
     return {
         "data": [_format_audit_event(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/admin/request-logs", dependencies=[Depends(auth_admin)])
+async def admin_request_logs(limit: int = 100, offset: int = 0,
+                             user_id: Optional[str] = None,
+                             task_id: Optional[str] = None,
+                             action: Optional[str] = None,
+                             model: Optional[str] = None):
+    limit = max(1, min(int(limit or 100), 200))
+    offset = max(0, int(offset or 0))
+    where = []
+    args: list[Any] = []
+    if user_id:
+        where.append("l.user_id=?"); args.append(user_id)
+    if task_id:
+        where.append("l.task_id=?"); args.append(task_id)
+    if action:
+        where.append("l.action=?"); args.append(action)
+    if model:
+        where.append("l.model=?"); args.append(model)
+    where_sql = " WHERE " + " AND ".join(where) if where else ""
+    db = get_db()
+    rows = db.execute(
+        f"""SELECT l.*, u.email user_email
+              FROM request_logs l LEFT JOIN users u ON l.user_id=u.id
+              {where_sql}
+             ORDER BY l.created_at DESC, l.id DESC
+             LIMIT ? OFFSET ?""",
+        [*args, limit, offset],
+    ).fetchall()
+    total = db.execute(
+        f"""SELECT COUNT(*) c
+              FROM request_logs l
+              {where_sql}""",
+        args,
+    ).fetchone()["c"]
+    return {
+        "data": [dict(row) for row in rows],
         "total": total,
         "limit": limit,
         "offset": offset,

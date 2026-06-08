@@ -373,6 +373,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 	estimatedCost := round6(estimate.EstimatedCostUSD * priceMultiplier)
 	hold := round6(estimate.MaxCostUSD * priceMultiplier)
 	if user.BalanceUSD < hold {
+		s.logVideoCreate(r, user, req, "video_create_rejected", http.StatusPaymentRequired, "insufficient_balance", "", "", "")
 		writeJSON(w, http.StatusPaymentRequired, errorBodyWithFields(
 			"insufficient_balance",
 			"This request needs a larger reserved balance",
@@ -454,6 +455,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 	upstreamResp, err := s.client.Do(upstreamReq)
 	if err != nil {
 		refundReserved()
+		s.logVideoCreate(r, user, req, "video_create_failed", http.StatusBadGateway, "upstream_error", "", "", string(payloadBytes))
 		writeJSON(w, http.StatusBadGateway, errorBody("upstream_error", "upstream unavailable"))
 		return
 	}
@@ -464,6 +466,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		if requestID := upstreamRequestID(upstreamResp.Header); requestID != "" {
 			extra["request_id"] = requestID
 		}
+		s.logVideoCreate(r, user, req, "video_create_failed", http.StatusBadGateway, "upstream_error", "", extra["request_id"], string(payloadBytes))
 		writeJSON(w, http.StatusBadGateway, errorBodyWithMetadata("upstream_error", "upstream returned an error", extra))
 		return
 	}
@@ -513,6 +516,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reserved = false
+	s.logVideoCreate(r, user, req, "video_create_success", http.StatusOK, "", taskID, "", string(payloadBytes))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":                          taskID,
 		"model":                       req.Model,
@@ -780,6 +784,37 @@ func (s *Server) cancelUpstreamTask(r *http.Request, upstreamKey, upstreamTaskID
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
+func (s *Server) logVideoCreate(r *http.Request, user *store.User, req createVideoRequest, action string, statusCode int, errorCode, taskID, upstreamRequestID, payload string) {
+	if user == nil {
+		return
+	}
+	if payload == "" {
+		if payloadBytes, err := json.Marshal(req); err == nil {
+			payload = string(payloadBytes)
+		}
+	}
+	logID, err := newRequestLogID()
+	if err != nil {
+		return
+	}
+	_ = s.db.InsertRequestLog(store.RequestLogParams{
+		ID:                logID,
+		UserID:            user.ID,
+		TaskID:            taskID,
+		Route:             "/v1/videos",
+		Action:            action,
+		Model:             req.Model,
+		PromptText:        promptText(req.Content),
+		RequestPayload:    truncate(payload, 20000),
+		StatusCode:        statusCode,
+		ErrorCode:         errorCode,
+		UpstreamRequestID: upstreamRequestID,
+		IP:                requestIP(r),
+		UserAgent:         truncate(r.UserAgent(), 500),
+		CreatedAt:         time.Now().Unix(),
+	})
+}
+
 func (s *Server) proxyVideo(w http.ResponseWriter, r *http.Request, taskID, upstreamURL string) {
 	upstreamMethod := r.Method
 	if r.Method == http.MethodHead {
@@ -1033,6 +1068,25 @@ func newTaskID() (string, error) {
 		return "", err
 	}
 	return "vid_" + hex.EncodeToString(bytes[:]), nil
+}
+
+func newRequestLogID() (string, error) {
+	var bytes [12]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	return "log_" + hex.EncodeToString(bytes[:]), nil
+}
+
+func requestIP(r *http.Request) string {
+	forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0])
+	if forwarded != "" {
+		return truncate(forwarded, 128)
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return truncate(host, 128)
+	}
+	return truncate(r.RemoteAddr, 128)
 }
 
 func realPersonMode(extra map[string]any) bool {
