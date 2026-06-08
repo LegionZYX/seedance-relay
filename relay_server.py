@@ -6219,6 +6219,96 @@ async def admin_list_tasks(limit: int = 50, offset: int = 0,
     return {"data": [dict(r) for r in rows]}
 
 
+@app.get("/admin/tasks/{task_id}", dependencies=[Depends(auth_admin)])
+async def admin_task_detail(task_id: str):
+    db = get_db()
+    row = db.execute(
+        """SELECT t.*, u.email user_email
+             FROM tasks t LEFT JOIN users u ON t.user_id=u.id
+            WHERE t.id=?""",
+        (task_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, {"error": {"code": "not_found", "message": "task not found"}})
+    out = dict(row)
+    out["admin_content_url"] = f"/admin/tasks/{task_id}/content"
+    return out
+
+
+@app.get("/admin/tasks/{task_id}/content", dependencies=[Depends(auth_admin)])
+async def admin_task_content(request: Request, task_id: str):
+    db = get_db()
+    row = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, {"error": {"code": "not_found", "message": "task not found"}})
+    task = dict(row)
+
+    local = task.get("local_video_path")
+    if local and Path(local).exists():
+        return FileResponse(
+            local,
+            media_type="video/mp4",
+            headers={
+                "Content-Disposition": f'inline; filename="{task_id}.mp4"',
+                "Cache-Control": "private, max-age=86400",
+            },
+        )
+
+    if task.get("status") != "succeeded":
+        raise HTTPException(409, {"error": {
+            "code": "not_ready",
+            "message": f"video status: {task.get('status')}",
+        }})
+    cached_url = task.get("cached_video_url")
+    if not cached_url:
+        raise HTTPException(404, {"error": {
+            "code": "video_unavailable",
+            "message": "video URL no longer available",
+        }})
+
+    range_header = request.headers.get("range")
+    upstream_headers_for_content = {"Range": range_header} if range_header else None
+    upstream_cm = http.stream(
+        "GET",
+        cached_url,
+        headers=upstream_headers_for_content,
+        timeout=300,
+    )
+    upstream = await upstream_cm.__aenter__()
+    if upstream.status_code < 200 or upstream.status_code >= 300:
+        await upstream_cm.__aexit__(None, None, None)
+        raise HTTPException(502, {"error": {
+            "code": "proxy_error",
+            "message": "upstream video unavailable",
+        }})
+    if range_header and upstream.status_code != 206:
+        await upstream_cm.__aexit__(None, None, None)
+        raise HTTPException(502, {"error": {
+            "code": "proxy_range_unsupported",
+            "message": "upstream video did not return partial content",
+        }})
+    status_code = 206 if upstream.status_code == 206 else 200
+    response_headers = {
+        "Content-Disposition": f'inline; filename="{task_id}.mp4"',
+        "Cache-Control": "private, max-age=3600",
+        "Accept-Ranges": upstream.headers.get("accept-ranges", "bytes"),
+    }
+    for header in ("content-length", "content-range"):
+        if upstream.headers.get(header):
+            response_headers[header.title()] = upstream.headers[header]
+    media_type = upstream.headers.get("content-type", "video/mp4").split(";", 1)[0]
+
+    async def gen() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
+                yield chunk
+        finally:
+            await upstream_cm.__aexit__(None, None, None)
+
+    return StreamingResponse(
+        gen(), media_type=media_type, status_code=status_code, headers=response_headers)
+
+
 # ─── 静态 HTML 页面 ──────────────────────────────────────────────
 @app.get("/")
 async def root_redirect():
