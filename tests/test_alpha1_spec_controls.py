@@ -1686,6 +1686,50 @@ class Alpha1SpecControlTests(unittest.TestCase):
         )
         self.assertEqual(login.status_code, 200, login.text)
 
+    def test_admin_password_reset_clears_temporary_login_lock(self):
+        user = self.create_user("admin-reset-locked@example.test")
+        for _ in range(5):
+            failed = self.client.post(
+                "/auth/login",
+                json={"email": "admin-reset-locked@example.test", "password": "wrong-password"},
+            )
+            self.assertEqual(failed.status_code, 401, failed.text)
+
+        locked = self.client.post(
+            "/auth/login",
+            json={"email": "admin-reset-locked@example.test", "password": "initial-password"},
+        )
+        self.assertEqual(locked.status_code, 423, locked.text)
+
+        reset = self.client.post(
+            f"/admin/users/{user['id']}/password/reset",
+            headers=self.admin_headers(),
+            json={
+                "generate": False,
+                "new_password": "manual-reset-password",
+                "force_change_on_next_login": False,
+            },
+        )
+        self.assertEqual(reset.status_code, 200, reset.text)
+
+        login = self.client.post(
+            "/auth/login",
+            json={
+                "email": "admin-reset-locked@example.test",
+                "password": "manual-reset-password",
+            },
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+
+        db = self.server.get_db()
+        row = db.execute(
+            "SELECT failed_login_count, locked_until FROM users WHERE id=?",
+            (user["id"],),
+        ).fetchone()
+        db.close()
+        self.assertEqual(row["failed_login_count"], 0)
+        self.assertIsNone(row["locked_until"])
+
     def test_admin_api_key_rotation_revokes_existing_customer_sessions(self):
         user = self.create_user("admin-rotate-session@example.test")
         old_key = user["api_key"]

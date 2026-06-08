@@ -5715,7 +5715,10 @@ async def admin_reset_user_password(user_id: str, req: AdminPasswordResetRequest
         {"must_change_password": bool(req.force_change_on_next_login)},
     )
     db.execute(
-        "UPDATE users SET password_hash=?, password_changed_at=?, note=? WHERE id=?",
+        """UPDATE users
+           SET password_hash=?, password_changed_at=?, note=?,
+               failed_login_count=0, locked_until=NULL
+           WHERE id=?""",
         (hash_password(new_password), now, note, user_id),
     )
     db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
