@@ -1843,6 +1843,12 @@ def _endpoint_map_health_for_user(user: sqlite3.Row | dict) -> dict[str, Any]:
     }
 
 
+def _user_upstream_response_with_health(user: dict | sqlite3.Row) -> dict:
+    response = _user_upstream_response(user)
+    response["endpoint_map_health"] = _endpoint_map_health_for_user(user)
+    return response
+
+
 def _env_int_value(name: str, default: int = 0) -> int:
     try:
         return int(os.getenv(name, str(default)))
@@ -5309,7 +5315,7 @@ async def admin_get_user_upstream(user_id: str):
                 "code": "user_not_found",
                 "message": "User was not found",
             }})
-        return _user_upstream_response(user)
+        return _user_upstream_response_with_health(user)
     finally:
         db.close()
 
@@ -5348,6 +5354,7 @@ async def admin_patch_user_upstream(user_id: str, req: UpdateUpstreamConfigReque
         updated = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     finally:
         db.close()
+    response = _user_upstream_response_with_health(updated)
     _audit_event(
         "admin_updated_customer_upstream_config",
         actor_user_id=None,
@@ -5357,9 +5364,12 @@ async def admin_patch_user_upstream(user_id: str, req: UpdateUpstreamConfigReque
         metadata={
             "fields": sorted(req.model_fields_set),
             "secret_changed": bool(req.endpoint_api_key),
+            "requires_endpoint_smoke": bool(req.endpoint_api_key),
+            "endpoint_map_health_status": response["endpoint_map_health"]["status"],
+            "endpoint_map_health_warnings": response["endpoint_map_health"]["warnings"],
         },
     )
-    return _user_upstream_response(updated)
+    return response
 
 
 @app.post("/admin/users/{user_id}/upstream/endpoint-key/rotate", dependencies=[Depends(auth_admin)])
@@ -5429,6 +5439,7 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
         updated = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     finally:
         db.close()
+    response = _user_upstream_response_with_health(updated)
     _audit_event(
         "admin_rotated_endpoint_api_key",
         actor_user_id=None,
@@ -5440,9 +5451,12 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
             "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
             "expires_at": int(issued["expires_at"]),
             "secret_changed": True,
+            "requires_endpoint_smoke": True,
+            "endpoint_map_health_status": response["endpoint_map_health"]["status"],
+            "endpoint_map_health_warnings": response["endpoint_map_health"]["warnings"],
         },
     )
-    return _user_upstream_response(updated)
+    return response
 
 
 @app.post("/admin/users/{user_id}/upstream/provision", dependencies=[Depends(auth_admin)])

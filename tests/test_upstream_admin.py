@@ -83,6 +83,8 @@ class UpstreamAdminTests(unittest.TestCase):
         self.assertEqual(body["upstream_mode"], "auto_dedicated")
         self.assertEqual(body["byteplus_endpoint_id"], "ep-existing")
         self.assertEqual(body["endpoint_api_key_masked"], "existi...t-key")
+        self.assertIn("endpoint_map_health", body)
+        self.assertTrue(body["endpoint_map_health"]["endpoint_key_configured"])
         self.assertNotIn("existing-endpoint-key", current.text)
 
         patched = self.client.patch(
@@ -103,6 +105,8 @@ class UpstreamAdminTests(unittest.TestCase):
         self.assertEqual(updated["upstream_mode"], "shared")
         self.assertEqual(updated["customer_slug"], "upstream-renamed")
         self.assertEqual(updated["endpoint_api_key_masked"], "existi...t-key")
+        self.assertIn("endpoint_map_health", updated)
+        self.assertTrue(updated["endpoint_map_health"]["endpoint_key_configured"])
         self.assertNotIn("existing-endpoint-key", patched.text)
 
         db = self.server.get_db()
@@ -130,6 +134,8 @@ class UpstreamAdminTests(unittest.TestCase):
         body = rotated.json()
         self.assertEqual(body["endpoint_api_key_masked"], "rotate...t-key")
         self.assertEqual(body["byteplus_endpoint_api_key_expires_at"], 1234567890)
+        self.assertIn("endpoint_map_health", body)
+        self.assertTrue(body["endpoint_map_health"]["endpoint_key_configured"])
         self.assertNotIn("rotated-endpoint-key", rotated.text)
 
         db = self.server.get_db()
