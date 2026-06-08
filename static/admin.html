@@ -341,6 +341,9 @@
         <div :class="['sb-nav-item', tab==='tasks' && 'active']" @click="switchTab('tasks')">
           <el-icon><List /></el-icon> 任务流水
         </div>
+        <div :class="['sb-nav-item', tab==='requestLogs' && 'active']" @click="switchTab('requestLogs')">
+          <el-icon><Document /></el-icon> 请求日志
+        </div>
         <div :class="['sb-nav-item', tab==='audit' && 'active']" @click="switchTab('audit')">
           <el-icon><View /></el-icon> 审计
         </div>
@@ -742,6 +745,63 @@
               </el-table-column>
               <el-table-column label="状态" width="120">
                 <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small" effect="light">{{ statusLabel(row.status) }}</el-tag></template>
+              </el-table-column>
+              <el-table-column label="操作" width="150" fixed="right">
+                <template #default="{ row }">
+                  <el-button size="small" text @click="openTaskDetail(row)">详情</el-button>
+                  <el-button v-if="row.status === 'succeeded'" size="small" text @click="openTaskContent(row)">内容</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </template>
+      <!-- Request logs -->
+      <template v-if="tab === 'requestLogs'">
+        <div class="main-bar">
+          <div>
+            <h2>请求日志</h2>
+            <div class="sub">客户视频生成请求、提示词、上游结果和任务关联</div>
+          </div>
+          <el-button @click="loadRequestLogs"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <div class="filter-row">
+            <el-select v-model="requestLogFilters.user_id" placeholder="全部客户" clearable style="width:240px" @change="loadRequestLogs">
+              <el-option label="全部客户" value="" />
+              <el-option v-for="u in users" :key="u.id" :label="u.email || u.id" :value="u.id" />
+            </el-select>
+            <el-select v-model="requestLogFilters.action" placeholder="全部动作" clearable style="width:200px" @change="loadRequestLogs">
+              <el-option label="创建成功" value="video_create_success" />
+              <el-option label="创建失败" value="video_create_failed" />
+              <el-option label="余额不足" value="video_create_rejected" />
+            </el-select>
+            <el-input v-model="requestLogFilters.task_id" clearable placeholder="Task ID" style="width:240px" @keyup.enter="loadRequestLogs" />
+            <el-input v-model="requestLogFilters.model" clearable placeholder="Model" style="width:240px" @keyup.enter="loadRequestLogs" />
+            <el-button @click="loadRequestLogs"><el-icon><Search /></el-icon> 查询</el-button>
+          </div>
+          <div class="panel">
+            <el-table :data="requestLogs" v-loading="loading.requestLogs" style="width:100%" stripe>
+              <el-table-column label="时间" width="170">
+                <template #default="{ row }"><span style="font-size:12px; color:var(--text-muted)">{{ fmtTs(row.created_at) }}</span></template>
+              </el-table-column>
+              <el-table-column label="客户" min-width="180">
+                <template #default="{ row }">
+                  <div>{{ row.user_email || row.user_id || '-' }}</div>
+                  <div class="mono" style="font-size:12px; color:var(--text-muted)">{{ row.user_id || '-' }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="动作" width="160">
+                <template #default="{ row }"><el-tag size="small" effect="light">{{ requestLogActionLabel(row.action) }}</el-tag></template>
+              </el-table-column>
+              <el-table-column label="模型" min-width="180" show-overflow-tooltip prop="model" />
+              <el-table-column label="Prompt" min-width="260" show-overflow-tooltip prop="prompt_text" />
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }"><span class="mono">{{ row.status_code || '-' }}</span></template>
+              </el-table-column>
+              <el-table-column label="任务" min-width="180" show-overflow-tooltip prop="task_id" />
+              <el-table-column label="操作" width="110" fixed="right">
+                <template #default="{ row }"><el-button size="small" text @click="openRequestLogDetail(row)">详情</el-button></template>
               </el-table-column>
             </el-table>
           </div>
@@ -1171,6 +1231,56 @@
     </template>
   </el-dialog>
 
+  <el-dialog v-model="dialogs.taskDetail" title="任务详情" width="820px">
+    <template v-if="taskDetail">
+      <el-descriptions :column="2" border size="small">
+        <el-descriptions-item label="Task ID"><span class="mono">{{ taskDetail.id }}</span></el-descriptions-item>
+        <el-descriptions-item label="客户">{{ taskDetail.user_email || taskDetail.user_id }}</el-descriptions-item>
+        <el-descriptions-item label="模型">{{ taskDetail.client_model }}</el-descriptions-item>
+        <el-descriptions-item label="状态">
+          <el-tag :type="statusType(taskDetail.status)" size="small">{{ statusLabel(taskDetail.status) }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="规格">{{ taskDetail.resolution || '-' }} / {{ taskDetail.duration || '-' }}s</el-descriptions-item>
+        <el-descriptions-item label="创建时间">{{ fmtTs(taskDetail.created_at) }}</el-descriptions-item>
+        <el-descriptions-item label="Relay URL" :span="2">
+          <span class="mono">{{ taskDetail.admin_content_url || '-' }}</span>
+        </el-descriptions-item>
+      </el-descriptions>
+      <div style="margin-top:14px">
+        <div style="font-weight:600; margin-bottom:8px">Prompt</div>
+        <el-input :model-value="taskDetail.prompt_text || '-'" type="textarea" :rows="4" readonly />
+      </div>
+      <div style="margin-top:14px; display:flex; gap:8px; justify-content:flex-end">
+        <el-button @click="copyText(taskDetail.id, 'task id')">复制 ID</el-button>
+        <el-button v-if="taskDetail.admin_content_url" type="primary" @click="openUrl(taskDetail.admin_content_url)">打开内容</el-button>
+      </div>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="dialogs.requestLogDetail" title="请求日志详情" width="860px">
+    <template v-if="requestLogDetail">
+      <el-descriptions :column="2" border size="small">
+        <el-descriptions-item label="Log ID"><span class="mono">{{ requestLogDetail.id }}</span></el-descriptions-item>
+        <el-descriptions-item label="时间">{{ fmtTs(requestLogDetail.created_at) }}</el-descriptions-item>
+        <el-descriptions-item label="客户">{{ requestLogDetail.user_email || requestLogDetail.user_id || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="动作">{{ requestLogActionLabel(requestLogDetail.action) }}</el-descriptions-item>
+        <el-descriptions-item label="模型">{{ requestLogDetail.model || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="状态码"><span class="mono">{{ requestLogDetail.status_code || '-' }}</span></el-descriptions-item>
+        <el-descriptions-item label="Task ID" :span="2"><span class="mono">{{ requestLogDetail.task_id || '-' }}</span></el-descriptions-item>
+        <el-descriptions-item label="Upstream Request ID" :span="2"><span class="mono">{{ requestLogDetail.upstream_request_id || '-' }}</span></el-descriptions-item>
+        <el-descriptions-item label="错误码" :span="2"><span class="mono">{{ requestLogDetail.error_code || '-' }}</span></el-descriptions-item>
+      </el-descriptions>
+      <div style="margin-top:14px">
+        <div style="font-weight:600; margin-bottom:8px">Prompt</div>
+        <el-input :model-value="requestLogDetail.prompt_text || '-'" type="textarea" :rows="4" readonly />
+      </div>
+      <div style="margin-top:14px">
+        <div style="font-weight:600; margin-bottom:8px">Request Payload</div>
+        <el-input :model-value="prettyJson(requestLogDetail.request_payload)" type="textarea" :rows="10" readonly />
+      </div>
+    </template>
+  </el-dialog>
+
 </div>
 
 <script src="https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js"></script>
@@ -1203,12 +1313,16 @@ const App = {
       uploadFilters: { user_id: "", purpose: "", face_asset_whitelisted: "" },
       reconcile: [],
       tasks: [],
+      taskDetail: null,
+      requestLogs: [],
+      requestLogDetail: null,
+      requestLogFilters: { user_id: "", task_id: "", action: "", model: "" },
       auditEvents: [],
       auditFilters: { action: "", target_id: "" },
-      loading: { stats: false, config: false, health: false, users: false, uploads: false, reconcile: false, tasks: false, audit: false, newUser: false, saveUser: false, rotateKey: false, resetPassword: false, billing: false, docs: false, upstream: false, provision: false, rotateEndpointKey: false },
+      loading: { stats: false, config: false, health: false, users: false, uploads: false, reconcile: false, tasks: false, requestLogs: false, audit: false, newUser: false, saveUser: false, rotateKey: false, resetPassword: false, billing: false, docs: false, upstream: false, provision: false, rotateEndpointKey: false },
       docsHtml: "",
 
-      dialogs: { newUser: false, editUser: false, created: false, rotatedKey: false },
+      dialogs: { newUser: false, editUser: false, created: false, rotatedKey: false, taskDetail: false, requestLogDetail: false },
       newUserForm: this.emptyNewUser(),
       created: null,
       rotatedKey: null,
@@ -1357,6 +1471,7 @@ const App = {
       if (name === "uploads") this.loadUploads();
       if (name === "reconcile") this.loadReconcile();
       if (name === "tasks") this.loadTasks();
+      if (name === "requestLogs") this.loadRequestLogs();
       if (name === "audit") this.loadAudit();
       if (name === "docs")  this.loadDocs();
     },
@@ -1443,6 +1558,51 @@ const App = {
       try { this.tasks = (await this.api("/admin/tasks?limit=100")).data; }
       catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.tasks = false; }
+    },
+    async openTaskDetail(row) {
+      if (!row?.id) return;
+      try {
+        this.taskDetail = await this.api(`/admin/tasks/${row.id}`);
+        this.dialogs.taskDetail = true;
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+    openTaskContent(row) {
+      if (!row?.id) return;
+      window.open(`/admin/tasks/${row.id}/content`, "_blank", "noopener");
+    },
+    async loadRequestLogs() {
+      this.loading.requestLogs = true;
+      try {
+        if (!this.users.length) {
+          try { this.users = (await this.api("/admin/users")).data; } catch {}
+        }
+        const qs = new URLSearchParams({ limit: "100" });
+        if (this.requestLogFilters.user_id) qs.set("user_id", this.requestLogFilters.user_id);
+        if (this.requestLogFilters.task_id) qs.set("task_id", this.requestLogFilters.task_id);
+        if (this.requestLogFilters.action) qs.set("action", this.requestLogFilters.action);
+        if (this.requestLogFilters.model) qs.set("model", this.requestLogFilters.model);
+        this.requestLogs = (await this.api(`/admin/request-logs?${qs.toString()}`)).data;
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.requestLogs = false; }
+    },
+    openRequestLogDetail(row) {
+      this.requestLogDetail = row || null;
+      this.dialogs.requestLogDetail = true;
+    },
+    requestLogActionLabel(action) {
+      return ({
+        video_create_success: "创建成功",
+        video_create_failed: "创建失败",
+        video_create_rejected: "创建拒绝",
+      })[action] || action || "-";
+    },
+    prettyJson(value) {
+      if (!value) return "-";
+      try {
+        return JSON.stringify(typeof value === "string" ? JSON.parse(value) : value, null, 2);
+      } catch {
+        return String(value);
+      }
     },
     async loadAudit() {
       this.loading.audit = true;

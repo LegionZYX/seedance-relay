@@ -1126,6 +1126,29 @@ curl -X POST https://seedance3.eu/v1/uploads \\
   }'`,
       methodExamples: [
         {
+          id: "legacy-references",
+          title: "旧 references 字段迁移",
+          note: "如果旧代码使用 references 数组，请迁移为 content[] 里的 image_url / video_url / audio_url 内容块。",
+          code: `{
+  "model": "dreamina-seedance-2-0-260128",
+  "content": [
+    { "type": "text", "text": "Use the product reference and create a clean studio video" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset_product_reference" },
+      "role": "reference_image"
+    }
+  ],
+  "references": [
+    {
+      "asset_id": "upl_6b867a97c567d64d",
+      "url": "asset://asset_product_reference",
+      "type": "image"
+    }
+  ]
+}`,
+        },
+        {
           id: "text",
           title: "文生视频",
           note: "只传 text 块，适合纯提示词生成。",

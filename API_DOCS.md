@@ -421,6 +421,35 @@ curl https://seedance3.eu/v1/invoices/inv_xxx \
 - 公开文档不包含上游 URL、账号标签、内部路由、策略配置、密钥或内部运维备注。
 - 生成结果默认不永久保存在 Relay 服务器；视频内容通过 Relay 代理读取上游结果。
 
+### 12.1 BytePlus 兼容说明
+
+Relay 的客户侧视频接口对齐 BytePlus Seedance 异步生成流程，但入口保持白标和计费隔离：
+
+| BytePlus 原生能力 | Relay 客户侧接口 | 说明 |
+|---|---|---|
+| `POST /contents/generations/tasks` | `POST /v1/videos` | 提交异步视频生成任务，Relay 会做客户鉴权、模型启用校验、余额预扣和素材归属校验。 |
+| 查询生成任务 | `GET /v1/videos/{id}` | 返回 Relay 任务状态、成本字段和 Relay 内容地址。 |
+| 拉取生成内容 | `GET /v1/videos/{id}/content` | 只暴露 Relay 代理 URL，支持浏览器播放需要的 Range 请求。 |
+| Files / 素材上传 | `POST /v1/uploads`、`POST /v1/uploads/from-url` | 不是 BytePlus Files 的 1:1 透传；Relay 返回 `url`、`asset_url` 和 `suggested_content_block`，客户直接复制到 `content[]`。 |
+
+请求体中的 `content[]` 继续使用字节内容块风格。当前建议的角色如下：
+
+| 内容块 | 常用 role | 说明 |
+|---|---|---|
+| `text` | 无 | 提示词。 |
+| `image_url` | `first_frame`、`last_frame`、`reference_image` | 图片首尾帧或视觉参考。真人、人脸或身体参考优先使用上传后返回的 `asset://...`。 |
+| `video_url` | `reference_video` | 视频参考。可使用 Relay 上传素材 URL 或已授权的外部 URL。 |
+| `audio_url` | `reference_audio` | 音频参考必须配合文本或视觉内容使用；`audio_url 不能单独`作为唯一内容块提交。 |
+
+兼容字段说明：
+
+- `return_last_frame`：如上游模型支持，会随请求透传；不支持的模型可能忽略或由上游拒绝。
+- `callback_url`：当前以轮询为主；客户应使用 `GET /v1/videos/{id}` 查询任务状态。需要服务端回调时请先与管理员确认账号开关。
+- `extra_body`：作为高级扩展字段保留，Relay 会在安全边界内转发给上游；不要在其中放 API Key、内部账号或个人敏感信息。
+- `seed`、`watermark`、`generate_audio`、`ratio`、`resolution`、`duration`：按模型能力校验，超出范围会在进入上游前返回参数错误。
+
+如果 BytePlus 新增了 Seedance 视频生成参数，客户可以先通过 `extra_body` 临时携带；稳定参数会在 Relay 版本更新后补入一等字段。
+
 ## 13. 低审查内容生成规范
 
 本节用于签约客户了解“低审查”内容的正确接入方式。这里的“低审查”不是无规则生成，也不是绕过平台风控；它表示 Relay 不额外增加客户侧内容开关，最终是否生成成功仍取决于已启用模型、客户账号配置、素材授权和上游返回结果。
