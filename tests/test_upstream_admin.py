@@ -518,6 +518,19 @@ class UpstreamAdminTests(unittest.TestCase):
             set(get_key["body"]["ResourceIds"]),
             {"ep-existing-standard", "ep-created-seedance-1-5-pro-251215"},
         )
+        updated = self.server._apply_upstream_result_to_user(
+            user,
+            result,
+            upstream_mode="auto_dedicated",
+            rotation_enabled=True,
+        )
+        self.assertEqual(
+            self.server._enabled_models_for_user(updated),
+            [
+                "dreamina-seedance-2-0-260128",
+                "seedance-1-5-pro-251215",
+            ],
+        )
 
     def test_main_user_save_preserves_endpoint_note_fields_from_stale_form(self):
         patched = self.client.patch(

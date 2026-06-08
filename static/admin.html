@@ -1626,7 +1626,11 @@ const App = {
           }),
         });
         this.upstreamJob = r;
-        if (r.upstream) this.upstreamForm = { ...this.upstreamForm, ...r.upstream, endpoint_api_key: "" };
+        if (r.upstream) {
+          this.upstreamForm = { ...this.upstreamForm, ...r.upstream, endpoint_api_key: "" };
+          this.editForm.enabled_models_default = !!r.upstream.enabled_models_default;
+          this.editForm.enabled_models = r.upstream.enabled_models || [];
+        }
         ElMessage.success(dryRun ? "Dry run 已完成" : "Project endpoints 已创建");
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.provision = false; }

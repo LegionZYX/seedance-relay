@@ -1751,6 +1751,8 @@ def _user_upstream_response(user: dict | sqlite3.Row) -> dict:
     return {
         "user_id": user_dict["id"],
         "email": user_dict.get("email"),
+        "enabled_models_default": _enabled_models_uses_default(user_dict),
+        "enabled_models": _enabled_models_for_user(user_dict),
         "upstream_mode": note.get("upstream_mode") or ("manual_dedicated" if endpoint_key else "shared"),
         "customer_slug": note.get("customer_slug") or "",
         "byteplus_project_name": note.get("byteplus_project_name") or "",
@@ -2383,6 +2385,14 @@ def _apply_upstream_result_to_user(
         note_updates["byteplus_endpoint_key_last_rotated_at"] = now
         note_updates["byteplus_endpoint_key_rotation_error"] = ""
     note = _merge_user_note_json(user.get("note"), note_updates)
+    skipped_models = set((updates.get("byteplus_endpoint_skipped_models") or {}).keys())
+    enabled_models_after_skip = None
+    if skipped_models:
+        enabled_models_after_skip = [
+            model_id
+            for model_id in _enabled_models_for_user(user)
+            if model_id not in skipped_models
+        ]
     db = get_db()
     try:
         if updates.get("endpoint_api_key"):
@@ -2392,6 +2402,11 @@ def _apply_upstream_result_to_user(
             )
         else:
             db.execute("UPDATE users SET note=? WHERE id=?", (note, user["id"]))
+        if enabled_models_after_skip is not None:
+            db.execute(
+                "UPDATE users SET enabled_models=? WHERE id=?",
+                (json.dumps(enabled_models_after_skip), user["id"]),
+            )
         row = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
         return dict(row)
     finally:
