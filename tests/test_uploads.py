@@ -36,6 +36,8 @@ class UploadEndpointTests(unittest.TestCase):
             sys.path.insert(0, str(PROJECT_DIR))
         sys.modules.pop("relay_server", None)
         self.server = importlib.import_module("relay_server")
+        self.original_register_upload_asset = self.server._register_upload_asset
+        self.original_call_asset_api = self.server._call_asset_api
 
         self.api_key = "sk-upload-test"
         db = self.server.get_db()
@@ -47,6 +49,21 @@ class UploadEndpointTests(unittest.TestCase):
         )
         db.close()
         self.client = TestClient(self.server.app)
+        self.asset_register_calls = []
+
+        def default_fake_register(url, purpose, user=None):
+            asset_id = "asset-" + Path(url).stem.replace("_", "-")
+            self.asset_register_calls.append((url, purpose, user["id"] if user else None))
+            return {
+                "asset_id": asset_id,
+                "asset_url": f"asset://{asset_id}",
+                "asset_status": "created",
+                "asset_group_id": "group-upload",
+                "project_name": "seedance-project",
+                "group_type": "AIGC",
+            }
+
+        self.server._register_upload_asset = default_fake_register
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -58,6 +75,18 @@ class UploadEndpointTests(unittest.TestCase):
         return {"X-Admin-Key": "admin-upload-test"}
 
     def test_upload_image_returns_public_url_and_saved_file(self):
+        def fake_register(url, purpose, user=None):
+            return {
+                "asset_id": "asset-default-upload",
+                "asset_url": "asset://asset-default-upload",
+                "asset_status": "created",
+                "asset_group_id": "group-upload",
+                "project_name": "seedance-project",
+                "group_type": "AIGC",
+            }
+
+        self.server._register_upload_asset = fake_register
+
         response = self.client.post(
             "/v1/uploads",
             headers=self.auth_headers(),
@@ -69,11 +98,16 @@ class UploadEndpointTests(unittest.TestCase):
         self.assertEqual(body["content_type"], "image/jpeg")
         self.assertEqual(body["purpose"], "image")
         self.assertTrue(body["url"].startswith("https://media.example.test/uploads/"))
+        self.assertEqual(body["asset_id"], "asset-default-upload")
+        self.assertEqual(body["asset_url"], "asset://asset-default-upload")
+        self.assertEqual(body["asset_status"], "created")
+        self.assertEqual(body["asset_group_id"], "group-upload")
+        self.assertEqual(body["group_type"], "AIGC")
         self.assertEqual(
             body["suggested_content_block"],
             {
                 "type": "image_url",
-                "image_url": {"url": body["url"]},
+                "image_url": {"url": "asset://asset-default-upload"},
                 "role": "first_frame",
             },
         )
@@ -84,6 +118,60 @@ class UploadEndpointTests(unittest.TestCase):
         public_response = self.client.get("/" + body["object_key"])
         self.assertEqual(public_response.status_code, 200, public_response.text)
         self.assertEqual(public_response.content, b"\xff\xd8\xff\xe0seedance")
+
+    def test_upload_public_base_url_may_include_uploads_prefix(self):
+        self.server.UPLOAD_PUBLIC_BASE_URL = "https://media.example.test/uploads"
+
+        response = self.client.post(
+            "/v1/uploads",
+            headers=self.auth_headers(),
+            files={"file": ("portrait.jpg", b"\xff\xd8\xff\xe0seedance", "image/jpeg")},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["url"].startswith("https://media.example.test/uploads/"))
+        self.assertNotIn("/uploads/uploads/", body["url"])
+
+    def test_upload_retries_transient_asset_registry_timeout(self):
+        self.server._register_upload_asset = self.original_register_upload_asset
+        self.server.ASSET_CREATE_RETRY_DELAYS = [0]
+        self.server.MODELARK_PROJECT_NAME = "seedance-project"
+        os.environ["BYTEPLUS_ACCESS_KEY_ID"] = "ak"
+        os.environ["BYTEPLUS_ACCESS_KEY_SECRET"] = "sk"
+        os.environ["MODELARK_ASSET_GROUP_ID"] = "group-upload"
+        create_asset_calls = []
+
+        def fake_call_asset_api(action, body, ak, sk):
+            if action != "CreateAsset":
+                raise AssertionError(action)
+            create_asset_calls.append(body)
+            if len(create_asset_calls) == 1:
+                raise self.server.HTTPException(502, {"error": {
+                    "code": "asset_registry_error",
+                    "message": (
+                        "CreateAsset failed: HTTP 504 "
+                        "{\"Error\":{\"Code\":\"InternalServiceTimeout\",\"CodeN\":100016}}"
+                    ),
+                }})
+            return {"Result": {"AssetId": "asset-retried-upload", "Status": "Active"}}
+
+        self.server._call_asset_api = fake_call_asset_api
+
+        response = self.client.post(
+            "/v1/uploads",
+            headers=self.auth_headers(),
+            files={"file": ("portrait.jpg", b"\xff\xd8\xff\xe0seedance", "image/jpeg")},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(create_asset_calls), 2)
+        self.assertEqual(body["asset_id"], "asset-retried-upload")
+        self.assertEqual(body["asset_url"], "asset://asset-retried-upload")
+        self.assertEqual(body["asset_status"], "Active")
+        self.assertEqual(body["asset_group_id"], "group-upload")
+        self.assertEqual(body["group_type"], "AIGC")
 
     def test_upload_rejects_non_whitelisted_mime(self):
         response = self.client.post(
@@ -205,11 +293,13 @@ class UploadEndpointTests(unittest.TestCase):
         self.assertEqual(body["purpose"], "image")
         self.assertEqual(body["size_bytes"], 0)
         self.assertEqual(body["original_filename"], "remote-portrait.jpg")
+        self.assertTrue(body["asset_url"].startswith("asset://"))
+        self.assertEqual(body["group_type"], "AIGC")
         self.assertEqual(
             body["suggested_content_block"],
             {
                 "type": "image_url",
-                "image_url": {"url": "https://cdn.example.test/assets/portrait.jpg"},
+                "image_url": {"url": body["asset_url"]},
                 "role": "first_frame",
             },
         )
@@ -320,7 +410,8 @@ class UploadEndpointTests(unittest.TestCase):
 
         self.assertEqual(deleted.status_code, 200, deleted.text)
         self.assertTrue(deleted.json()["ok"])
-        self.assertIsNone(deleted.json()["asset_delete_request"])
+        self.assertEqual(deleted.json()["asset_delete_request"]["status"], "pending_admin")
+        self.assertEqual(deleted.json()["asset_delete_request"]["asset_url"], body["asset_url"])
         self.assertFalse(saved.exists())
 
         listed = self.client.get("/v1/uploads", headers=self.auth_headers())

@@ -266,10 +266,11 @@ UPLOAD_MAX_AUDIO_MB=15
 
 # 可选：服务端自动把上传 URL 注册成 asset://
 # 这些只放服务器环境里，用户端不需要也拿不到。
-ASSET_AUTO_REGISTER_UPLOADS=false
+ASSET_AUTO_REGISTER_UPLOADS=true
 ASSET_AUTO_REGISTER_PURPOSES=image,video,audio
 ASSET_AUTO_REGISTER_WAIT_SECONDS=0
 ASSET_AUTO_REGISTER_WAIT_INTERVAL=3
+ASSET_CREATE_RETRY_DELAYS=10,30
 ASSET_AUTO_REGISTER_SKIP_MODERATION=true
 BYTEPLUS_ACCESS_KEY_ID=
 BYTEPLUS_ACCESS_KEY_SECRET=
@@ -381,9 +382,10 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | `ENDPOINT_KEY_DURATION_SECONDS` | `2592000` | 新 endpoint API key 有效期秒数 |
 | `ENDPOINT_KEY_ROTATION_DRY_RUN` | `false` | 只检查待轮换客户，不写 DB、不调用上游 |
 | `ENDPOINT_KEY_RESOURCE_MODE` | `multi` | endpoint key 生成方式：`multi` / `per_endpoint` / `auto`；上游不支持多 endpoint ResourceIds 时用 per-endpoint key map |
-| `ASSET_AUTO_REGISTER_UPLOADS` | `false` | 服务端是否自动把上传 URL 注册成 `asset://...` |
+| `ASSET_AUTO_REGISTER_UPLOADS` | `true` | 服务端是否自动把上传 URL 注册成 `asset://...`；默认上传到客户归属的 AIGC 素材组 |
 | `ASSET_AUTO_REGISTER_PURPOSES` | `image,video,audio` | 开关启用后哪些上传类型自动注册 |
 | `ASSET_AUTO_REGISTER_WAIT_SECONDS` | `0` | 是否等待 asset 变 Active；0 表示只创建不等待 |
+| `ASSET_CREATE_RETRY_DELAYS` | `10,30` | CreateAsset 遇到上游临时 504/InternalServiceTimeout 时的重试等待秒数 |
 | `ASSET_AUTO_REGISTER_SKIP_MODERATION` | `true` | CreateAsset 时默认传 skip moderation |
 | `ASSET_DELETE_EXECUTION_MODE` | `admin_batch` | 客户删除素材后的 BytePlus asset 删除方式：`local_only` / `admin_batch` / `auto` |
 | `BYTEPLUS_PROJECT_QUOTA_WARN_AT` | `0` | 后台 Quota Center reminder 的 Project 本地计数提醒阈值；0 表示关闭 |
@@ -416,7 +418,7 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | GET | `/health` | 健康检查（无需鉴权） |
 | GET | `/v1/models` | 列模型（脱敏后） |
 | GET | `/v1/pricing` | 公开价格表 + 估算公式 |
-| POST | `/v1/uploads` | 上传白名单媒体到中转站，返回公网 URL |
+| POST | `/v1/uploads` | 上传白名单媒体到中转站，默认注册到客户归属 AIGC 素材组并返回 `asset://...` |
 | POST | `/v1/uploads/from-url` | 登记客户已有公网素材 URL，返回可复用 content block |
 | GET | `/v1/uploads` | 查看当前客户自己上传过的素材 |
 | GET | `/v1/uploads/{id}` | 查看当前客户自己的单个素材 |
@@ -450,7 +452,7 @@ curl https://video.example.com/v1/uploads/upl_xxx \
 
 如果客户尝试访问其他账号上传的素材 ID，接口会返回 `404 upload_not_found`。
 
-如果服务器打开了 `ASSET_AUTO_REGISTER_UPLOADS=true`，响应会额外包含 `asset_url` / `asset_status`，并且 `suggested_content_block` 会自动使用 `asset://...`。用户端仍然只调用 `/v1/uploads`，不需要任何 AK/SK/GroupId。
+默认 `ASSET_AUTO_REGISTER_UPLOADS=true`。上传成功后，Relay 会用服务端 IAM 把素材注册到当前客户归属的 ModelArk AIGC 素材组，响应包含 `asset_id` / `asset_url` / `asset_status`，并且 `suggested_content_block` 会自动使用 `asset://...`。用户端仍然只调用 `/v1/uploads`，不需要任何 AK/SK/GroupId。
 
 ### 人脸白名单
 
@@ -486,7 +488,7 @@ curl https://video.example.com/admin/face-assets \
   -H "X-Admin-Key: $ADMIN_KEY"
 ```
 
-注意：`ASSET_AUTO_REGISTER_UPLOADS` 只是服务端自动注册素材 URL；它不是客户内容审核开关。客户仍然只使用 Relay API Key，服务端按当前 BytePlus 资产注册能力把可用素材转成 `asset://...` 并记录到账本。
+注意：`ASSET_AUTO_REGISTER_UPLOADS` 只是服务端自动注册素材 URL 到客户归属 AIGC 素材组；它不是客户内容审核开关，也不等于 Relay 人脸白名单。客户仍然只使用 Relay API Key，服务端按当前 BytePlus 资产注册能力把可用素材转成 `asset://...` 并记录到账本。
 
 如果希望客户只用你的 Relay API Key 自助完成上传和入白名单，平台侧打开：
 
@@ -788,7 +790,7 @@ KPI 卡：活跃用户数、总任务数、素材数、白名单素材数、已�
 
 客户可以上传图片/视频/音频素材，列表只返回当前 API key 自己的 `uploads.user_id` 记录。素材卡片支持“用作参考”和“复制引用”；点“用作参考”后，新建视频页会自动把该素材的 `suggested_content_block` 放进生成请求。
 
-如果服务器打开 `FACE_ASSET_SELF_SERVICE=true`，客户上传时可以勾选“上传后加入人脸白名单”，Relay 会在服务端调用素材注册并返回 `asset://...`；客户仍然不需要任何 BytePlus AK/SK/GroupId。
+默认上传会注册到客户归属 AIGC 素材组并返回 `asset://...`。如果服务器打开 `FACE_ASSET_SELF_SERVICE=true`，客户上传时还可以勾选“上传后加入人脸白名单”，Relay 会额外写入本地 `face_assets` 白名单；客户仍然不需要任何 BytePlus AK/SK/GroupId。
 
 ### 9.4 账号
 

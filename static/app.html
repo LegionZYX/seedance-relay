@@ -191,7 +191,54 @@
     overflow: hidden;
   }
   .asset-preview img, .asset-preview video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .asset-preview-fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
   .asset-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .asset-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+  .asset-id-pill {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #f8fafc;
+    color: #334155;
+    font-size: 11px;
+  }
+  .asset-id-pill .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .asset-help {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    color: #475569;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .upload-result {
+    margin-top: 14px;
+    padding: 14px;
+    border: 1px solid #bbf7d0;
+    border-radius: 12px;
+    background: #f0fdf4;
+  }
+  .upload-result-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+  .upload-result-title { font-weight: 800; color: #166534; }
+  .upload-result-copy { margin-top: 4px; color: #166534; font-size: 13px; line-height: 1.6; }
+  .asset-inline-preview { display: flex; gap: 12px; align-items: center; min-width: 0; }
+  .asset-inline-preview .asset-preview { width: 88px; height: 58px; aspect-ratio: auto; border-radius: 8px; flex: 0 0 auto; }
   .file-picker {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     border: 1px dashed #cbd5e1; border-radius: 10px; padding: 14px 16px; background: #f8fafc;
@@ -408,12 +455,21 @@
                 <div class="asset-preview" style="width:76px; height:52px; aspect-ratio:auto; border-radius:8px;">
                   <img v-if="selectedUpload.purpose === 'image'" :src="selectedUpload.url" loading="lazy" />
                   <video v-else-if="selectedUpload.purpose === 'video'" :src="selectedUpload.url" muted preload="metadata"></video>
-                  <el-icon v-else><Headset /></el-icon>
+                  <div v-else class="asset-preview-fallback"><el-icon><Headset /></el-icon><span>音频素材</span></div>
                 </div>
                 <div style="min-width:0; flex:1">
                   <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ selectedUpload.original_filename || selectedUpload.id }}</div>
                   <div style="font-size:12px; color:var(--text-muted); margin-top:3px;">
-                    {{ selectedUpload.face_asset_whitelisted ? '已进入人脸白名单，生成时会使用 asset:// 引用' : '普通素材，生成时会使用公开 URL 引用' }}
+                    {{ uploadUsageHint(selectedUpload) }}
+                  </div>
+                  <div class="asset-meta-row">
+                    <span class="asset-id-pill" :title="assetReferenceUrl(selectedUpload)">
+                      <span>引用</span><span class="mono">{{ assetReferenceUrl(selectedUpload) }}</span>
+                    </span>
+                    <div style="display:flex; gap:8px; flex-shrink:0;">
+                      <el-button size="small" @click="copyAssetUrl(selectedUpload)"><el-icon><CopyDocument /></el-icon> 复制 ID</el-button>
+                      <el-button size="small" @click="copyContentBlock(selectedUpload)"><el-icon><CopyDocument /></el-icon> 复制 content</el-button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -658,6 +714,34 @@
               <el-input v-model="uploadForm.face_asset_label" placeholder="白名单标签，例如 customer-approved-face" :disabled="!uploadForm.face_allowlist" />
             </el-col>
           </el-row>
+          <div v-if="lastUploadedAsset" class="upload-result">
+            <div class="upload-result-head">
+              <div class="asset-inline-preview">
+                <div class="asset-preview">
+                  <img v-if="lastUploadedAsset.purpose === 'image'" :src="lastUploadedAsset.url" loading="lazy" />
+                  <video v-else-if="lastUploadedAsset.purpose === 'video'" :src="lastUploadedAsset.url" muted preload="metadata"></video>
+                  <div v-else class="asset-preview-fallback"><el-icon><Headset /></el-icon><span>音频素材</span></div>
+                </div>
+                <div style="min-width:0">
+                  <div class="upload-result-title">上传成功，已放入你的素材库</div>
+                  <div class="upload-result-copy">
+                    生成视频时可以点“用作参考”，页面会自动把它加入请求；API 调用请复制下面的引用。
+                  </div>
+                </div>
+              </div>
+              <el-tag type="success" effect="light">可使用</el-tag>
+            </div>
+            <div class="asset-meta-row">
+              <span class="asset-id-pill" :title="assetReferenceUrl(lastUploadedAsset)">
+                <span>素材引用</span><span class="mono">{{ assetReferenceUrl(lastUploadedAsset) }}</span>
+              </span>
+              <div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end;">
+                <el-button size="small" @click="copyAssetUrl(lastUploadedAsset)"><el-icon><CopyDocument /></el-icon> 复制素材 ID</el-button>
+                <el-button size="small" @click="copyContentBlock(lastUploadedAsset)"><el-icon><CopyDocument /></el-icon> 复制 content[]</el-button>
+                <el-button size="small" type="primary" @click="useUpload(lastUploadedAsset)"><el-icon><Check /></el-icon> 生成视频使用</el-button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div v-loading="loading.assets" style="min-height:180px">
@@ -670,7 +754,7 @@
               <div class="asset-preview">
                 <img v-if="a.purpose === 'image'" :src="a.url" loading="lazy" />
                 <video v-else-if="a.purpose === 'video'" :src="a.url" muted preload="metadata"></video>
-                <el-icon v-else :size="34"><Headset /></el-icon>
+                <div v-else class="asset-preview-fallback"><el-icon :size="34"><Headset /></el-icon><span>音频素材</span></div>
               </div>
               <div style="padding:14px 16px;">
                 <div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start;">
@@ -684,12 +768,14 @@
                 </div>
                 <div class="asset-toolbar" style="margin-top:12px">
                   <el-button size="small" @click="useUpload(a)"><el-icon><Check /></el-icon> 用作参考</el-button>
-                  <el-button size="small" @click="copyContentBlock(a)"><el-icon><CopyDocument /></el-icon> 复制引用</el-button>
+                  <el-button size="small" @click="copyAssetUrl(a)"><el-icon><CopyDocument /></el-icon> 复制 ID</el-button>
+                  <el-button size="small" @click="copyContentBlock(a)"><el-icon><CopyDocument /></el-icon> 复制 content</el-button>
                   <el-button size="small" text @click="openUrl(a.url)">打开</el-button>
                   <el-button size="small" text type="danger" @click="deleteUpload(a)">删除</el-button>
                 </div>
-                <div v-if="a.asset_url" class="mono" style="font-size:11px; color:var(--text-muted); margin-top:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                  {{ a.asset_url }}
+                <div class="asset-help">
+                  <div><b>生成页：</b>点“用作参考”，系统会自动放入 content[]。</div>
+                  <div><b>API：</b>使用 <span class="mono">{{ assetReferenceUrl(a) }}</span>，角色建议 {{ assetRoleLabel(a) }}。</div>
                 </div>
               </div>
             </div>
@@ -819,8 +905,8 @@
           <h3>推荐流程</h3>
           <ol>
             <li>在“素材库”上传客户自己的图片、视频或音频素材。</li>
-            <li>上传成功后复制素材 ID，例如 <code>upl_6b867a97c567d64d</code>。</li>
-            <li>在生成请求里把素材 ID 放入 <code>references[].asset_id</code>，并填写清楚的授权创作提示词。</li>
+            <li>上传成功后复制素材库显示的 <code>asset://...</code> 引用，或直接复制完整 <code>content[]</code> 块。</li>
+            <li>在生成请求里把素材放入 <code>content[]</code>，并填写清楚的授权创作提示词。</li>
             <li>任务完成后直接读取返回的视频地址；视频文件默认保留在字节侧存储，Relay 只做转发和账单记录。</li>
           </ol>
           <pre><code>curl https://seedance3.eu/v1/uploads \
@@ -832,9 +918,13 @@
   -H "Content-Type: application/json" \
   -d '{
     "model": "dreamina-seedance-2-0-260128",
-    "prompt": "adult-only cinematic editorial video, authorized performer, elegant studio lighting",
-    "references": [
-      { "asset_id": "upl_6b867a97c567d64d", "role": "reference_image" }
+    "content": [
+      { "type": "text", "text": "adult-only cinematic editorial video, authorized performer, elegant studio lighting" },
+      {
+        "type": "image_url",
+        "image_url": { "url": "asset://asset_xxx" },
+        "role": "reference_image"
+      }
     ]
   }'</code></pre>
         </div>
@@ -990,6 +1080,7 @@ const App = {
       history: [],
       uploads: [],
       uploadForm: { file: null, face_allowlist: false, face_asset_label: "" },
+      lastUploadedAsset: null,
       loading: { submit: false, history: false, assets: false, upload: false, docs: false, password: false },
       docsHtml: "",
       guideUploadCurl: `KEY="sk_xxxxxxxxxxxxxxxx"
@@ -1232,6 +1323,32 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       return size + " B";
     },
     purposeLabel(p) { return ({ image: "图片", video: "视频", audio: "音频" })[p] || p || "-"; },
+    assetReferenceUrl(asset) {
+      return asset?.asset_url || asset?.url || "";
+    },
+    assetRoleLabel(asset) {
+      return ({ image: "reference_image", video: "reference_video", audio: "reference_audio" })[asset?.purpose] || "reference";
+    },
+    uploadUsageHint(asset) {
+      if (!asset) return "";
+      const ref = this.assetReferenceUrl(asset);
+      if (ref.startsWith("asset://")) return "生成时会使用 asset:// 引用，适合真人、人脸、角色或产品一致性参考。";
+      return "生成时会使用公开 URL 引用；如需真人白名单，请上传时打开白名单开关。";
+    },
+    contentBlockForUpload(asset) {
+      if (asset?.suggested_content_block) return asset.suggested_content_block;
+      const url = this.assetReferenceUrl(asset);
+      if (!url) return null;
+      if (asset?.purpose === "video") return { type: "video_url", video_url: { url }, role: "reference_video" };
+      if (asset?.purpose === "audio") return { type: "audio_url", audio_url: { url }, role: "reference_audio" };
+      return { type: "image_url", image_url: { url }, role: "reference_image" };
+    },
+    copyAssetUrl(asset) {
+      const value = this.assetReferenceUrl(asset);
+      if (!value) { ElMessage.warning("这个素材还没有可复制的引用"); return; }
+      navigator.clipboard.writeText(value);
+      ElMessage.success(value.startsWith("asset://") ? "asset:// 引用已复制" : "素材 URL 已复制");
+    },
     openUrl(url) { if (url) window.open(url, "_blank", "noopener"); },
     initials(e) { return (e || "?").split("@")[0].slice(0,2).toUpperCase(); },
     statusType(s) { return ({queued:"info",running:"primary",succeeded:"success",failed:"danger",cancelled:"warning",expired:"warning"})[s] || "info"; },
@@ -1282,8 +1399,9 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     buildContent() {
       const content = [];
       if (this.form.prompt.trim()) content.push({type: "text", text: this.form.prompt.trim()});
-      if (this.selectedUpload?.suggested_content_block) {
-        content.push(this.selectedUpload.suggested_content_block);
+      const block = this.contentBlockForUpload(this.selectedUpload);
+      if (block) {
+        content.push(block);
       }
       return content;
     },
@@ -1331,10 +1449,11 @@ curl -X POST https://seedance3.eu/v1/uploads \\
         if (!r.ok) throw { status: r.status, body };
         this.uploads = [body, ...this.uploads.filter(a => a.id !== body.id)];
         this.form.upload_id = body.id;
+        this.lastUploadedAsset = body;
         this.uploadForm = { file: null, face_allowlist: false, face_asset_label: "" };
         if (this.$refs.assetFileInput) this.$refs.assetFileInput.value = "";
         this.scheduleEstimate();
-        ElMessage.success("素材已上传");
+        ElMessage.success("素材已上传，可直接用于生成视频");
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.upload = false; }
     },
@@ -1344,7 +1463,9 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       this.switchTab("generate");
     },
     copyContentBlock(asset) {
-      navigator.clipboard.writeText(JSON.stringify(asset.suggested_content_block, null, 2));
+      const block = this.contentBlockForUpload(asset);
+      if (!block) { ElMessage.warning("这个素材还没有可复制的 content 块"); return; }
+      navigator.clipboard.writeText(JSON.stringify(block, null, 2));
       ElMessage.success("引用块已复制");
     },
     async deleteUpload(asset) {

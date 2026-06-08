@@ -16,7 +16,7 @@ Example Video Relay API — BytePlus Seedance 视频生成反代（含管理员/
     DB_PATH             default: /data/relay.sqlite
     VIDEO_DIR           default: /data/videos    (落地视频文件)
     UPLOAD_DIR          default: /data/uploads   (上传中转站)
-    ASSET_AUTO_REGISTER_UPLOADS  default: false  (服务端自动注册 asset://)
+    ASSET_AUTO_REGISTER_UPLOADS  default: true   (服务端自动注册 asset://)
     FACE_ASSET_ENFORCE default: false  (reference 人脸素材必须走白名单 asset://)
     FACE_ASSET_SELF_SERVICE default: false  (客户上传时自助注册并加入人脸白名单)
     BRAND_NAME          default: Example Video Relay
@@ -113,7 +113,7 @@ MARKUP_PCT     = float(os.getenv("MARKUP_PCT", "0.3"))
 UPLOAD_MAX_IMAGE_MB = float(os.getenv("UPLOAD_MAX_IMAGE_MB", os.getenv("WEB_MAX_IMAGE_MB", "10")))
 UPLOAD_MAX_VIDEO_MB = float(os.getenv("UPLOAD_MAX_VIDEO_MB", "50"))
 UPLOAD_MAX_AUDIO_MB = float(os.getenv("UPLOAD_MAX_AUDIO_MB", "15"))
-ASSET_AUTO_REGISTER_UPLOADS = os.getenv("ASSET_AUTO_REGISTER_UPLOADS", "false").strip().lower() in (
+ASSET_AUTO_REGISTER_UPLOADS = os.getenv("ASSET_AUTO_REGISTER_UPLOADS", "true").strip().lower() in (
     "1", "true", "yes", "on"
 )
 ASSET_AUTO_REGISTER_PURPOSES = {
@@ -123,6 +123,11 @@ ASSET_AUTO_REGISTER_PURPOSES = {
 }
 ASSET_AUTO_REGISTER_WAIT_SECONDS = float(os.getenv("ASSET_AUTO_REGISTER_WAIT_SECONDS", "0"))
 ASSET_AUTO_REGISTER_WAIT_INTERVAL = float(os.getenv("ASSET_AUTO_REGISTER_WAIT_INTERVAL", "3"))
+ASSET_CREATE_RETRY_DELAYS = [
+    float(item.strip())
+    for item in os.getenv("ASSET_CREATE_RETRY_DELAYS", "10,30").split(",")
+    if item.strip()
+]
 ASSET_AUTO_REGISTER_SKIP_MODERATION = os.getenv(
     "ASSET_AUTO_REGISTER_SKIP_MODERATION", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
@@ -2688,8 +2693,14 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
     if new_status in ("succeeded", "failed", "cancelled", "expired") \
             and not t["settled"]:
         if new_status == "succeeded":
+            pricing_model = str(t.get("upstream_model") or "")
+            pricing_resolution = str(t.get("resolution") or info.get("resolution") or "")
             upstream_cost = actual_video_cost(
-                info, has_video_ref=bool(t["has_video_ref"]))
+                info,
+                has_video_ref=bool(t["has_video_ref"]),
+                model=pricing_model,
+                resolution=pricing_resolution,
+            )
             price_multiplier = _effective_price_multiplier(
                 t if t.get("price_multiplier") is not None else user_row
             )
@@ -2751,10 +2762,14 @@ async def _persist_video(task_id: str, url: str) -> None:
 
 
 def _public_url_for_object_key(object_key: str) -> str:
+    clean_key = (object_key or "").strip().lstrip("/")
     if UPLOAD_PUBLIC_BASE_URL:
-        return f"{UPLOAD_PUBLIC_BASE_URL}/{object_key}"
+        base = UPLOAD_PUBLIC_BASE_URL
+        if urlparse(base).path.rstrip("/").endswith("/uploads") and clean_key.startswith("uploads/"):
+            clean_key = clean_key.removeprefix("uploads/")
+        return f"{base}/{clean_key}"
     base = PUBLIC_DOMAIN if PUBLIC_DOMAIN.startswith(("http://", "https://")) else f"https://{PUBLIC_DOMAIN}"
-    return f"{base.rstrip('/')}/{object_key}"
+    return f"{base.rstrip('/')}/{clean_key}"
 
 
 EXTENSION_CONTENT_TYPES = {
@@ -2910,6 +2925,21 @@ def _asset_type_for_purpose(purpose: str) -> str:
     return {"image": "Image", "video": "Video", "audio": "Audio"}[purpose]
 
 
+def _is_retryable_asset_create_error(exc: HTTPException) -> bool:
+    detail = getattr(exc, "detail", "")
+    text = json.dumps(detail, ensure_ascii=False) if not isinstance(detail, str) else detail
+    text = text.lower()
+    return (
+        getattr(exc, "status_code", None) == 502
+        and (
+            "internalservicetimeout" in text
+            or "http 504" in text
+            or '"coden": 100016' in text
+            or '"coden":100016' in text
+        )
+    )
+
+
 def _register_upload_asset(url: str, purpose: str, user: Optional[dict] = None) -> dict:
     ak, sk, group_id, project_name = _server_asset_config(user)
     body = build_create_asset_body(
@@ -2920,7 +2950,23 @@ def _register_upload_asset(url: str, purpose: str, user: Optional[dict] = None) 
         name=Path(urlparse(url).path).name,
         project_name=project_name,
     )
-    result = _call_asset_api("CreateAsset", body, ak, sk)
+    result: Optional[dict] = None
+    retry_delays = [0.0] + ASSET_CREATE_RETRY_DELAYS
+    for attempt_index, delay in enumerate(retry_delays):
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            result = _call_asset_api("CreateAsset", body, ak, sk)
+            break
+        except HTTPException as exc:
+            is_last_attempt = attempt_index == len(retry_delays) - 1
+            if is_last_attempt or not _is_retryable_asset_create_error(exc):
+                raise
+    if result is None:
+        raise HTTPException(502, {"error": {
+            "code": "asset_registry_error",
+            "message": "Asset registry did not return a response",
+        }})
     asset_id = extract_asset_id(result)
     if not asset_id:
         raise HTTPException(502, {"error": {
@@ -4042,7 +4088,7 @@ async def upload_media(
         or (ASSET_AUTO_REGISTER_UPLOADS and inferred_purpose in ASSET_AUTO_REGISTER_PURPOSES)
     )
     if should_register_asset:
-        asset_info = _register_upload_asset(url, inferred_purpose, dict(user))
+        asset_info = await asyncio.to_thread(_register_upload_asset, url, inferred_purpose, dict(user))
     face_asset_note_to_store: Optional[str] = None
     if face_allowlist:
         face_asset_note_to_store = face_asset_note or f"self-service upload by {user['id']}"
@@ -4165,7 +4211,7 @@ async def upload_media_from_url(req: UploadFromUrlRequest, user=Depends(auth_use
         or (ASSET_AUTO_REGISTER_UPLOADS and inferred_purpose in ASSET_AUTO_REGISTER_PURPOSES)
     )
     if should_register_asset:
-        asset_info = _register_upload_asset(req.url, inferred_purpose, dict(user))
+        asset_info = await asyncio.to_thread(_register_upload_asset, req.url, inferred_purpose, dict(user))
 
     face_asset_note_to_store: Optional[str] = None
     if req.face_allowlist:
