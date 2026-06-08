@@ -657,7 +657,7 @@ func (s *Server) refreshTask(r *http.Request, user *store.User, task *store.Task
 		actualCost := 0.0
 		if newStatus == "succeeded" {
 			resolution := taskResolution(task)
-			model := first(upstream.Model, task.UpstreamModel)
+			model := taskPricingModel(task, upstream.Model)
 			upstreamCost = pricing.ActualVideoCost(model, resolution, completionTokens, task.HasVideoRef)
 			actualCost = round6(upstreamCost * taskPriceMultiplier(task))
 		}
@@ -1106,6 +1106,21 @@ func taskPriceMultiplier(task *store.Task) float64 {
 		return task.PriceMultiplier.Float64
 	}
 	return 1.0
+}
+
+func taskPricingModel(task *store.Task, upstreamEchoModel string) string {
+	if task != nil && strings.TrimSpace(task.ClientModel) != "" {
+		if model, ok := models.Lookup(task.ClientModel); ok {
+			return model.UpstreamID
+		}
+	}
+	if task != nil && strings.TrimSpace(task.UpstreamModel) != "" {
+		if model, ok := models.Lookup(task.UpstreamModel); ok {
+			return model.UpstreamID
+		}
+		return strings.TrimSpace(task.UpstreamModel)
+	}
+	return strings.TrimSpace(upstreamEchoModel)
 }
 
 func modelAccess(user *store.User) []string {

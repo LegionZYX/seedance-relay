@@ -1729,6 +1729,50 @@ func TestGetVideoSettlementUsesTaskPriceMultiplierSnapshot(t *testing.T) {
 	}
 }
 
+func TestGetVideoSettlementUsesTaskModelSnapshot(t *testing.T) {
+	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     "succeeded",
+			"model":      "seedance-1-0-pro-fast-251015",
+			"resolution": "480p",
+			"usage": map[string]any{
+				"completion_tokens": 1000,
+			},
+			"content": map[string]any{
+				"video_url": "https://byteplus.example.test/private-video.mp4",
+			},
+		})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithBalance("sk-model-snapshot-settle", "u_model_snapshot_settle", "", 9.532086, 1.0); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.InsertTestQueuedTask("vid_model_snapshot_settle", "u_model_snapshot_settle", "upstream-model-snapshot-settle", 0.467914, 1.0); err != nil {
+		t.Fatalf("insert task: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/videos/vid_model_snapshot_settle", nil)
+	req.Header.Set("Authorization", "Bearer sk-model-snapshot-settle")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("get video: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"actual_cost_usd":0.007`) {
+		t.Fatalf("settlement should use task model snapshot, body=%s", body)
+	}
+	if strings.Contains(string(body), `"actual_cost_usd":0.0009`) {
+		t.Fatalf("settlement used upstream echo model: %s", body)
+	}
+}
+
 func TestGetVideoRefundsHeldBalanceWhenTaskFails(t *testing.T) {
 	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "failed"})

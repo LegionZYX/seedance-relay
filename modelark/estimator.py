@@ -413,7 +413,9 @@ class Reservation:
 def actual_video_cost(task: Dict[str, Any],
                       *,
                       has_video_ref: bool = False,
-                      pricing: Optional[Dict[str, Dict[str, Any]]] = None
+                      pricing: Optional[Dict[str, Dict[str, Any]]] = None,
+                      model: Optional[str] = None,
+                      resolution: Optional[str] = None,
                       ) -> float:
     """succeeded video task -> USD 真实成本。
 
@@ -425,8 +427,8 @@ def actual_video_cost(task: Dict[str, Any],
         return 0.0
     usage = task.get("usage") or {}
     completion = usage.get("completion_tokens", 0) or 0
-    model = task.get("model", "")
-    resolution = task.get("resolution")
+    model = model or task.get("model", "")
+    resolution = resolution or task.get("resolution")
 
     if pricing and model in pricing:
         from .pricing import PRICING as _GLOBAL
