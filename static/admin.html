@@ -984,12 +984,14 @@
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                 <b>Model Endpoint Map</b>
                 <el-tag size="small" :type="endpointMappingMissingModels.length ? 'warning' : 'success'" effect="plain">
-                  {{ endpointMapRows.length }} mapped / {{ endpointMappingMissingModels.length }} mapping missing
+                  {{ endpointMapRows.length }} 已映射 / {{ endpointMappingMissingModels.length }} 缺失
                 </el-tag>
               </div>
               <el-table v-if="endpointMapRows.length" :data="endpointMapRows" size="small" border style="width:100%">
-                <el-table-column prop="model_id" label="model_id" min-width="220" />
-                <el-table-column prop="endpoint_id" label="endpoint_id" min-width="180">
+                <el-table-column prop="model_id" label="model_id" min-width="320" show-overflow-tooltip>
+                  <template #default="{ row }"><span class="mono">{{ row.model_id }}</span></template>
+                </el-table-column>
+                <el-table-column prop="endpoint_id" label="endpoint_id" min-width="240" show-overflow-tooltip>
                   <template #default="{ row }"><span class="mono">{{ row.endpoint_id }}</span></template>
                 </el-table-column>
               </el-table>
@@ -1019,8 +1021,12 @@
             <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
               <el-checkbox v-model="upstreamForm.endpoint_key_rotation_enabled">自动轮换 endpoint key</el-checkbox>
               <el-button size="small" :loading="loading.upstream" @click="saveUpstreamConfig">保存 Project 资源配置</el-button>
-              <el-button size="small" plain :loading="loading.provision" @click="provisionCustomerEndpoint(true)">Dry run</el-button>
-              <el-button size="small" type="primary" :loading="loading.provision" @click="provisionCustomerEndpoint(false)">创建 Project Endpoints</el-button>
+              <el-tooltip content="只预检计划，不调用 BytePlus 创建资源，也不写回客户配置。" placement="top">
+                <el-button size="small" plain :loading="loading.provision" @click="provisionCustomerEndpoint(true)">预检（不创建）</el-button>
+              </el-tooltip>
+              <el-tooltip content="自动创建缺失模型的 BytePlus Endpoints，复用已有映射，并轮换 endpoint key。" placement="top">
+                <el-button size="small" type="primary" :loading="loading.provision" @click="provisionCustomerEndpoint(false)">{{ endpointProvisionActionLabel }}</el-button>
+              </el-tooltip>
               <el-button size="small" type="warning" plain :loading="loading.rotateEndpointKey" :disabled="!endpointMapRows.length && !upstreamForm.byteplus_endpoint_id" @click="rotateEndpointKey">轮换 endpoint key</el-button>
             </div>
             <div v-if="upstreamForm.byteplus_endpoint_api_key_expires_at" style="font-size:12px; color:var(--text-muted); margin-top:8px;">
@@ -1257,6 +1263,12 @@ const App = {
         ? (this.allModels || []).filter(m => !m.is_alias).map(m => m.id)
         : (this.editForm?.enabled_models || []);
       return enabled.filter(modelId => modelId && !mapped.has(modelId));
+    },
+    endpointProvisionActionLabel() {
+      const missing = this.endpointMappingMissingModels.length;
+      return missing
+        ? `自动补齐缺失 Endpoints (${missing})`
+        : "创建/同步 Project Endpoints";
     },
   },
   methods: {
@@ -1602,11 +1614,14 @@ const App = {
         ElMessage.warning("请先填写 customer_slug");
         return;
       }
+      const missingCount = this.endpointMappingMissingModels.length;
       if (!dryRun) {
         try {
           await ElMessageBox.confirm(
-            `确认为 ${this.editing.email || this.editing.id} 创建客户 Project endpoints？`,
-            "创建 Project Endpoints",
+            missingCount
+              ? `确认为 ${this.editing.email || this.editing.id} 自动补齐 ${missingCount} 个缺失 Endpoints？已有映射会复用，不会重建。`
+              : `确认为 ${this.editing.email || this.editing.id} 创建/同步客户 Project endpoints？已有映射会复用。`,
+            missingCount ? "自动补齐缺失 Endpoints" : "创建/同步 Project Endpoints",
             { type: "warning" },
           );
         } catch { return; }
@@ -1631,7 +1646,7 @@ const App = {
           this.editForm.enabled_models_default = !!r.upstream.enabled_models_default;
           this.editForm.enabled_models = r.upstream.enabled_models || [];
         }
-        ElMessage.success(dryRun ? "Dry run 已完成" : "Project endpoints 已创建");
+        ElMessage.success(dryRun ? "预检已完成（未创建资源）" : (missingCount ? "缺失 Endpoints 已自动补齐" : "Project endpoints 已创建/同步"));
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.provision = false; }
     },
