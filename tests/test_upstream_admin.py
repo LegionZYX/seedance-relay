@@ -453,6 +453,7 @@ class UpstreamAdminTests(unittest.TestCase):
             "dreamina-seedance-2-0-260128",
             "dreamina-seedance-2-0-fast-260128",
             "seedance-1-5-pro-251215",
+            "seedance-1-0-lite-t2v-250428",
         ]
         db = self.server.get_db()
         db.execute("UPDATE users SET enabled_models=? WHERE id=?", (json.dumps(models), self.user_id))
@@ -484,6 +485,11 @@ class UpstreamAdminTests(unittest.TestCase):
                         "code": "asset_registry_error",
                         "message": "CreateEndpoint failed: OperationDenied.ServiceNotOpen model video-pro service not open",
                     }})
+                if model == "seedance-1-0-lite-t2v-250428":
+                    raise self.server.HTTPException(502, {"error": {
+                        "code": "asset_registry_error",
+                        "message": "CreateEndpoint failed: OperationDenied.ModelVersionStatus model version is invalid, status=Retiring",
+                    }})
                 return {"Result": {"EndpointId": f"ep-created-{model}"}}
             if action == "GetEndpoint":
                 return {"Result": {"Status": "Running"}}
@@ -510,9 +516,11 @@ class UpstreamAdminTests(unittest.TestCase):
         ]
         self.assertNotIn("dreamina-seedance-2-0-260128", create_endpoint_models)
         self.assertIn("dreamina-seedance-2-0-fast-260128", result["byteplus_endpoint_skipped_models"])
+        self.assertIn("seedance-1-0-lite-t2v-250428", result["byteplus_endpoint_skipped_models"])
         self.assertEqual(result["byteplus_endpoint_map"]["dreamina-seedance-2-0-260128"], "ep-existing-standard")
         self.assertEqual(result["byteplus_endpoint_map"]["seedance-1-5-pro-251215"], "ep-created-seedance-1-5-pro-251215")
         self.assertNotIn("dreamina-seedance-2-0-fast-260128", result["byteplus_endpoint_map"])
+        self.assertNotIn("seedance-1-0-lite-t2v-250428", result["byteplus_endpoint_map"])
         get_key = next(call for call in calls if call["action"] == "GetApiKey")
         self.assertEqual(
             set(get_key["body"]["ResourceIds"]),

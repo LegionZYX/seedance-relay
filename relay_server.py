@@ -2117,6 +2117,9 @@ def _endpoint_create_skip_reason(exc: HTTPException) -> str:
         "servicenotopen" in message
         or "service not open" in lower
         or "no available resource packs" in lower
+        or "modelversionstatus" in message
+        or "model version is invalid" in lower
+        or "status=retiring" in lower
     ):
         return sanitize(message)[:500]
     return ""
