@@ -326,7 +326,7 @@ func TestEstimateAppliesCustomerPriceMultiplier(t *testing.T) {
 	defer server.Close()
 	defer db.Close()
 
-	if err := db.InsertTestUserWithBalance("sk-estimate", "u_estimate", "", 0.55, 1.2); err != nil {
+	if err := db.InsertTestUserWithBalance("sk-estimate", "u_estimate", "", 0.45, 1.2); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 
@@ -357,10 +357,10 @@ func TestEstimateAppliesCustomerPriceMultiplier(t *testing.T) {
 	if payload["estimated_tokens"].(float64) != 50640 {
 		t.Fatalf("estimated_tokens = %v", payload["estimated_tokens"])
 	}
-	if payload["estimated_cost_usd"].(float64) != 0.510451 {
+	if payload["estimated_cost_usd"].(float64) != 0.425376 {
 		t.Fatalf("estimated_cost_usd = %v", payload["estimated_cost_usd"])
 	}
-	if payload["max_cost_usd"].(float64) != 0.561497 {
+	if payload["max_cost_usd"].(float64) != 0.467914 {
 		t.Fatalf("max_cost_usd = %v", payload["max_cost_usd"])
 	}
 	if payload["price_multiplier"].(float64) != 1.2 {
@@ -369,7 +369,7 @@ func TestEstimateAppliesCustomerPriceMultiplier(t *testing.T) {
 	if payload["can_afford"].(bool) {
 		t.Fatalf("can_afford should be false for balance below max hold")
 	}
-	if payload["shortage_usd"].(float64) != 0.011497 {
+	if payload["shortage_usd"].(float64) != 0.017914 {
 		t.Fatalf("shortage_usd = %v", payload["shortage_usd"])
 	}
 }
@@ -694,17 +694,17 @@ func TestCreateVideoPostsNativePayloadAndHoldsBalance(t *testing.T) {
 	if gotPayload["ratio"] != "9:16" {
 		t.Fatalf("upstream ratio = %v", gotPayload["ratio"])
 	}
-	if balanceAtUpstream != 9.438503 {
+	if balanceAtUpstream != 9.532086 {
 		t.Fatalf("balance at upstream = %v", balanceAtUpstream)
 	}
-	if payload["held_usd"].(float64) != 0.561497 {
+	if payload["held_usd"].(float64) != 0.467914 {
 		t.Fatalf("held_usd = %v", payload["held_usd"])
 	}
 	balance, err := db.TestUserBalance("u_create")
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.438503 {
+	if balance != 9.532086 {
 		t.Fatalf("balance = %v", balance)
 	}
 }
@@ -1638,10 +1638,10 @@ func TestGetVideoRefreshesSucceededTaskAndHidesUpstreamURL(t *testing.T) {
 	defer server.Close()
 	defer db.Close()
 
-	if err := db.InsertTestUserWithBalance("sk-get-success", "u_get_success", "", 9.438503, 1.2); err != nil {
+	if err := db.InsertTestUserWithBalance("sk-get-success", "u_get_success", "", 9.532086, 1.2); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
-	if err := db.InsertTestQueuedTask("vid_success", "u_get_success", "upstream-success", 0.561497, 1.2); err != nil {
+	if err := db.InsertTestQueuedTask("vid_success", "u_get_success", "upstream-success", 0.467914, 1.2); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 
@@ -1663,14 +1663,14 @@ func TestGetVideoRefreshesSucceededTaskAndHidesUpstreamURL(t *testing.T) {
 	if !strings.Contains(string(body), `"video_url":"https://media.example.test/v1/videos/vid_success/content"`) {
 		t.Fatalf("response missing relay video_url: %s", body)
 	}
-	if !strings.Contains(string(body), `"actual_cost_usd":0.01008`) {
+	if !strings.Contains(string(body), `"actual_cost_usd":0.0084`) {
 		t.Fatalf("response missing customer actual cost: %s", body)
 	}
 	balance, err := db.TestUserBalance("u_get_success")
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.98992 {
+	if balance != 9.9916 {
 		t.Fatalf("balance = %v", balance)
 	}
 }
@@ -1692,10 +1692,10 @@ func TestGetVideoSettlementUsesTaskPriceMultiplierSnapshot(t *testing.T) {
 	defer server.Close()
 	defer db.Close()
 
-	if err := db.InsertTestUserWithBalance("sk-snapshot-settle", "u_snapshot_settle", "", 9.438503, 1.2); err != nil {
+	if err := db.InsertTestUserWithBalance("sk-snapshot-settle", "u_snapshot_settle", "", 9.532086, 1.2); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
-	if err := db.InsertTestQueuedTask("vid_snapshot_settle", "u_snapshot_settle", "upstream-snapshot-settle", 0.561497, 1.2); err != nil {
+	if err := db.InsertTestQueuedTask("vid_snapshot_settle", "u_snapshot_settle", "upstream-snapshot-settle", 0.467914, 1.2); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 	if err := db.SetTestUserPriceMultiplier("u_snapshot_settle", 1.8); err != nil {
@@ -1714,17 +1714,17 @@ func TestGetVideoSettlementUsesTaskPriceMultiplierSnapshot(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
 	}
-	if !strings.Contains(string(body), `"actual_cost_usd":0.01008`) {
+	if !strings.Contains(string(body), `"actual_cost_usd":0.0084`) {
 		t.Fatalf("settlement should use task multiplier snapshot, body=%s", body)
 	}
-	if strings.Contains(string(body), `"actual_cost_usd":0.01512`) {
+	if strings.Contains(string(body), `"actual_cost_usd":0.0126`) {
 		t.Fatalf("settlement used latest customer multiplier: %s", body)
 	}
 	balance, err := db.TestUserBalance("u_snapshot_settle")
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.98992 {
+	if balance != 9.9916 {
 		t.Fatalf("balance = %v", balance)
 	}
 }
@@ -2014,7 +2014,7 @@ func TestVideoContentRefreshesQueuedTaskBeforeReturningNotReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.9916 {
+	if balance != 9.993 {
 		t.Fatalf("balance = %v", balance)
 	}
 }
@@ -2085,7 +2085,7 @@ func TestVideoContentHeadRefreshesQueuedTaskBeforeReturningNotReady(t *testing.T
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.9916 {
+	if balance != 9.993 {
 		t.Fatalf("balance = %v", balance)
 	}
 }

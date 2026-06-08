@@ -1082,8 +1082,8 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                 )
                 self.assertEqual(task["status"], "succeeded")
                 self.assertIn("actual_cost_usd", task)
-                self.assertEqual(task["actual_cost_usd"], 0.01008)
-                self.assertNotEqual(task["actual_cost_usd"], 0.01092)
+                self.assertEqual(task["actual_cost_usd"], 0.0084)
+                self.assertNotEqual(task["actual_cost_usd"], 0.0091)
                 acceptance_evidence["checks"]["runtime_settlement_uses_task_multiplier_snapshot"] = True
                 self.assertEqual(
                     task["video_url"],
@@ -1328,8 +1328,8 @@ class Alpha1LiveSmokeTests(unittest.TestCase):
                             5,
                             0,
                             "queued",
-                            0.467914,
-                            0.561497,
+                            0.35448,
+                            0.389928,
                             0.0,
                             1.0,
                             0,

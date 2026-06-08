@@ -253,8 +253,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["held_usd"], 0.561497)
-        self.assertEqual(observed["balance"], 9.438503)
+        self.assertEqual(response.json()["held_usd"], 0.467914)
+        self.assertEqual(observed["balance"], 9.532086)
 
     def test_price_multiplier_backfill_does_not_rewrite_new_explicit_one(self):
         user = self.create_user("explicit-one@example.test", price_multiplier=1.0)
@@ -288,8 +288,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
                 5,
                 0,
                 "queued",
-                0.5,
-                0.561497,
+                0.425376,
+                0.467914,
                 0.2,
                 1.2,
                 0,
@@ -299,7 +299,7 @@ class Alpha1SpecControlTests(unittest.TestCase):
         )
         db.execute(
             "UPDATE users SET balance_usd=?, price_multiplier=? WHERE id=?",
-            (9.438503, 1.8, user["id"]),
+            (9.532086, 1.8, user["id"]),
         )
         db.close()
         self.fake_http.get_payload = {
@@ -317,8 +317,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertEqual(body["actual_cost_usd"], 0.01008)
-        self.assertNotEqual(body["actual_cost_usd"], 0.01512)
+        self.assertEqual(body["actual_cost_usd"], 0.0084)
+        self.assertNotEqual(body["actual_cost_usd"], 0.0126)
 
         db = self.server.get_db()
         row = db.execute(
@@ -330,8 +330,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
             ("vid_settle_snapshot",),
         ).fetchone()
         db.close()
-        self.assertEqual(round(row["balance_usd"], 6), 9.98992)
-        self.assertEqual(task["actual_cost_usd"], 0.01008)
+        self.assertEqual(round(row["balance_usd"], 6), 9.9916)
+        self.assertEqual(task["actual_cost_usd"], 0.0084)
         self.assertEqual(task["price_multiplier"], 1.2)
         self.assertEqual(task["settled"], 1)
 
@@ -724,8 +724,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
                 5,
                 0,
                 "queued",
+                0.425376,
                 0.467914,
-                0.561497,
                 0.2,
                 1.2,
                 0,
@@ -1229,8 +1229,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
                 5,
                 0,
                 "queued",
-                0.5,
-                0.561497,
+                0.425376,
+                0.467914,
                 0.2,
                 1.2,
                 0,

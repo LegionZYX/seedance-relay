@@ -38,8 +38,8 @@ curl https://seedance3.eu/v1/videos \
   "id": "vid_a3f9c1b2d8e4f7a6",
   "status": "queued",
   "model": "dreamina-seedance-2-0-260128",
-  "estimated_cost_usd": 1.188,
-  "held_usd": 1.3068,
+  "estimated_cost_usd": 0.7623,
+  "held_usd": 0.83853,
   "price_multiplier": 1.0
 }
 ```
@@ -143,8 +143,8 @@ curl https://seedance3.eu/v1/pricing \
     "dreamina-seedance-2-0-260128": {
       "720p": {
         "tokens_per_second": 21780,
-        "price_no_video_ref_usd_per_1k": 0.01092,
-        "price_with_video_ref_usd_per_1k": 0.006708
+        "price_no_video_ref_usd_per_1k": 0.0091,
+        "price_with_video_ref_usd_per_1k": 0.00559
       }
     }
   }
@@ -200,8 +200,8 @@ curl https://seedance3.eu/v1/videos/estimate \
 
 ```json
 {
-  "estimated_cost_usd": 1.188,
-  "max_cost_usd": 1.3068,
+  "estimated_cost_usd": 0.7623,
+  "max_cost_usd": 0.83853,
   "price_multiplier": 1.0,
   "pricing_scope": "customer"
 }

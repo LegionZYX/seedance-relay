@@ -64,35 +64,50 @@ PRICING: Dict[str, Dict[str, Any]] = {
 
     # =========== 视频生成 ===========
     # ---- Seedance 1.0 系列（占位价，请用 --pricing 覆盖正式价）----
-    "seedance-1-0-lite-t2v-250428":  {"input": 0, "output": 0.0007},
-    "seedance-1-0-lite-i2v-250428":  {"input": 0, "output": 0.0007},
-    "seedance-1-0-pro-250528":       {"input": 0, "output": 0.0014},
-    "seedance-1-0-pro-fast-251015":  {"input": 0, "output": 0.001},
+    "seedance-1-0-lite-t2v-250428":  {"input": 0, "output": 0.00153},
+    "seedance-1-0-lite-i2v-250428":  {"input": 0, "output": 0.00153},
+    "seedance-1-0-pro-250528":       {"input": 0, "output": 0.002375},
+    "seedance-1-0-pro-fast-251015":  {"input": 0, "output": 0.0009},
 
     # ---- Seedance 1.5 Pro（占位价）----
-    "seedance-1-5-pro-251215":       {"input": 0, "output": 0.0017},
+    "seedance-1-5-pro-251215":       {"input": 0, "output": 0.00216},
 
     # ---- Seedance 2.0 Pro（专业版）官方分档定价 ----
     # 来源：BytePlus 官方"sd2.0 专业版价格参考"
     "dreamina-seedance-2-0-260128": {
         "input": 0,
-        "output": 0.00924,   # 默认走最贵的（无视频参考 1080p），保守 fallback
+        "output": 0.0077,
         "output_by_context": {
             "no_video_ref": {       # text-only / first_frame / reference_image / audio
-                "480p":  0.0084,
-                "720p":  0.0084,
-                "1080p": 0.00924,
+                "480p":  0.0070,
+                "720p":  0.0070,
+                "1080p": 0.0077,
             },
             "with_video_ref": {     # 输入里包含 reference_video
-                "480p":  0.00516,
-                "720p":  0.00516,
-                "1080p": 0.00564,
+                "480p":  0.0043,
+                "720p":  0.0043,
+                "1080p": 0.0047,
             },
         },
     },
 
     # ---- Seedance 2.0 Fast（占位价；如有官方分档表请同样写成 output_by_context）----
-    "dreamina-seedance-2-0-fast-260128": {"input": 0, "output": 0.0014},
+    "dreamina-seedance-2-0-fast-260128": {
+        "input": 0,
+        "output": 0.0056,
+        "output_by_context": {
+            "no_video_ref": {
+                "480p":  0.0056,
+                "720p":  0.0056,
+                "1080p": 0.0056,
+            },
+            "with_video_ref": {
+                "480p":  0.0033,
+                "720p":  0.0033,
+                "1080p": 0.0033,
+            },
+        },
+    },
 
     # =========== Embedding ===========
     "embedding-vision-250615":     {"input": 0.00007, "output": 0.0},
