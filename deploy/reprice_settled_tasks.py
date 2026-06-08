@@ -158,7 +158,7 @@ def apply_changes(conn: sqlite3.Connection, changes: list[dict[str, Any]]) -> No
     conn.execute("BEGIN IMMEDIATE")
     try:
         for change in changes:
-            conn.execute(
+            task_cursor = conn.execute(
                 """UPDATE tasks
                    SET upstream_actual_cost_usd=?,
                        actual_cost_usd=?,
@@ -171,10 +171,18 @@ def apply_changes(conn: sqlite3.Connection, changes: list[dict[str, Any]]) -> No
                     change["task_id"],
                 ),
             )
-            conn.execute(
+            if task_cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"task update matched {task_cursor.rowcount} rows for {change['task_id']}"
+                )
+            user_cursor = conn.execute(
                 "UPDATE users SET balance_usd=ROUND(balance_usd - ?, 6) WHERE id=?",
                 (change["delta_actual_cost_usd"], change["user_id"]),
             )
+            if user_cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"user balance update matched {user_cursor.rowcount} rows for {change['user_id']}"
+                )
             if audit:
                 conn.execute(
                     """INSERT INTO audit_events

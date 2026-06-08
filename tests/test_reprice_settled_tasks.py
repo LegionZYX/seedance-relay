@@ -124,6 +124,58 @@ class RepriceSettledTasksTests(unittest.TestCase):
         self.assertEqual(user["balance_usd"], 96.738654)
         self.assertEqual(audit["action"], "system_repriced_settled_task")
 
+    def test_apply_changes_rolls_back_when_task_update_matches_no_rows(self):
+        row = reprice_settled_tasks.select_rows(
+            self.conn,
+            _Args(db=self.db_path, include_invoiced=False),
+        )[0]
+        change = dict(reprice_settled_tasks.compute_change(row, 0.000001))
+        change["task_id"] = "missing_task"
+
+        with self.assertRaisesRegex(RuntimeError, "task update matched 0 rows"):
+            reprice_settled_tasks.apply_changes(self.conn, [change])
+
+        task = self.conn.execute(
+            "SELECT upstream_actual_cost_usd, actual_cost_usd FROM tasks WHERE id=?",
+            ("vid_wrong_price",),
+        ).fetchone()
+        user = self.conn.execute(
+            "SELECT balance_usd FROM users WHERE id=?",
+            ("u_reprice",),
+        ).fetchone()
+        audit_count = self.conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+
+        self.assertEqual(task["upstream_actual_cost_usd"], 0.1861)
+        self.assertEqual(task["actual_cost_usd"], 0.1861)
+        self.assertEqual(user["balance_usd"], 98.0)
+        self.assertEqual(audit_count, 0)
+
+    def test_apply_changes_rolls_back_when_user_balance_update_matches_no_rows(self):
+        row = reprice_settled_tasks.select_rows(
+            self.conn,
+            _Args(db=self.db_path, include_invoiced=False),
+        )[0]
+        change = dict(reprice_settled_tasks.compute_change(row, 0.000001))
+        change["user_id"] = "missing_user"
+
+        with self.assertRaisesRegex(RuntimeError, "user balance update matched 0 rows"):
+            reprice_settled_tasks.apply_changes(self.conn, [change])
+
+        task = self.conn.execute(
+            "SELECT upstream_actual_cost_usd, actual_cost_usd FROM tasks WHERE id=?",
+            ("vid_wrong_price",),
+        ).fetchone()
+        user = self.conn.execute(
+            "SELECT balance_usd FROM users WHERE id=?",
+            ("u_reprice",),
+        ).fetchone()
+        audit_count = self.conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+
+        self.assertEqual(task["upstream_actual_cost_usd"], 0.1861)
+        self.assertEqual(task["actual_cost_usd"], 0.1861)
+        self.assertEqual(user["balance_usd"], 98.0)
+        self.assertEqual(audit_count, 0)
+
 
 class _Args:
     task_id = None
