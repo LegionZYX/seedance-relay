@@ -69,6 +69,34 @@ asset registration. Current BytePlus runtime SDKs require an API key for
 `content_generation.tasks.create`, so generation should use an endpoint-scoped
 key returned by IAM `GetApiKey`.
 
+## Endpoint Key Rotation Rules
+
+Changing a customer's endpoint API key does not affect upload asset
+registration. Uploads use the server IAM AK/SK plus the customer's
+`byteplus_project_name` and `modelark_asset_group_id`.
+
+Generation requests are affected by endpoint key changes. Relay chooses the
+endpoint id from `users.note.byteplus_endpoint_map` for the requested client
+model, then chooses the key in this order:
+
+1. `users.note.byteplus_endpoint_key_map` entry for the client model, upstream
+   model, or endpoint id.
+2. `users.byteplus_api_key`.
+3. Server fallback key only when the customer has no dedicated key.
+
+Before rotating or replacing a customer's endpoint key, verify:
+
+- every enabled customer model has an entry in `byteplus_endpoint_map`;
+- the new key is authorized for every endpoint id in that map;
+- when using per-endpoint keys, `byteplus_endpoint_key_map` covers every mapped
+  model or endpoint id;
+- the customer's `byteplus_project_name` and `modelark_asset_group_id` remain in
+  the same BytePlus project used by those endpoints.
+
+After the key change, run one smoke generation or provider-side permission probe
+for each enabled model. A key that works for one endpoint may still fail on a
+different endpoint in the same customer account.
+
 If the admin UI or upstream provision endpoint is unavailable, follow
 `docs/ops/alpha2-byteplus-dedicated-endpoint-ai-runbook.md`. That runbook records
 the verified fallback sequence: IAM `GetProject/CreateProject`, ModelArk

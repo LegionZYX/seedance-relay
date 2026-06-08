@@ -177,6 +177,20 @@ class DeploymentConfigTests(unittest.TestCase):
         self.assertIn("settled=0", runbook)
         self.assertIn("settled=1", runbook)
 
+    def test_iam_go_live_documents_endpoint_key_rotation_rules(self):
+        runbook = self.read("docs/ops/alpha2-iam-endpoint-go-live.md")
+        for needle in (
+            "Endpoint Key Rotation Rules",
+            "does not affect upload asset",
+            "registration. Uploads use the server IAM AK/SK",
+            "byteplus_endpoint_map",
+            "byteplus_endpoint_key_map",
+            "users.byteplus_api_key",
+            "authorized for every endpoint id",
+            "run one smoke generation",
+        ):
+            self.assertIn(needle, runbook)
+
     def test_release_checklist_maps_spec_to_required_evidence(self):
         checklist = self.read("docs/ops/alpha1-release-checklist.md")
         for needle in (
