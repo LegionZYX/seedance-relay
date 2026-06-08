@@ -1756,6 +1756,7 @@ def _user_upstream_response(user: dict | sqlite3.Row) -> dict:
         "byteplus_project_name": note.get("byteplus_project_name") or "",
         "byteplus_endpoint_id": note.get("byteplus_endpoint_id") or "",
         "byteplus_endpoint_map": _user_byteplus_endpoint_map(user_dict),
+        "byteplus_endpoint_skipped_models": note.get("byteplus_endpoint_skipped_models") or {},
         "modelark_asset_group_id": note.get("modelark_asset_group_id") or "",
         "endpoint_key_mode": note.get("byteplus_endpoint_key_mode") or "multi",
         "endpoint_key_map_configured": bool(_user_byteplus_endpoint_key_map(user_dict)),
@@ -1799,6 +1800,7 @@ def _endpoint_map_health_for_user(user: sqlite3.Row | dict) -> dict[str, Any]:
         endpoint_id for endpoint_id, count in endpoint_counts.items() if count > 1
     )
     note = _user_note_json(user_dict)
+    skipped_models = note.get("byteplus_endpoint_skipped_models") or {}
     warnings = []
     if not note.get("byteplus_project_name"):
         warnings.append("missing_project")
@@ -1820,6 +1822,7 @@ def _endpoint_map_health_for_user(user: sqlite3.Row | dict) -> dict[str, Any]:
         "enabled_models": enabled_models,
         "mapped_models": mapped_models,
         "missing_models": missing_models,
+        "skipped_models": skipped_models,
         "extra_models": extra_models,
         "duplicate_endpoint_ids": duplicate_endpoint_ids,
         "endpoint_map_size": len(endpoint_map),
@@ -2049,6 +2052,74 @@ def _endpoint_create_body(slug: str, project_name: str, email: str = "", client_
     }
 
 
+def _client_model_from_endpoint_item(item: dict[str, Any]) -> str:
+    tags = item.get("Tags")
+    if isinstance(tags, list):
+        for tag in tags:
+            if not isinstance(tag, dict):
+                continue
+            key = str(tag.get("Key") or "")
+            value = str(tag.get("Value") or "").strip()
+            if key in {"clientModel", "model"} and value in MODEL_MAP:
+                return value
+
+    model_reference = item.get("ModelReference") if isinstance(item.get("ModelReference"), dict) else {}
+    foundation = model_reference.get("FoundationModel") if isinstance(model_reference, dict) else {}
+    if isinstance(foundation, dict):
+        name = str(foundation.get("Name") or "").strip()
+        version = str(foundation.get("ModelVersion") or "").strip()
+        model_id = f"{name}-{version}" if name and version else ""
+        if model_id in MODEL_MAP:
+            return model_id
+    return ""
+
+
+def _existing_project_endpoint_map(project_name: str) -> dict[str, str]:
+    if not project_name:
+        return {}
+    try:
+        response = _call_asset_api(
+            "ListEndpoints",
+            {"ProjectName": project_name, "PageNumber": 1, "PageSize": 100},
+            BYTEPLUS_ACCESSKEY,
+            BYTEPLUS_SECRETKEY,
+        )
+    except Exception:
+        return {}
+
+    result = response.get("Result") if isinstance(response.get("Result"), dict) else {}
+    items = result.get("Items") if isinstance(result, dict) else None
+    if items is None:
+        items = response.get("Items")
+    if not isinstance(items, list):
+        return {}
+
+    endpoint_map: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("Status") or "")
+        if status in {"Deleting", "Failed"}:
+            continue
+        model_id = _client_model_from_endpoint_item(item)
+        endpoint_id = str(item.get("Id") or item.get("EndpointId") or "").strip()
+        if model_id and endpoint_id and model_id not in endpoint_map:
+            endpoint_map[model_id] = endpoint_id
+    return endpoint_map
+
+
+def _endpoint_create_skip_reason(exc: HTTPException) -> str:
+    message = _upstream_http_exception_message(exc)
+    lower = message.lower()
+    if (
+        "servicenotopen" in message
+        or "service not open" in lower
+        or "no available resource packs" in lower
+    ):
+        return sanitize(message)[:500]
+    return ""
+
+
 def _wait_endpoint_ready(endpoint_id: str, project_name: str) -> None:
     if not endpoint_id or BYTEPLUS_ENDPOINT_WAIT_SECONDS <= 0:
         return
@@ -2186,6 +2257,7 @@ def _provision_customer_upstream_resources(
     project_id = ""
     endpoint_id = _user_byteplus_endpoint_id(user)
     endpoint_map = _user_byteplus_endpoint_map(user)
+    skipped_endpoint_models: dict[str, str] = {}
     asset_group_id = _user_modelark_asset_group_id(user)
 
     if req.create_project:
@@ -2203,18 +2275,32 @@ def _provision_customer_upstream_resources(
         )
     if req.create_endpoint:
         step("create_endpoints", 35)
+        existing_project_map = _existing_project_endpoint_map(project_name)
+        enabled_model_set = set(_enabled_models_for_user(user))
+        for client_model, existing_endpoint_id in existing_project_map.items():
+            if client_model in enabled_model_set and not endpoint_map.get(client_model):
+                endpoint_map[client_model] = existing_endpoint_id
+                if not endpoint_id:
+                    endpoint_id = existing_endpoint_id
         for client_model in _enabled_models_for_user(user):
             existing_endpoint_id = endpoint_map.get(client_model)
             if existing_endpoint_id:
                 if not endpoint_id:
                     endpoint_id = existing_endpoint_id
                 continue
-            endpoint_result = _call_asset_api(
-                "CreateEndpoint",
-                _endpoint_create_body(slug, project_name, str(user.get("email") or ""), client_model),
-                BYTEPLUS_ACCESSKEY,
-                BYTEPLUS_SECRETKEY,
-            )
+            try:
+                endpoint_result = _call_asset_api(
+                    "CreateEndpoint",
+                    _endpoint_create_body(slug, project_name, str(user.get("email") or ""), client_model),
+                    BYTEPLUS_ACCESSKEY,
+                    BYTEPLUS_SECRETKEY,
+                )
+            except HTTPException as exc:
+                skip_reason = _endpoint_create_skip_reason(exc)
+                if not skip_reason:
+                    raise
+                skipped_endpoint_models[client_model] = skip_reason
+                continue
             created_endpoint_id = str(
                 extract_nested_value(endpoint_result, "Result", "EndpointId")
                 or extract_nested_value(endpoint_result, "EndpointId")
@@ -2247,6 +2333,7 @@ def _provision_customer_upstream_resources(
         "byteplus_project_id": project_id,
         "byteplus_endpoint_id": endpoint_id,
         "byteplus_endpoint_map": endpoint_map,
+        "byteplus_endpoint_skipped_models": skipped_endpoint_models,
         "modelark_asset_group_id": asset_group_id,
     }
     if req.rotate_endpoint_key:
@@ -2279,6 +2366,8 @@ def _apply_upstream_result_to_user(
         "byteplus_project_id": updates.get("byteplus_project_id") or "",
         "byteplus_endpoint_id": updates.get("byteplus_endpoint_id") or "",
         "byteplus_endpoint_map": updates.get("byteplus_endpoint_map") or {},
+        "byteplus_endpoint_skipped_models": updates.get("byteplus_endpoint_skipped_models") or {},
+        "byteplus_endpoint_skipped_models_updated_at": now,
         "byteplus_endpoint_key_mode": updates.get("byteplus_endpoint_key_mode") or "multi",
         "modelark_asset_group_id": updates.get("modelark_asset_group_id") or "",
         "byteplus_endpoint_key_rotation_enabled": bool(rotation_enabled),

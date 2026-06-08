@@ -448,6 +448,77 @@ class UpstreamAdminTests(unittest.TestCase):
         get_key = next(call for call in calls if call["action"] == "GetApiKey")
         self.assertIn("ep-existing-mapped", get_key["body"]["ResourceIds"])
 
+    def test_provision_reuses_project_endpoints_and_skips_unopened_models(self):
+        models = [
+            "dreamina-seedance-2-0-260128",
+            "dreamina-seedance-2-0-fast-260128",
+            "seedance-1-5-pro-251215",
+        ]
+        db = self.server.get_db()
+        db.execute("UPDATE users SET enabled_models=? WHERE id=?", (json.dumps(models), self.user_id))
+        user = dict(db.execute("SELECT * FROM users WHERE id=?", (self.user_id,)).fetchone())
+        db.close()
+
+        calls = []
+
+        def fake_call_asset_api(action, body, ak, sk):
+            calls.append({"action": action, "body": body})
+            if action == "ListEndpoints":
+                return {
+                    "Result": {
+                        "Items": [
+                            {
+                                "Id": "ep-existing-standard",
+                                "Status": "Running",
+                                "Tags": [
+                                    {"Key": "clientModel", "Value": "dreamina-seedance-2-0-260128"}
+                                ],
+                            }
+                        ]
+                    }
+                }
+            if action == "CreateEndpoint":
+                model = next(tag["Value"] for tag in body["Tags"] if tag["Key"] == "clientModel")
+                if model == "dreamina-seedance-2-0-fast-260128":
+                    raise self.server.HTTPException(502, {"error": {
+                        "code": "asset_registry_error",
+                        "message": "CreateEndpoint failed: OperationDenied.ServiceNotOpen model video-pro service not open",
+                    }})
+                return {"Result": {"EndpointId": f"ep-created-{model}"}}
+            if action == "GetEndpoint":
+                return {"Result": {"Status": "Running"}}
+            if action == "GetApiKey":
+                return {"Result": {"ApiKey": "merged-map-key", "ExpiresAt": 2222222222}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        self.server._call_asset_api = fake_call_asset_api
+        req = self.server.ProvisionUpstreamRequest(
+            customer_slug="upstream",
+            create_project=False,
+            create_endpoint=True,
+            create_asset_group=False,
+            rotate_endpoint_key=True,
+            endpoint_key_duration_seconds=3600,
+        )
+
+        result = self.server._provision_customer_upstream_resources(user, req)
+
+        create_endpoint_models = [
+            next(tag["Value"] for tag in call["body"]["Tags"] if tag["Key"] == "clientModel")
+            for call in calls
+            if call["action"] == "CreateEndpoint"
+        ]
+        self.assertNotIn("dreamina-seedance-2-0-260128", create_endpoint_models)
+        self.assertIn("dreamina-seedance-2-0-fast-260128", result["byteplus_endpoint_skipped_models"])
+        self.assertEqual(result["byteplus_endpoint_map"]["dreamina-seedance-2-0-260128"], "ep-existing-standard")
+        self.assertEqual(result["byteplus_endpoint_map"]["seedance-1-5-pro-251215"], "ep-created-seedance-1-5-pro-251215")
+        self.assertNotIn("dreamina-seedance-2-0-fast-260128", result["byteplus_endpoint_map"])
+        get_key = next(call for call in calls if call["action"] == "GetApiKey")
+        self.assertEqual(
+            set(get_key["body"]["ResourceIds"]),
+            {"ep-existing-standard", "ep-created-seedance-1-5-pro-251215"},
+        )
+
     def test_main_user_save_preserves_endpoint_note_fields_from_stale_form(self):
         patched = self.client.patch(
             f"/admin/users/{self.user_id}/upstream",

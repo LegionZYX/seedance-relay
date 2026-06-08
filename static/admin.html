@@ -1006,6 +1006,15 @@
               >
                 <template #title>mapping missing: {{ endpointMappingMissingModels.join(", ") }}</template>
               </el-alert>
+              <el-alert
+                v-if="endpointSkippedModelRows.length"
+                type="warning"
+                :closable="false"
+                show-icon
+                style="margin-top:8px;"
+              >
+                <template #title>skipped by BytePlus: {{ endpointSkippedModelRows.map(row => row.model_id).join(", ") }}</template>
+              </el-alert>
             </div>
             <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
               <el-checkbox v-model="upstreamForm.endpoint_key_rotation_enabled">自动轮换 endpoint key</el-checkbox>
@@ -1235,6 +1244,12 @@ const App = {
       return Object.entries(map)
         .filter(([modelId, endpointId]) => modelId && endpointId)
         .map(([model_id, endpoint_id]) => ({ model_id, endpoint_id }));
+    },
+    endpointSkippedModelRows() {
+      const skipped = this.upstreamForm?.byteplus_endpoint_skipped_models || {};
+      return Object.entries(skipped)
+        .filter(([modelId]) => modelId)
+        .map(([model_id, reason]) => ({ model_id, reason }));
     },
     endpointMappingMissingModels() {
       const mapped = new Set(this.endpointMapRows.map(row => row.model_id));
@@ -1482,6 +1497,7 @@ const App = {
           byteplus_endpoint_id: upstream.byteplus_endpoint_id || "",
           modelark_asset_group_id: upstream.modelark_asset_group_id || "",
           byteplus_endpoint_map: upstream.byteplus_endpoint_map || {},
+          byteplus_endpoint_skipped_models: upstream.byteplus_endpoint_skipped_models || {},
           endpoint_api_key: "",
           endpoint_api_key_masked: upstream.endpoint_api_key_masked || "",
           endpoint_key_rotation_enabled: !!upstream.endpoint_key_rotation_enabled,
