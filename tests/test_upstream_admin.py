@@ -396,6 +396,58 @@ class UpstreamAdminTests(unittest.TestCase):
         get_key = next(call for call in calls if call["action"] == "GetApiKey")
         self.assertEqual(set(get_key["body"]["ResourceIds"]), set(result["byteplus_endpoint_map"].values()))
 
+    def test_provision_skips_existing_endpoint_map_entries(self):
+        models = list(self.server.DEFAULT_CUSTOMER_MODEL_IDS)
+        existing_model = models[0]
+        missing_model_count = len(models) - 1
+        db = self.server.get_db()
+        row = db.execute("SELECT note FROM users WHERE id=?", (self.user_id,)).fetchone()
+        note = json.loads(row["note"])
+        note["byteplus_endpoint_map"] = {existing_model: "ep-existing-mapped"}
+        db.execute("UPDATE users SET note=? WHERE id=?", (json.dumps(note), self.user_id))
+        user = dict(db.execute("SELECT * FROM users WHERE id=?", (self.user_id,)).fetchone())
+        db.close()
+
+        calls = []
+
+        def fake_call_asset_api(action, body, ak, sk):
+            calls.append({"action": action, "body": body})
+            if action == "CreateEndpoint":
+                model = next(
+                    tag["Value"]
+                    for tag in body["Tags"]
+                    if tag["Key"] == "clientModel"
+                )
+                self.assertNotEqual(model, existing_model)
+                return {"Result": {"EndpointId": f"ep-created-{model}"}}
+            if action == "GetEndpoint":
+                return {"Result": {"Status": "Running"}}
+            if action == "GetApiKey":
+                return {"Result": {"ApiKey": "merged-map-key", "ExpiresAt": 2222222222}}
+            raise AssertionError(f"unexpected action: {action}")
+
+        self.server._call_asset_api = fake_call_asset_api
+        self.server._ensure_byteplus_project = lambda project_name, display_name, description: {
+            "ProjectName": project_name,
+        }
+        req = self.server.ProvisionUpstreamRequest(
+            customer_slug="upstream",
+            create_project=True,
+            create_endpoint=True,
+            create_asset_group=False,
+            rotate_endpoint_key=True,
+            endpoint_key_duration_seconds=3600,
+        )
+
+        result = self.server._provision_customer_upstream_resources(user, req)
+
+        create_endpoint_calls = [call for call in calls if call["action"] == "CreateEndpoint"]
+        self.assertEqual(len(create_endpoint_calls), missing_model_count)
+        self.assertEqual(result["byteplus_endpoint_map"][existing_model], "ep-existing-mapped")
+        self.assertEqual(set(result["byteplus_endpoint_map"]), set(models))
+        get_key = next(call for call in calls if call["action"] == "GetApiKey")
+        self.assertIn("ep-existing-mapped", get_key["body"]["ResourceIds"])
+
     def test_main_user_save_preserves_endpoint_note_fields_from_stale_form(self):
         patched = self.client.patch(
             f"/admin/users/{self.user_id}/upstream",

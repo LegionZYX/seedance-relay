@@ -2204,6 +2204,11 @@ def _provision_customer_upstream_resources(
     if req.create_endpoint:
         step("create_endpoints", 35)
         for client_model in _enabled_models_for_user(user):
+            existing_endpoint_id = endpoint_map.get(client_model)
+            if existing_endpoint_id:
+                if not endpoint_id:
+                    endpoint_id = existing_endpoint_id
+                continue
             endpoint_result = _call_asset_api(
                 "CreateEndpoint",
                 _endpoint_create_body(slug, project_name, str(user.get("email") or ""), client_model),
