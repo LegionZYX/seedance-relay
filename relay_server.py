@@ -412,6 +412,21 @@ def _sanitize_audit_metadata(value, key: str = ""):
     return value
 
 
+def _sanitize_request_payload_for_log(value, key: str = ""):
+    if _audit_key_has_secret_name(key, value):
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _sanitize_request_payload_for_log(item_value, str(item_key))
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_request_payload_for_log(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_log_text(value)
+    return value
+
+
 def _upstream_request_id(headers) -> Optional[str]:
     for key in ("x-request-id", "x-tt-logid", "x-tt-trace-id", "request-id"):
         try:
@@ -645,11 +660,22 @@ def _request_log(*, user_id: Optional[str], task_id: Optional[str], route: str,
                  request: Optional[Request] = None) -> None:
     try:
         if isinstance(request_payload, str):
-            payload_text = request_payload
+            try:
+                payload_text = json.dumps(
+                    _sanitize_request_payload_for_log(json.loads(request_payload)),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            except Exception:
+                payload_text = _sanitize_log_text(request_payload)
         elif request_payload is None:
             payload_text = ""
         else:
-            payload_text = json.dumps(request_payload, ensure_ascii=False)
+            payload_text = json.dumps(
+                _sanitize_request_payload_for_log(request_payload),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         payload_text = payload_text[:20000]
         ip = ""
         user_agent = ""
@@ -671,7 +697,7 @@ def _request_log(*, user_id: Optional[str], task_id: Optional[str], route: str,
                 route,
                 action,
                 model,
-                (prompt_text or "")[:500],
+                _sanitize_log_text(prompt_text or "")[:500],
                 payload_text,
                 status_code,
                 error_code,

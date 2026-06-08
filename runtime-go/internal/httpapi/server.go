@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,33 @@ type Server struct {
 }
 
 var errInvalidAuth = errors.New("invalid auth credentials")
+
+var (
+	requestLogURLPattern           = regexp.MustCompile(`https?://[^\s"']+`)
+	requestLogAdminKeyPattern      = regexp.MustCompile(`(?i)\bx-admin-key\s*:\s*[A-Za-z0-9._~+/=-]+`)
+	requestLogAdminKeyAssign       = regexp.MustCompile(`(?i)\badmin[_-]?key\s*=\s*[A-Za-z0-9._~+/=-]+`)
+	requestLogAuthorizationPattern = regexp.MustCompile(`(?i)\bauthorization\s*:\s*bearer\s+[A-Za-z0-9._~+/=-]+`)
+	requestLogBearerPattern        = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
+	requestLogSessionPattern       = regexp.MustCompile(`(?i)\brelay_session=[^;\s]+`)
+	requestLogRelayKeyPattern      = regexp.MustCompile(`\bsk[-_][A-Za-z0-9][A-Za-z0-9_-]{8,}\b`)
+	requestLogUpstreamKeyPattern   = regexp.MustCompile(`(?i)\bark[\.\-][\w\.\-]+`)
+)
+
+var requestLogSecretKeywords = []string{
+	"password",
+	"api_key",
+	"admin_key",
+	"x_admin_key",
+	"relay_key",
+	"upstream_key",
+	"byteplus_key",
+	"token",
+	"session",
+	"authorization",
+	"cookie",
+	"credential",
+	"secret",
+}
 
 func NewServer(cfg config.Config, db *store.DB, client *http.Client) *Server {
 	if client == nil {
@@ -788,11 +816,7 @@ func (s *Server) logVideoCreate(r *http.Request, user *store.User, req createVid
 	if user == nil {
 		return
 	}
-	if payload == "" {
-		if payloadBytes, err := json.Marshal(req); err == nil {
-			payload = string(payloadBytes)
-		}
-	}
+	payload = sanitizeRequestLogPayload(payload, req)
 	logID, err := newRequestLogID()
 	if err != nil {
 		return
@@ -804,7 +828,7 @@ func (s *Server) logVideoCreate(r *http.Request, user *store.User, req createVid
 		Route:             "/v1/videos",
 		Action:            action,
 		Model:             req.Model,
-		PromptText:        promptText(req.Content),
+		PromptText:        truncate(sanitizeRequestLogString(promptText(req.Content)), 500),
 		RequestPayload:    truncate(payload, 20000),
 		StatusCode:        statusCode,
 		ErrorCode:         errorCode,
@@ -1049,6 +1073,74 @@ func upstreamRequestID(headers http.Header) string {
 		}
 	}
 	return ""
+}
+
+func requestLogSecretKey(key string) bool {
+	lowered := strings.ToLower(key)
+	normalized := strings.Trim(regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(lowered, "_"), "_")
+	for _, word := range requestLogSecretKeywords {
+		if strings.Contains(lowered, word) || strings.Contains(normalized, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeRequestLogString(value string) string {
+	value = requestLogURLPattern.ReplaceAllString(value, "<redacted-url>")
+	value = requestLogAdminKeyPattern.ReplaceAllString(value, "X-Admin-Key: <redacted>")
+	value = requestLogAdminKeyAssign.ReplaceAllString(value, "ADMIN_KEY=<redacted>")
+	value = requestLogAuthorizationPattern.ReplaceAllString(value, "Authorization: Bearer <redacted>")
+	value = requestLogBearerPattern.ReplaceAllString(value, "Bearer <redacted>")
+	value = requestLogSessionPattern.ReplaceAllString(value, "relay_session=<redacted>")
+	value = requestLogRelayKeyPattern.ReplaceAllString(value, "<redacted-relay-key>")
+	value = requestLogUpstreamKeyPattern.ReplaceAllString(value, "<redacted-upstream-key>")
+	return value
+}
+
+func sanitizeRequestLogValue(value any, key string) any {
+	if requestLogSecretKey(key) {
+		return "<redacted>"
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for childKey, childValue := range typed {
+			out[childKey] = sanitizeRequestLogValue(childValue, childKey)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, sanitizeRequestLogValue(item, ""))
+		}
+		return out
+	case []map[string]any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, sanitizeRequestLogValue(item, ""))
+		}
+		return out
+	case string:
+		return sanitizeRequestLogString(typed)
+	default:
+		return typed
+	}
+}
+
+func sanitizeRequestLogPayload(payload string, fallback any) string {
+	var decoded any
+	if strings.TrimSpace(payload) != "" && json.Unmarshal([]byte(payload), &decoded) == nil {
+		if encoded, err := json.Marshal(sanitizeRequestLogValue(decoded, "")); err == nil {
+			return string(encoded)
+		}
+	}
+	if fallback != nil {
+		if encoded, err := json.Marshal(sanitizeRequestLogValue(fallback, "")); err == nil {
+			return string(encoded)
+		}
+	}
+	return sanitizeRequestLogString(payload)
 }
 
 func first(value, fallback string) string {

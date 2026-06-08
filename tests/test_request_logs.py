@@ -195,6 +195,40 @@ class RequestLogTests(unittest.TestCase):
         self.assertEqual(row["prompt_text"], "fallback success prompt")
         self.assertEqual(row["status_code"], 200)
 
+    def test_fastapi_create_request_log_redacts_secret_like_payload_fields(self):
+        response = self.client.post(
+            "/v1/videos",
+            headers=self.auth_headers(),
+            json={
+                "model": "dreamina-seedance-2-0-260128",
+                "content": [
+                    {"type": "text", "text": "secret log prompt"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://cdn.example.com/ref.png?token=sk-should-not-persist"
+                        },
+                        "role": "reference_image",
+                    },
+                ],
+                "resolution": "480p",
+                "ratio": "16:9",
+                "duration": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        db = self.server.get_db()
+        row = db.execute(
+            "SELECT * FROM request_logs WHERE user_id=? AND action=?",
+            ("u_log_owner", "video_create_success"),
+        ).fetchone()
+        db.close()
+        self.assertIsNotNone(row)
+        self.assertNotIn("sk-should-not-persist", row["request_payload"])
+        self.assertNotIn("cdn.example.com", row["request_payload"])
+        self.assertIn("<redacted-url>", row["request_payload"])
+
     def test_fastapi_create_upstream_failure_writes_request_log(self):
         self.fake_http.post_response = FakeResponse(
             status_code=400,
