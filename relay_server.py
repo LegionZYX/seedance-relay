@@ -53,7 +53,7 @@ from fastapi import (
     File, Form, UploadFile, status,
 )
 from fastapi.responses import (
-    StreamingResponse, JSONResponse, FileResponse, RedirectResponse,
+    StreamingResponse, JSONResponse, FileResponse, RedirectResponse, PlainTextResponse,
 )
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, EmailStr
@@ -6541,4 +6541,5 @@ async def serve_api_docs():
     docs = Path(__file__).parent / "API_DOCS.md"
     if not docs.exists():
         return JSONResponse({"error": "docs not deployed"}, status_code=404)
-    return FileResponse(docs, media_type="text/markdown; charset=utf-8")
+    text = docs.read_text(encoding="utf-8").replace("https://seedance3.eu", PUBLIC_BASE_URL)
+    return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
