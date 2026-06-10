@@ -277,6 +277,19 @@ curl https://seedance3.eu/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
 
 正常情况下，`Range` 请求会返回 `206 Partial Content`、`Content-Range`、`Content-Length` 和视频 `Content-Type`。
 
+生成成功后，Relay 会返回内容保存倒计时字段：
+
+```json
+{
+  "content_expires_at": 1760000000,
+  "content_retention_seconds": 172800,
+  "content_seconds_remaining": 86400,
+  "content_expired": false
+}
+```
+
+视频文件默认保存 2 天。请在倒计时结束前下载；过期后内容接口会返回 `video_expired`，需要重新生成。
+
 ## 9. 上传素材
 
 上传本地文件：

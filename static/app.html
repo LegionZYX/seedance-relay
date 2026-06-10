@@ -615,6 +615,18 @@
               预计 ${{ fmt(currentTask.estimated_cost_usd) }} / 已冻结 <b style="color:var(--text)">${{ fmt(currentTask.held_usd || currentTask.estimated_cost_usd) }}</b>
             </template>
           </div>
+          <el-alert
+            v-if="currentTask.status === 'succeeded' && currentTask.content_expires_at"
+            :type="contentExpired(currentTask) ? 'warning' : 'info'"
+            :closable="false"
+            show-icon
+            style="margin-bottom:14px;"
+          >
+            <template #title>
+              视频默认保存 2 天，保存剩余：{{ contentCountdown(currentTask) }}
+            </template>
+            请在倒计时结束前下载；过期后需要重新生成。
+          </el-alert>
 
           <template v-if="currentTask.status === 'succeeded' && currentTask.video_url">
             <div style="background:#0f172a; border-radius:10px; overflow:hidden; max-width:720px; margin:0 auto;">
@@ -679,6 +691,9 @@
                 <div style="display:flex; justify-content:space-between; font-size:11.5px; color:var(--text-muted);">
                   <span>{{ t.model }} / {{ t.resolution || '-' }} / {{ t.duration || '-' }}s</span>
                   <span class="mono" style="font-weight:600; color:var(--text)">${{ fmt(t.actual_cost_usd ?? t.estimated_cost_usd) }}</span>
+                </div>
+                <div v-if="t.status === 'succeeded' && t.content_expires_at" style="margin-top:8px; font-size:11.5px; color:var(--text-muted);">
+                  保存剩余：<span class="mono" :style="{color: contentExpired(t) ? '#b91c1c' : 'var(--text)'}">{{ contentCountdown(t) }}</span>
                 </div>
               </div>
             </div>
@@ -1076,6 +1091,8 @@ const App = {
       pollTimer: null,
       estimateInfo: null,
       estimateTimer: null,
+      countdownNow: Math.floor(Date.now() / 1000),
+      countdownTimer: null,
 
       history: [],
       uploads: [],
@@ -1339,6 +1356,25 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     fmt(n, d=4) { return n == null ? "-" : Number(n).toFixed(d); },
     fmtUsd(n) { return n == null ? "$-" : "$" + Number(n).toFixed(4); },
     fmtTs(ts) { return ts ? new Date(ts*1000).toLocaleString("zh-CN", {hour12: false}) : "-"; },
+    contentSecondsRemaining(task) {
+      if (!task?.content_expires_at) return null;
+      return Math.max(0, Number(task.content_expires_at) - this.countdownNow);
+    },
+    contentExpired(task) {
+      const remaining = this.contentSecondsRemaining(task);
+      return remaining != null && remaining <= 0;
+    },
+    contentCountdown(task) {
+      const remaining = this.contentSecondsRemaining(task);
+      if (remaining == null) return "-";
+      if (remaining <= 0) return "已过期";
+      const days = Math.floor(remaining / 86400);
+      const hours = Math.floor((remaining % 86400) / 3600);
+      const minutes = Math.floor((remaining % 3600) / 60);
+      if (days > 0) return `${days}天 ${hours}小时`;
+      if (hours > 0) return `${hours}小时 ${minutes}分钟`;
+      return `${Math.max(1, minutes)}分钟`;
+    },
     formatBytes(n) {
       const size = Number(n || 0);
       if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(2) + " MB";
@@ -1617,7 +1653,13 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     },
   },
   async mounted() {
+    this.countdownTimer = setInterval(() => {
+      this.countdownNow = Math.floor(Date.now() / 1000);
+    }, 60000);
     await this.checkAuth();
+  },
+  beforeUnmount() {
+    if (this.countdownTimer) clearInterval(this.countdownTimer);
   },
 };
 

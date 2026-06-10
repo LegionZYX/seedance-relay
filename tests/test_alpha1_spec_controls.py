@@ -1468,6 +1468,88 @@ class Alpha1SpecControlTests(unittest.TestCase):
         self.assertEqual(row["cached_video_url"], "https://byteplus.example.test/fresh.mp4")
         self.assertGreater(row["cached_video_url_until"], int(time.time()))
 
+    def test_succeeded_task_response_includes_content_countdown(self):
+        user = self.create_user("content-countdown@example.test")
+        now = int(time.time())
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, status, settled, cached_video_url,
+                cached_video_url_until, local_video_expires_at, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_content_countdown",
+                user["id"],
+                "upstream-content-countdown",
+                "dreamina-seedance-2-0-260128",
+                "dreamina-seedance-2-0-260128",
+                "480p",
+                5,
+                "succeeded",
+                1,
+                "https://byteplus.example.test/video.mp4",
+                now + 3600,
+                now + 172800,
+                now,
+                now,
+            ),
+        )
+        db.close()
+
+        response = self.client.get(
+            "/v1/videos/vid_content_countdown",
+            headers=self.auth_headers(user["api_key"]),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["content_retention_seconds"], 172800)
+        self.assertGreater(body["content_seconds_remaining"], 172700)
+        self.assertFalse(body["content_expired"])
+
+    def test_expired_local_video_returns_clear_error_and_removes_file(self):
+        user = self.create_user("expired-local-video@example.test")
+        video_path = Path(self.tmp.name) / "videos" / "expired-local.mp4"
+        video_path.parent.mkdir(parents=True, exist_ok=True)
+        video_path.write_bytes(b"expired-video")
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, status, settled, cached_video_url,
+                cached_video_url_until, local_video_path, local_video_expires_at,
+                created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_expired_local",
+                user["id"],
+                "upstream-expired-local",
+                "dreamina-seedance-2-0-260128",
+                "dreamina-seedance-2-0-260128",
+                "480p",
+                5,
+                "succeeded",
+                1,
+                "https://byteplus.example.test/video.mp4",
+                int(time.time()) + 3600,
+                str(video_path),
+                int(time.time()) - 1,
+                1,
+                1,
+            ),
+        )
+        db.close()
+
+        response = self.client.get(
+            "/v1/videos/vid_expired_local/content",
+            headers=self.auth_headers(user["api_key"]),
+        )
+
+        self.assertEqual(response.status_code, 410, response.text)
+        self.assertEqual(response.json()["detail"]["error"]["code"], "video_expired")
+        self.assertFalse(video_path.exists())
+
     def test_video_content_proxy_rejects_range_when_upstream_returns_full_body(self):
         user = self.create_user("proxy-range-unsupported@example.test")
         db = self.server.get_db()

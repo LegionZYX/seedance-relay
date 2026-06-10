@@ -50,6 +50,14 @@ class StaticCustomerUiTests(unittest.TestCase):
         self.assertIn("this.me?.price_multiplier ?? 1.0", app_html)
         self.assertNotIn("this.me?.markup_pct", app_html)
 
+    def test_customer_ui_shows_video_retention_countdown(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        self.assertIn("视频默认保存 2 天", app_html)
+        self.assertIn("保存剩余", app_html)
+        self.assertIn("contentCountdown(task)", app_html)
+        self.assertIn("content_expires_at", app_html)
+
     def test_customer_ui_template_has_no_obvious_broken_attributes_or_tags(self):
         app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
 

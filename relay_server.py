@@ -102,6 +102,7 @@ DB_PATH        = os.getenv("DB_PATH", "/data/relay.sqlite")
 VIDEO_DIR      = Path(os.getenv("VIDEO_DIR", "/data/videos"))
 UPLOAD_DIR     = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
 VIDEO_PERSIST_MODE = os.getenv("VIDEO_PERSIST_MODE", "proxy_only").strip().lower() or "proxy_only"
+VIDEO_RETENTION_SECONDS = int(os.getenv("VIDEO_RETENTION_SECONDS", "172800"))
 UPLOAD_PUBLIC_BASE_URL = os.getenv("UPLOAD_PUBLIC_BASE_URL", "").strip().rstrip("/")
 PRICE_MULTIPLIER_BACKFILL_SETTING = "migration.price_multiplier_backfill.v1"
 ADMIN_KEY      = os.getenv("ADMIN_KEY", "").strip()
@@ -834,6 +835,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     cached_video_url         TEXT,
     cached_video_url_until   INTEGER,
     local_video_path         TEXT,
+    local_video_expires_at   INTEGER,
     prompt_text              TEXT,
     request_payload          TEXT,
     created_at               INTEGER NOT NULL,
@@ -1024,6 +1026,7 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN price_multiplier REAL",
     "ALTER TABLE tasks ADD COLUMN completion_tokens INTEGER",
     "ALTER TABLE tasks ADD COLUMN local_video_path TEXT",
+    "ALTER TABLE tasks ADD COLUMN local_video_expires_at INTEGER",
     "ALTER TABLE tasks ADD COLUMN prompt_text TEXT",
     "ALTER TABLE tasks ADD COLUMN request_payload TEXT",
     "ALTER TABLE uploads ADD COLUMN deleted_at INTEGER",
@@ -2661,6 +2664,7 @@ def _validate_customer_asset_access(content: list[ContentBlock], user_id: str) -
 
 
 def _format_task(t: dict, error: Optional[str] = None) -> dict:
+    now = int(time.time())
     out = {
         "id": t["id"],
         "model": t["client_model"],
@@ -2676,9 +2680,47 @@ def _format_task(t: dict, error: Optional[str] = None) -> dict:
     }
     if t.get("status") == "succeeded":
         out["video_url"] = f"{PUBLIC_BASE_URL}/v1/videos/{t['id']}/content"
+        content_expires_at = _task_content_expires_at(t)
+        if content_expires_at:
+            out["content_expires_at"] = content_expires_at
+            out["content_retention_seconds"] = VIDEO_RETENTION_SECONDS
+            out["content_seconds_remaining"] = max(0, content_expires_at - now)
+            out["content_expired"] = content_expires_at <= now
     if error:
         out["error"] = {"message": sanitize(error)}
     return out
+
+
+def _task_content_expires_at(t: dict) -> Optional[int]:
+    if t.get("status") != "succeeded":
+        return None
+    local_expires = t.get("local_video_expires_at")
+    if local_expires:
+        return int(local_expires)
+    if VIDEO_PERSIST_MODE != "proxy_only" and t.get("updated_at"):
+        return int(t["updated_at"]) + VIDEO_RETENTION_SECONDS
+    cached_until = t.get("cached_video_url_until")
+    return int(cached_until) if cached_until else None
+
+
+def _content_expired_response() -> HTTPException:
+    return HTTPException(410, {"error": {
+        "code": "video_expired",
+        "message": "video content has expired; generated videos are kept for 2 days",
+    }})
+
+
+def _clear_expired_local_video(db: sqlite3.Connection, task: dict) -> None:
+    local = task.get("local_video_path")
+    if local:
+        try:
+            Path(local).unlink(missing_ok=True)
+        except OSError:
+            pass
+    db.execute(
+        "UPDATE tasks SET local_video_path=NULL WHERE id=?",
+        (task["id"],),
+    )
 
 
 def _apply_terminal_task_refresh_once(
@@ -2875,9 +2917,10 @@ async def _persist_video(task_id: str, url: str) -> None:
                 async for chunk in r.aiter_bytes(64 * 1024):
                     f.write(chunk)
         tmp.rename(out)
+        expires_at = int(time.time()) + VIDEO_RETENTION_SECONDS
         db = get_db()
-        db.execute("UPDATE tasks SET local_video_path=? WHERE id=?",
-                   (str(out), task_id))
+        db.execute("UPDATE tasks SET local_video_path=?, local_video_expires_at=? WHERE id=?",
+                   (str(out), expires_at, task_id))
         print(f"Persisted video {task_id} -> {out} ({out.stat().st_size} bytes)")
     except Exception as e:
         print(f"Failed to persist video {task_id}: {_sanitize_log_text(str(e))}")
@@ -4775,6 +4818,10 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
     # 优先本地文件
     local = t.get("local_video_path")
     if local and Path(local).exists():
+        expires_at = _task_content_expires_at(t)
+        if expires_at and expires_at <= int(time.time()):
+            _clear_expired_local_video(db, t)
+            raise _content_expired_response()
         return FileResponse(
             local, media_type="video/mp4",
             headers={"Content-Disposition": f'inline; filename="{vid}.mp4"',
@@ -4791,6 +4838,9 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
     if not cached_url:
         raise HTTPException(404, {"error": {"code": "video_unavailable",
                                             "message": "video URL no longer available"}})
+    expires_at = _task_content_expires_at(t)
+    if expires_at and expires_at <= int(time.time()):
+        raise _content_expired_response()
 
     range_header = request.headers.get("range")
     upstream_headers_for_content = {"Range": range_header} if range_header else None
@@ -4867,6 +4917,9 @@ async def head_video_content(request: Request, vid: str, user=Depends(auth_user)
     if not cached_url:
         raise HTTPException(404, {"error": {"code": "video_unavailable",
                                             "message": "video URL no longer available"}})
+    expires_at = _task_content_expires_at(t)
+    if expires_at and expires_at <= int(time.time()):
+        raise _content_expired_response()
 
     range_header = request.headers.get("range") or "bytes=0-0"
     upstream_headers_for_content = {"Range": range_header}
@@ -6472,6 +6525,10 @@ async def admin_task_content(request: Request, task_id: str):
 
     local = task.get("local_video_path")
     if local and Path(local).exists():
+        expires_at = _task_content_expires_at(task)
+        if expires_at and expires_at <= int(time.time()):
+            _clear_expired_local_video(db, task)
+            raise _content_expired_response()
         return FileResponse(
             local,
             media_type="video/mp4",
@@ -6495,6 +6552,9 @@ async def admin_task_content(request: Request, task_id: str):
             "code": "video_unavailable",
             "message": "video URL no longer available",
         }})
+    expires_at = _task_content_expires_at(task)
+    if expires_at and expires_at <= int(time.time()):
+        raise _content_expired_response()
 
     range_header = request.headers.get("range")
     upstream_headers_for_content = {"Range": range_header} if range_header else None
