@@ -2869,6 +2869,8 @@ async def _persist_video(task_id: str, url: str) -> None:
     try:
         tmp = out.with_suffix(".mp4.partial")
         async with http.stream("GET", url, timeout=300) as r:
+            if r.status_code < 200 or r.status_code >= 300:
+                raise RuntimeError(f"download returned HTTP {r.status_code}")
             with open(tmp, "wb") as f:
                 async for chunk in r.aiter_bytes(64 * 1024):
                     f.write(chunk)
@@ -4824,6 +4826,8 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
         await upstream_cm.__aexit__(None, None, None)
         raise HTTPException(502, {"error": {"code": "proxy_range_unsupported",
                                             "message": "upstream video did not return partial content"}})
+    if VIDEO_PERSIST_MODE != "proxy_only" and cached_url:
+        asyncio.create_task(_persist_video(vid, cached_url))
     status_code = 206 if upstream.status_code == 206 else 200
     response_headers = {
         "Content-Disposition": f'inline; filename="{vid}.mp4"',
@@ -6532,6 +6536,8 @@ async def admin_task_content(request: Request, task_id: str):
             "code": "proxy_range_unsupported",
             "message": "upstream video did not return partial content",
         }})
+    if VIDEO_PERSIST_MODE != "proxy_only" and cached_url:
+        asyncio.create_task(_persist_video(task_id, cached_url))
     status_code = 206 if upstream.status_code == 206 else 200
     response_headers = {
         "Content-Disposition": f'inline; filename="{task_id}.mp4"',
