@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -1417,6 +1418,55 @@ class Alpha1SpecControlTests(unittest.TestCase):
         self.assertNotIn("location", response.headers)
         self.assertNotIn("byteplus", response.text.lower())
         self.assertNotIn("private.mp4", response.text)
+
+    def test_video_content_refreshes_expired_cached_url_before_proxying(self):
+        user = self.create_user("expired-content-url@example.test")
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, status, settled, cached_video_url,
+                cached_video_url_until, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_expired_content_url",
+                user["id"],
+                "upstream-expired-content-url",
+                "dreamina-seedance-2-0-260128",
+                "dreamina-seedance-2-0-260128",
+                "480p",
+                5,
+                "succeeded",
+                1,
+                "https://byteplus.example.test/expired.mp4",
+                1,
+                1,
+                1,
+            ),
+        )
+        db.close()
+        self.fake_http.get_payload = {
+            "id": "upstream-expired-content-url",
+            "status": "succeeded",
+            "content": {"video_url": "https://byteplus.example.test/fresh.mp4"},
+        }
+
+        response = self.client.get(
+            "/v1/videos/vid_expired_content_url/content",
+            headers={**self.auth_headers(user["api_key"]), "Range": "bytes=3-5"},
+        )
+
+        self.assertEqual(response.status_code, 206, response.text)
+        self.assertEqual(response.content, b"345")
+        self.assertEqual(self.fake_http.streams[-1]["url"], "https://byteplus.example.test/fresh.mp4")
+        db = self.server.get_db()
+        row = db.execute(
+            "SELECT cached_video_url, cached_video_url_until FROM tasks WHERE id=?",
+            ("vid_expired_content_url",),
+        ).fetchone()
+        db.close()
+        self.assertEqual(row["cached_video_url"], "https://byteplus.example.test/fresh.mp4")
+        self.assertGreater(row["cached_video_url_until"], int(time.time()))
 
     def test_video_content_proxy_rejects_range_when_upstream_returns_full_body(self):
         user = self.create_user("proxy-range-unsupported@example.test")

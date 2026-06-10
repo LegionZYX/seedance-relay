@@ -12,6 +12,51 @@ from fastapi.testclient import TestClient
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 
 
+class FakeResponse:
+    status_code = 200
+
+    def __init__(self, payload=None):
+        self._payload = payload or {}
+        self.headers = {}
+
+    def json(self):
+        return self._payload
+
+
+class FakeStreamResponse:
+    status_code = 206
+    headers = {
+        "content-type": "video/mp4",
+        "content-length": "3",
+        "content-range": "bytes 3-5/10",
+        "accept-ranges": "bytes",
+    }
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def aiter_bytes(self, chunk_size=65536):
+        yield b"345"
+
+
+class FakeHttp:
+    def __init__(self):
+        self.get_payload = None
+        self.gets = []
+        self.streams = []
+
+    async def get(self, url, headers, timeout):
+        self.gets.append({"url": url, "headers": headers, "timeout": timeout})
+        return FakeResponse(self.get_payload)
+
+    def stream(self, method, url, **kwargs):
+        self.streams.append({"method": method, "url": url, **kwargs})
+        return FakeStreamResponse()
+
+
 class AdminTaskVisibilityTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -28,6 +73,8 @@ class AdminTaskVisibilityTests(unittest.TestCase):
             sys.path.insert(0, str(PROJECT_DIR))
         sys.modules.pop("relay_server", None)
         self.server = importlib.import_module("relay_server")
+        self.fake_http = FakeHttp()
+        self.server.http = self.fake_http
         self.client = TestClient(self.server.app)
 
         self.user_id = "u_task_visibility"
@@ -162,6 +209,36 @@ class AdminTaskVisibilityTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"]["error"]["code"], "video_unavailable")
+
+    def test_admin_content_refreshes_expired_cached_url_before_proxying(self):
+        db = self.server.get_db()
+        db.execute(
+            "UPDATE tasks SET cached_video_url=?, cached_video_url_until=? WHERE id=?",
+            ("https://byteplus.example.test/expired.mp4", 1, "vid_admin_detail"),
+        )
+        db.close()
+        self.fake_http.get_payload = {
+            "id": "cgt-admin-detail",
+            "status": "succeeded",
+            "content": {"video_url": "https://byteplus.example.test/fresh-admin.mp4"},
+        }
+
+        response = self.client.get(
+            "/admin/tasks/vid_admin_detail/content",
+            headers={**self.admin_headers(), "Range": "bytes=3-5"},
+        )
+
+        self.assertEqual(response.status_code, 206, response.text)
+        self.assertEqual(response.content, b"345")
+        self.assertEqual(self.fake_http.streams[-1]["url"], "https://byteplus.example.test/fresh-admin.mp4")
+        db = self.server.get_db()
+        row = db.execute(
+            "SELECT cached_video_url, cached_video_url_until FROM tasks WHERE id=?",
+            ("vid_admin_detail",),
+        ).fetchone()
+        db.close()
+        self.assertEqual(row["cached_video_url"], "https://byteplus.example.test/fresh-admin.mp4")
+        self.assertGreater(row["cached_video_url_until"], int(time.time()))
 
 
 if __name__ == "__main__":

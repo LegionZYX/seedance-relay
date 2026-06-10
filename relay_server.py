@@ -2755,7 +2755,7 @@ def _cancel_task_once(
         raise
 
 
-async def _refresh_task(task_id: str, user_id: str) -> dict:
+async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url: bool = False) -> dict:
     db = get_db()
     t = db.execute("SELECT * FROM tasks WHERE id=? AND user_id=?",
                    (task_id, user_id)).fetchone()
@@ -2763,7 +2763,7 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
         raise HTTPException(404, {"error": {"code": "not_found",
                                             "message": "video not found"}})
     t = dict(t)
-    if t["settled"]:
+    if t["settled"] and not refresh_settled_video_url:
         return t
 
     # 用提交时使用的 BytePlus key 来查询(因为 task 是用那把 key 创建的)
@@ -4779,7 +4779,9 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
                      "Cache-Control": "private, max-age=86400"})
 
     # 没本地: 走 BytePlus 流
-    t = await _refresh_task(vid, user["id"])
+    now = int(time.time())
+    refresh_url = not t.get("cached_video_url") or int(t.get("cached_video_url_until") or 0) <= now + 60
+    t = await _refresh_task(vid, user["id"], refresh_settled_video_url=refresh_url)
     if t["status"] != "succeeded":
         raise HTTPException(409, {"error": {"code": "not_ready",
                                             "message": f"video status: {t['status']}"}})
@@ -4799,8 +4801,25 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
     upstream = await upstream_cm.__aenter__()
     if upstream.status_code < 200 or upstream.status_code >= 300:
         await upstream_cm.__aexit__(None, None, None)
-        raise HTTPException(502, {"error": {"code": "proxy_error",
-                                            "message": "upstream video unavailable"}})
+        refreshed = await _refresh_task(vid, user["id"], refresh_settled_video_url=True)
+        refreshed_url = refreshed.get("cached_video_url")
+        if refreshed_url and refreshed_url != cached_url:
+            upstream_cm = http.stream(
+                "GET",
+                refreshed_url,
+                headers=upstream_headers_for_content,
+                timeout=300,
+            )
+            upstream = await upstream_cm.__aenter__()
+            if 200 <= upstream.status_code < 300:
+                cached_url = refreshed_url
+            else:
+                await upstream_cm.__aexit__(None, None, None)
+                raise HTTPException(502, {"error": {"code": "proxy_error",
+                                                    "message": "upstream video unavailable"}})
+        else:
+            raise HTTPException(502, {"error": {"code": "proxy_error",
+                                                "message": "upstream video unavailable"}})
     if range_header and upstream.status_code != 206:
         await upstream_cm.__aexit__(None, None, None)
         raise HTTPException(502, {"error": {"code": "proxy_range_unsupported",
@@ -6463,6 +6482,9 @@ async def admin_task_content(request: Request, task_id: str):
             "code": "not_ready",
             "message": f"video status: {task.get('status')}",
         }})
+    now = int(time.time())
+    if not task.get("cached_video_url") or int(task.get("cached_video_url_until") or 0) <= now + 60:
+        task = await _refresh_task(task_id, task["user_id"], refresh_settled_video_url=True)
     cached_url = task.get("cached_video_url")
     if not cached_url:
         raise HTTPException(404, {"error": {
@@ -6481,10 +6503,29 @@ async def admin_task_content(request: Request, task_id: str):
     upstream = await upstream_cm.__aenter__()
     if upstream.status_code < 200 or upstream.status_code >= 300:
         await upstream_cm.__aexit__(None, None, None)
-        raise HTTPException(502, {"error": {
-            "code": "proxy_error",
-            "message": "upstream video unavailable",
-        }})
+        refreshed = await _refresh_task(task_id, task["user_id"], refresh_settled_video_url=True)
+        refreshed_url = refreshed.get("cached_video_url")
+        if refreshed_url and refreshed_url != cached_url:
+            upstream_cm = http.stream(
+                "GET",
+                refreshed_url,
+                headers=upstream_headers_for_content,
+                timeout=300,
+            )
+            upstream = await upstream_cm.__aenter__()
+            if 200 <= upstream.status_code < 300:
+                cached_url = refreshed_url
+            else:
+                await upstream_cm.__aexit__(None, None, None)
+                raise HTTPException(502, {"error": {
+                    "code": "proxy_error",
+                    "message": "upstream video unavailable",
+                }})
+        else:
+            raise HTTPException(502, {"error": {
+                "code": "proxy_error",
+                "message": "upstream video unavailable",
+            }})
     if range_header and upstream.status_code != 206:
         await upstream_cm.__aexit__(None, None, None)
         raise HTTPException(502, {"error": {
