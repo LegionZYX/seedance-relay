@@ -41,10 +41,11 @@ import io
 import zipfile
 import inspect
 import bcrypt
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional, AsyncIterator, List, Tuple, Callable
-from urllib.parse import urlparse, unquote, quote
+from urllib.parse import urlparse, unquote, quote, parse_qs
 from xml.sax.saxutils import escape as xml_escape
 
 import httpx
@@ -2697,10 +2698,57 @@ def _task_content_expires_at(t: dict) -> Optional[int]:
     local_expires = t.get("local_video_expires_at")
     if local_expires:
         return int(local_expires)
-    if VIDEO_PERSIST_MODE != "proxy_only" and t.get("updated_at"):
-        return int(t["updated_at"]) + VIDEO_RETENTION_SECONDS
+    signed_expires = _signed_video_url_expires_at(t.get("cached_video_url") or "")
+    if signed_expires:
+        return signed_expires
     cached_until = t.get("cached_video_url_until")
     return int(cached_until) if cached_until else None
+
+
+def _signed_video_url_expires_at(url: str) -> Optional[int]:
+    """Return the real expiry for signed Byte/TOS URLs when encoded in query params."""
+    if not url:
+        return None
+    try:
+        query = parse_qs(urlparse(url).query)
+        date_value = (query.get("X-Tos-Date") or query.get("x-tos-date") or [""])[0]
+        expires_value = (query.get("X-Tos-Expires") or query.get("x-tos-expires") or [""])[0]
+        if not date_value or not expires_value:
+            return None
+        issued = datetime.strptime(date_value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        return int(issued.timestamp()) + int(expires_value)
+    except Exception:
+        return None
+
+
+def _cache_until_for_video_url(url: str, now: Optional[int] = None) -> int:
+    signed_until = _signed_video_url_expires_at(url)
+    fallback_until = int(now or time.time()) + 23 * 3600
+    if signed_until:
+        return min(signed_until, fallback_until)
+    return fallback_until
+
+
+def _cached_video_url_stale(t: dict, *, now: Optional[int] = None) -> bool:
+    now = int(now or time.time())
+    signed_until = _signed_video_url_expires_at(t.get("cached_video_url") or "")
+    cached_until = int(t.get("cached_video_url_until") or 0)
+    effective_until = signed_until if signed_until else cached_until
+    return not t.get("cached_video_url") or effective_until <= now + 60
+
+
+def _schedule_video_persist_if_needed(task: dict) -> None:
+    if VIDEO_PERSIST_MODE == "proxy_only":
+        return
+    if task.get("status") != "succeeded" or task.get("local_video_path"):
+        return
+    cached_url = task.get("cached_video_url")
+    if not cached_url:
+        return
+    expires_at = _signed_video_url_expires_at(cached_url) or int(task.get("cached_video_url_until") or 0)
+    if expires_at and expires_at <= int(time.time()):
+        return
+    asyncio.create_task(_persist_video(str(task["id"]), cached_url))
 
 
 def _content_expired_response() -> HTTPException:
@@ -2847,7 +2895,7 @@ async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url
         url = (info.get("content") or {}).get("video_url")
         if url:
             cached_url = url
-            cached_until = now + 23 * 3600
+            cached_until = _cache_until_for_video_url(url, now)
 
     completion_tokens = (info.get("usage") or {}).get("completion_tokens")
     actual_cost_usd = t.get("actual_cost_usd")
@@ -2887,8 +2935,8 @@ async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url
             refund_usd=refund,
         )
         # 任务成功后异步把视频拉到本地
-        if new_status == "succeeded" and cached_url and VIDEO_PERSIST_MODE != "proxy_only":
-            asyncio.create_task(_persist_video(task_id, cached_url))
+        if new_status == "succeeded" and cached_url:
+            _schedule_video_persist_if_needed(t)
     else:
         db.execute("""UPDATE tasks SET status=?, cached_video_url=?,
                       cached_video_url_until=?, updated_at=? WHERE id=?""",
@@ -4802,6 +4850,9 @@ async def create_video(req: CreateVideoRequest, request: Request, user=Depends(a
 @app.get("/v1/videos/{vid}")
 async def get_video(vid: str, user=Depends(auth_user)):
     t = await _refresh_task(vid, user["id"])
+    if t.get("status") == "succeeded" and _cached_video_url_stale(t):
+        t = await _refresh_task(vid, user["id"], refresh_settled_video_url=True)
+    _schedule_video_persist_if_needed(t)
     return _format_task(t)
 
 
@@ -4829,7 +4880,7 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
 
     # 没本地: 走 BytePlus 流
     now = int(time.time())
-    refresh_url = not t.get("cached_video_url") or int(t.get("cached_video_url_until") or 0) <= now + 60
+    refresh_url = _cached_video_url_stale(t, now=now)
     t = await _refresh_task(vid, user["id"], refresh_settled_video_url=refresh_url)
     if t["status"] != "succeeded":
         raise HTTPException(409, {"error": {"code": "not_ready",
@@ -4877,7 +4928,7 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
         raise HTTPException(502, {"error": {"code": "proxy_range_unsupported",
                                             "message": "upstream video did not return partial content"}})
     if VIDEO_PERSIST_MODE != "proxy_only" and cached_url:
-        asyncio.create_task(_persist_video(vid, cached_url))
+        _schedule_video_persist_if_needed({**t, "cached_video_url": cached_url})
     status_code = 206 if upstream.status_code == 206 else 200
     response_headers = {
         "Content-Disposition": f'inline; filename="{vid}.mp4"',
@@ -4909,7 +4960,7 @@ async def head_video_content(request: Request, vid: str, user=Depends(auth_user)
         raise HTTPException(404, {"error": {"code": "not_found",
                                             "message": "video not found"}})
     t = dict(t)
-    t = await _refresh_task(vid, user["id"])
+    t = await _refresh_task(vid, user["id"], refresh_settled_video_url=_cached_video_url_stale(t))
     if t["status"] != "succeeded":
         raise HTTPException(409, {"error": {"code": "not_ready",
                                             "message": f"video status: {t['status']}"}})
@@ -6512,6 +6563,7 @@ async def admin_task_detail(task_id: str):
         raise HTTPException(404, {"error": {"code": "not_found", "message": "task not found"}})
     out = dict(row)
     out["admin_content_url"] = f"/admin/tasks/{task_id}/content"
+    _schedule_video_persist_if_needed(out)
     return out
 
 
@@ -6544,7 +6596,7 @@ async def admin_task_content(request: Request, task_id: str):
             "message": f"video status: {task.get('status')}",
         }})
     now = int(time.time())
-    if not task.get("cached_video_url") or int(task.get("cached_video_url_until") or 0) <= now + 60:
+    if _cached_video_url_stale(task, now=now):
         task = await _refresh_task(task_id, task["user_id"], refresh_settled_video_url=True)
     cached_url = task.get("cached_video_url")
     if not cached_url:
@@ -6597,7 +6649,7 @@ async def admin_task_content(request: Request, task_id: str):
             "message": "upstream video did not return partial content",
         }})
     if VIDEO_PERSIST_MODE != "proxy_only" and cached_url:
-        asyncio.create_task(_persist_video(task_id, cached_url))
+        _schedule_video_persist_if_needed({**task, "cached_video_url": cached_url})
     status_code = 206 if upstream.status_code == 206 else 200
     response_headers = {
         "Content-Disposition": f'inline; filename="{task_id}.mp4"',

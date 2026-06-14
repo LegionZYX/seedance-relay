@@ -1468,6 +1468,63 @@ class Alpha1SpecControlTests(unittest.TestCase):
         self.assertEqual(row["cached_video_url"], "https://byteplus.example.test/fresh.mp4")
         self.assertGreater(row["cached_video_url_until"], int(time.time()))
 
+    def test_signed_video_url_expiry_overrides_local_cache_guess(self):
+        signed_url = (
+            "https://ark-acg.example.test/video.mp4?"
+            "X-Tos-Date=20260611T173023Z&X-Tos-Expires=86400&X-Tos-Signature=secret"
+        )
+
+        expires_at = self.server._signed_video_url_expires_at(signed_url)
+
+        self.assertEqual(expires_at, 1781285423)
+        self.assertEqual(self.server._cache_until_for_video_url(signed_url, 1781199023), 1781281823)
+        self.assertEqual(self.server._cache_until_for_video_url(signed_url, 1781289000), 1781285423)
+
+    def test_video_content_refreshes_signed_expired_url_even_when_cached_until_future(self):
+        user = self.create_user("signed-expired-content-url@example.test")
+        expired_signed_url = (
+            "https://ark-acg.example.test/expired.mp4?"
+            "X-Tos-Date=20200101T000000Z&X-Tos-Expires=60&X-Tos-Signature=secret"
+        )
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, status, settled, cached_video_url,
+                cached_video_url_until, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_signed_expired_content_url",
+                user["id"],
+                "upstream-signed-expired-content-url",
+                "dreamina-seedance-2-0-260128",
+                "dreamina-seedance-2-0-260128",
+                "480p",
+                5,
+                "succeeded",
+                1,
+                expired_signed_url,
+                9999999999,
+                1,
+                1,
+            ),
+        )
+        db.close()
+        self.fake_http.get_payload = {
+            "id": "upstream-signed-expired-content-url",
+            "status": "succeeded",
+            "content": {"video_url": "https://byteplus.example.test/fresh.mp4"},
+        }
+
+        response = self.client.get(
+            "/v1/videos/vid_signed_expired_content_url/content",
+            headers={**self.auth_headers(user["api_key"]), "Range": "bytes=3-5"},
+        )
+
+        self.assertEqual(response.status_code, 206, response.text)
+        self.assertEqual(self.fake_http.gets[-1]["url"].split("/")[-1], "upstream-signed-expired-content-url")
+        self.assertEqual(self.fake_http.streams[-1]["url"], "https://byteplus.example.test/fresh.mp4")
+
     def test_succeeded_task_response_includes_content_countdown(self):
         user = self.create_user("content-countdown@example.test")
         now = int(time.time())
