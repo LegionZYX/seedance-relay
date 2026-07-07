@@ -153,6 +153,21 @@ class AdminTaskVisibilityTests(unittest.TestCase):
         self.assertEqual(body["completion_tokens"], 12345)
         self.assertEqual(body["admin_content_url"], "/admin/tasks/vid_admin_detail/content")
 
+    def test_admin_task_list_survives_invalid_utf8_prompt_text(self):
+        db = self.server.get_db()
+        db.execute(
+            "UPDATE tasks SET prompt_text=CAST(x'80FF' AS TEXT) WHERE id=?",
+            ("vid_admin_detail",),
+        )
+        db.close()
+
+        response = self.client.get("/admin/tasks?limit=5", headers=self.admin_headers())
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["data"][0]["id"], "vid_admin_detail")
+        self.assertIn("\ufffd", body["data"][0]["prompt_text"])
+
     def test_customer_cannot_read_admin_task_detail(self):
         response = self.client.get("/admin/tasks/vid_admin_detail", headers=self.auth_headers())
 
