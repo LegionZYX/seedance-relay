@@ -58,6 +58,16 @@ class StaticCustomerUiTests(unittest.TestCase):
         self.assertIn("contentCountdown(task)", app_html)
         self.assertIn("content_expires_at", app_html)
 
+    def test_history_cards_open_task_detail_without_switching_to_generate_form(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        self.assertIn('@click="openHistoryTask(t)"', app_html)
+        self.assertIn("taskDetailDialog", app_html)
+        self.assertIn("async openHistoryTask(task)", app_html)
+        self.assertIn("任务详情", app_html)
+        self.assertNotIn('@click="goToTask(t.id)"', app_html)
+        self.assertNotIn('this.switchTab("generate");\n      try {\n        const t = await this.api(`/v1/videos/${vid}`);', app_html)
+
     def test_customer_ui_template_has_no_obvious_broken_attributes_or_tags(self):
         app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
 

@@ -660,7 +660,7 @@
       <section v-if="tab === 'history'">
         <div class="page-header">
           <h1 class="page-title">我的视频</h1>
-          <p class="page-sub">最近的生成任务，点击视频可播放。</p>
+          <p class="page-sub">最近的生成任务，点击卡片查看状态、播放或下载。</p>
         </div>
         <div v-loading="loading.history" style="min-height:200px">
           <div v-if="!loading.history && history.length === 0" class="card card-pad" style="text-align:center; padding:60px 24px;">
@@ -669,7 +669,7 @@
             <el-button type="primary" @click="switchTab('generate')" style="margin-top:8px"><el-icon><Plus /></el-icon> 新建视频</el-button>
           </div>
           <div v-else class="video-grid">
-            <div v-for="t in history" :key="t.id" class="video-card" @click="goToTask(t.id)">
+            <div v-for="t in history" :key="t.id" class="video-card" @click="openHistoryTask(t)">
               <div class="video-thumb">
                 <video v-if="t.status === 'succeeded' && t.video_url" :src="t.video_url" preload="metadata"></video>
                 <div v-else class="video-placeholder">
@@ -1035,6 +1035,65 @@ curl https://seedance3.eu/v1/videos \
       </section>
 
     </main>
+
+    <el-dialog
+      v-model="taskDetailDialog"
+      title="任务详情"
+      width="760px"
+      destroy-on-close
+      @closed="closeHistoryTaskDetail"
+    >
+      <div v-if="historyTask">
+        <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:14px;">
+          <div style="min-width:0;">
+            <div class="mono" style="font-weight:700; font-size:16px;">{{ historyTask.id }}</div>
+            <div style="font-size:13px; color:var(--text-muted); margin-top:2px;">
+              {{ historyTask.model }} / {{ historyTask.resolution || '-' }} / {{ historyTask.duration || '-' }}s / {{ fmtTs(historyTask.created_at) }}
+            </div>
+          </div>
+          <el-tag :type="statusType(historyTask.status)" effect="light">{{ statusLabel(historyTask.status) }}</el-tag>
+        </div>
+
+        <div v-if="historyTask.prompt_text" style="background:#f8fafc; border:1px solid var(--border); border-radius:8px; padding:12px 16px; font-style:italic; color:#334155; margin-bottom:14px; font-size:13px;">
+          "{{ historyTask.prompt_text }}"
+        </div>
+
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">
+          <template v-if="historyTask.actual_cost_usd != null">
+            本次花费 <b style="color:var(--text)">${{ fmt(historyTask.actual_cost_usd) }}</b>
+          </template>
+          <template v-else>
+            预计 ${{ fmt(historyTask.estimated_cost_usd) }} / 已冻结 <b style="color:var(--text)">${{ fmt(historyTask.held_usd || historyTask.estimated_cost_usd) }}</b>
+          </template>
+        </div>
+
+        <template v-if="historyTask.status === 'succeeded' && historyTask.video_url">
+          <div style="background:#0f172a; border-radius:10px; overflow:hidden;">
+            <video :src="historyTask.video_url" controls autoplay playsinline style="width:100%; display:block;"></video>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+            <el-button tag="a" :href="historyTask.video_url" :download="historyTask.id + '.mp4'">
+              <el-icon style="margin-right:6px"><Download /></el-icon>下载视频
+            </el-button>
+          </div>
+        </template>
+        <template v-else-if="['failed','cancelled','expired'].includes(historyTask.status)">
+          <el-alert type="error" :closable="false" show-icon>
+            <template #title>任务 {{ statusLabel(historyTask.status) }}</template>
+            {{ historyTask.error?.message || '请稍后重试，或联系管理员查看失败原因。' }}
+          </el-alert>
+        </template>
+        <template v-else>
+          <div class="running-banner">
+            <div class="pulse"></div>
+            <div>
+              <div style="font-weight:600">{{ historyTask.status === 'queued' ? '排队中' : '正在生成' }}</div>
+              <div style="font-size:12.5px; color:var(--text-muted)">详情会自动刷新，不会跳回新建视频页面。</div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </el-dialog>
   </div>
 
 </div>
@@ -1089,6 +1148,9 @@ const App = {
 
       currentTask: null,
       pollTimer: null,
+      historyTask: null,
+      historyPollTimer: null,
+      taskDetailDialog: false,
       estimateInfo: null,
       estimateTimer: null,
       countdownNow: Math.floor(Date.now() / 1000),
@@ -1643,13 +1705,40 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.history = false; }
     },
-    async goToTask(vid) {
-      this.switchTab("generate");
+    updateHistoryTask(task) {
+      if (!task?.id) return;
+      this.history = this.history.map(item => item.id === task.id ? { ...item, ...task } : item);
+    },
+    async openHistoryTask(task) {
+      if (!task?.id) return;
+      if (this.historyPollTimer) clearTimeout(this.historyPollTimer);
+      this.historyTask = task;
+      this.taskDetailDialog = true;
       try {
-        const t = await this.api(`/v1/videos/${vid}`);
-        this.currentTask = t;
-        if (!["succeeded","failed","cancelled","expired"].includes(t.status)) this.pollTask();
+        const t = await this.api(`/v1/videos/${task.id}`);
+        this.historyTask = t;
+        this.updateHistoryTask(t);
+        if (!["succeeded","failed","cancelled","expired"].includes(t.status)) this.pollHistoryTask();
       } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+    async pollHistoryTask() {
+      if (this.historyPollTimer) clearTimeout(this.historyPollTimer);
+      if (!this.taskDetailDialog || !this.historyTask?.id) return;
+      try {
+        const t = await this.api(`/v1/videos/${this.historyTask.id}`);
+        this.historyTask = t;
+        this.updateHistoryTask(t);
+        if (["succeeded","failed","cancelled","expired"].includes(t.status)) {
+          this.refreshMe();
+          if (t.status === "succeeded") ElMessage.success("视频已生成");
+          return;
+        }
+      } catch (e) { console.warn(e); }
+      this.historyPollTimer = setTimeout(() => this.pollHistoryTask(), 8000);
+    },
+    closeHistoryTaskDetail() {
+      if (this.historyPollTimer) clearTimeout(this.historyPollTimer);
+      this.historyPollTimer = null;
     },
   },
   async mounted() {
@@ -1660,6 +1749,8 @@ curl -X POST https://seedance3.eu/v1/uploads \\
   },
   beforeUnmount() {
     if (this.countdownTimer) clearInterval(this.countdownTimer);
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.historyPollTimer) clearTimeout(this.historyPollTimer);
   },
 };
 
