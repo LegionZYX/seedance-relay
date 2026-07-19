@@ -162,6 +162,7 @@ BYTEPLUS_ENDPOINT_MODEL_VERSION = os.getenv("BYTEPLUS_ENDPOINT_MODEL_VERSION", "
 BYTEPLUS_ENDPOINT_MODERATION_STRATEGY = os.getenv("BYTEPLUS_ENDPOINT_MODERATION_STRATEGY", "Skip").strip() or "Skip"
 BYTEPLUS_ENDPOINT_WAIT_SECONDS = float(os.getenv("BYTEPLUS_ENDPOINT_WAIT_SECONDS", "600"))
 BYTEPLUS_ENDPOINT_WAIT_INTERVAL = float(os.getenv("BYTEPLUS_ENDPOINT_WAIT_INTERVAL", "5"))
+BYTEPLUS_ENDPOINT_KEY_ROTATE_WINDOW_SECONDS = int(os.getenv("BYTEPLUS_ENDPOINT_KEY_ROTATE_WINDOW_SECONDS", "86400"))
 FACE_ASSET_ENFORCE = os.getenv("FACE_ASSET_ENFORCE", "false").strip().lower() in (
     "1", "true", "yes", "on"
 )
@@ -1545,6 +1546,8 @@ class RuntimePrepareVideoContentRequest(BaseModel):
     user_id: str
     content: List[ContentBlock]
     extra_body: Optional[dict[str, Any]] = None
+    client_model: Optional[str] = None
+    upstream_model: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -1912,6 +1915,164 @@ def _truthy_note_value(value: Any) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _endpoint_key_rotation_enabled(note: dict[str, Any]) -> bool:
+    value = note.get("byteplus_endpoint_key_rotation_enabled")
+    if value is None:
+        return True
+    return _truthy_note_value(value)
+
+
+def _selected_endpoint_key_expires_at(
+    user: dict,
+    client_model: str,
+    real_model: str,
+    endpoint_id: str,
+) -> Optional[int]:
+    key_map = _user_byteplus_endpoint_key_map(user)
+    for candidate in (client_model, real_model, endpoint_id):
+        entry = key_map.get(candidate)
+        if entry and entry.get("api_key"):
+            return _int_or_none(entry.get("expires_at"))
+    for entry in key_map.values():
+        if endpoint_id and str(entry.get("endpoint_id") or "").strip() == endpoint_id:
+            expires_at = _int_or_none(entry.get("expires_at"))
+            if expires_at is not None:
+                return expires_at
+    return _int_or_none(_user_note_json(user).get("byteplus_endpoint_api_key_expires_at"))
+
+
+def _runtime_upstream_for_user(
+    user: dict,
+    client_model: str,
+    real_model: str,
+) -> dict[str, Any]:
+    endpoint_id = _user_byteplus_endpoint_id_for_model(user, client_model, real_model)
+    endpoint_key = _endpoint_api_key_for_selected_model(user, client_model, real_model, endpoint_id)
+    user_bp_key = endpoint_key or str(user.get("byteplus_api_key") or "").strip()
+    bp_key = user_bp_key or UPSTREAM_API_KEY
+    if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
+        if endpoint_id and user_bp_key:
+            bp_key = user_bp_key
+        else:
+            bp_key = UPSTREAM_ENDPOINT_API_KEY or ""
+    upstream_model = endpoint_id or _upstream_model_for_request(real_model, bp_key)
+    return {
+        "upstream_model": upstream_model,
+        "upstream_api_key": bp_key,
+        "endpoint_id": endpoint_id,
+        "endpoint_api_key_expires_at": _selected_endpoint_key_expires_at(
+            user, client_model, real_model, endpoint_id
+        ),
+    }
+
+
+def _refresh_user_endpoint_key_if_needed(
+    user: dict,
+    client_model: str,
+    real_model: str,
+) -> dict:
+    note = _user_note_json(user)
+    endpoint_map = _user_byteplus_endpoint_map(user)
+    endpoint_id = _user_byteplus_endpoint_id_for_model(user, client_model, real_model)
+    if not endpoint_id or not _endpoint_key_rotation_enabled(note):
+        return user
+
+    expires_at = _selected_endpoint_key_expires_at(user, client_model, real_model, endpoint_id)
+    has_key = bool(
+        _endpoint_api_key_for_selected_model(user, client_model, real_model, endpoint_id)
+        or str(user.get("byteplus_api_key") or "").strip()
+    )
+    now = int(time.time())
+    if has_key and expires_at is None:
+        return user
+    if has_key and expires_at and expires_at > now + BYTEPLUS_ENDPOINT_KEY_ROTATE_WINDOW_SECONDS:
+        return user
+
+    endpoint_ids = list(dict.fromkeys(endpoint_map.values())) if endpoint_map else [endpoint_id]
+    endpoint_target: str | list[str] = endpoint_ids if len(endpoint_ids) > 1 else endpoint_ids[0]
+    try:
+        issued = _get_endpoint_api_key(endpoint_target, 2592000)
+    except Exception as exc:
+        message = sanitize(str(exc))[:1000]
+        failed_note = _merge_user_note_json(
+            user.get("note"),
+            {
+                "byteplus_endpoint_key_rotation_error": message,
+                "byteplus_endpoint_key_next_rotate_at": now + 300,
+            },
+        )
+        db = get_db()
+        try:
+            db.execute("UPDATE users SET note=? WHERE id=?", (failed_note, user["id"]))
+        finally:
+            db.close()
+        _audit_event(
+            "runtime_endpoint_api_key_rotation_failed",
+            actor_user_id=None,
+            actor_type="runtime",
+            target_type="user",
+            target_id=user["id"],
+            metadata={
+                "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+                "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+                "error": message,
+            },
+        )
+        raise HTTPException(502, {"error": {
+            "code": "endpoint_key_rotation_failed",
+            "message": "Endpoint API key refresh failed; contact administrator",
+        }}) from exc
+
+    note_updates: dict[str, Any] = {
+        "upstream_mode": note.get("upstream_mode") or "auto_dedicated",
+        "byteplus_endpoint_api_key_expires_at": int(issued["expires_at"]),
+        "byteplus_endpoint_key_last_rotated_at": now,
+        "byteplus_endpoint_key_next_rotate_at": max(
+            now,
+            int(issued["expires_at"]) - BYTEPLUS_ENDPOINT_KEY_ROTATE_WINDOW_SECONDS,
+        ),
+        "byteplus_endpoint_key_rotation_error": "",
+        "byteplus_endpoint_key_rotation_enabled": True,
+        "byteplus_endpoint_key_mode": issued.get("key_mode") or "multi",
+    }
+    endpoint_key_map = _model_endpoint_key_map_from_issued(issued, endpoint_map)
+    if endpoint_key_map:
+        note_updates["byteplus_endpoint_key_map"] = endpoint_key_map
+    updated_note = _merge_user_note_json(user.get("note"), note_updates)
+    db = get_db()
+    try:
+        db.execute(
+            "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+            (issued["api_key"], updated_note, user["id"]),
+        )
+        updated = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+    finally:
+        db.close()
+    _audit_event(
+        "runtime_rotated_endpoint_api_key",
+        actor_user_id=None,
+        actor_type="runtime",
+        target_type="user",
+        target_id=user["id"],
+        metadata={
+            "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+            "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+            "expires_at": int(issued["expires_at"]),
+            "secret_changed": True,
+        },
+    )
+    return dict(updated) if updated else user
 
 
 def _user_upstream_response(user: dict | sqlite3.Row) -> dict:
@@ -3708,7 +3869,23 @@ async def internal_prepare_video_content(
     content = _validate_content_blocks(content, required=True)
     _validate_customer_asset_access(content, req.user_id)
     _validate_face_asset_allowlist(content)
-    return {"content": [block.model_dump(exclude_none=True) for block in content]}
+    response: dict[str, Any] = {
+        "content": [block.model_dump(exclude_none=True) for block in content],
+    }
+    client_model = (req.client_model or "").strip()
+    real_model = (req.upstream_model or MODEL_MAP.get(client_model, client_model)).strip()
+    if client_model and real_model:
+        user_dict = _refresh_user_endpoint_key_if_needed(dict(user), client_model, real_model)
+        upstream = _runtime_upstream_for_user(user_dict, client_model, real_model)
+        if upstream.get("upstream_model"):
+            response["upstream_model"] = upstream["upstream_model"]
+        if upstream.get("upstream_api_key"):
+            response["upstream_api_key"] = upstream["upstream_api_key"]
+        if upstream.get("endpoint_id"):
+            response["endpoint_id"] = upstream["endpoint_id"]
+        if upstream.get("endpoint_api_key_expires_at"):
+            response["endpoint_api_key_expires_at"] = upstream["endpoint_api_key_expires_at"]
+    return response
 
 
 def _asset_delete_request_response(row: sqlite3.Row | dict) -> dict:

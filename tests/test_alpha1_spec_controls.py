@@ -1814,6 +1814,59 @@ class Alpha1SpecControlTests(unittest.TestCase):
         self.assertEqual(upload["asset_url"], "asset://asset-image")
         self.assertEqual(upload["face_asset_whitelisted"], 1)
 
+    def test_internal_runtime_prepare_refreshes_expiring_endpoint_key(self):
+        user = self.create_user("runtime-refresh-key@example.test")
+        now = int(time.time())
+        note = {
+            "upstream_mode": "auto_dedicated",
+            "byteplus_endpoint_map": {
+                "dreamina-seedance-2-0-260128": "ep-standard",
+                "seedance-1-5-pro-251215": "ep-seedance15",
+            },
+            "byteplus_endpoint_key_rotation_enabled": True,
+            "byteplus_endpoint_api_key_expires_at": now - 60,
+        }
+        db = self.server.get_db()
+        db.execute(
+            "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+            ("expired-endpoint-key", json.dumps(note), user["id"]),
+        )
+        db.close()
+
+        calls = []
+
+        def fake_get_endpoint_api_key(endpoint_ids, duration_seconds):
+            calls.append((endpoint_ids, duration_seconds))
+            return {"api_key": "fresh-endpoint-key", "expires_at": now + 2592000}
+
+        self.server._get_endpoint_api_key = fake_get_endpoint_api_key
+
+        response = self.client.post(
+            "/internal/runtime/prepare-video-content",
+            headers={"X-Runtime-Token": "runtime-internal-test"},
+            json={
+                "user_id": user["id"],
+                "client_model": "dreamina-seedance-2-0-260128",
+                "upstream_model": "dreamina-seedance-2-0-260128",
+                "content": [{"type": "text", "text": "A signed customer prompt passes through."}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["upstream_model"], "ep-standard")
+        self.assertEqual(body["upstream_api_key"], "fresh-endpoint-key")
+        self.assertEqual(set(calls[0][0]), {"ep-standard", "ep-seedance15"})
+        self.assertEqual(calls[0][1], 2592000)
+
+        db = self.server.get_db()
+        row = db.execute("SELECT byteplus_api_key, note FROM users WHERE id=?", (user["id"],)).fetchone()
+        db.close()
+        self.assertEqual(row["byteplus_api_key"], "fresh-endpoint-key")
+        stored_note = json.loads(row["note"])
+        self.assertEqual(stored_note["byteplus_endpoint_key_rotation_error"], "")
+        self.assertGreater(stored_note["byteplus_endpoint_key_next_rotate_at"], now)
+
     def test_internal_runtime_prepare_rejects_invalid_content_role(self):
         user = self.create_user("runtime-invalid-role@example.test")
 

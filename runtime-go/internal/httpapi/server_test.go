@@ -1278,7 +1278,13 @@ func TestCreateVideoUpstreamErrorReturnsSafeRequestIDWithoutSecretLeakage(t *tes
 	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-Id", "req_safe_go_123")
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte("blocked https://byteplus.example.test/private-video.mp4 ark-customer-secret-key"))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"code":    "AuthenticationError",
+				"type":    "Unauthorized",
+				"message": "blocked https://byteplus.example.test/private-video.mp4 ark-customer-secret-key",
+			},
+		})
 	})
 	defer server.Close()
 	defer db.Close()
@@ -1308,6 +1314,12 @@ func TestCreateVideoUpstreamErrorReturnsSafeRequestIDWithoutSecretLeakage(t *tes
 	raw := string(body)
 	if !strings.Contains(raw, `"request_id":"req_safe_go_123"`) {
 		t.Fatalf("body missing upstream request id: %s", body)
+	}
+	if !strings.Contains(raw, `"upstream_code":"AuthenticationError"`) {
+		t.Fatalf("body missing upstream code: %s", body)
+	}
+	if !strings.Contains(raw, `blocked \u003credacted-url\u003e \u003credacted-upstream-key\u003e`) {
+		t.Fatalf("body missing sanitized upstream message: %s", body)
 	}
 	for _, leaked := range []string{"byteplus.example.test", "private-video.mp4", "ark-customer-secret-key"} {
 		if strings.Contains(raw, leaked) {
@@ -1871,6 +1883,78 @@ func TestCreateVideoUsesEndpointKeyMapForSelectedModel(t *testing.T) {
 		t.Fatalf("authorization = %q", gotAuthorization)
 	}
 	if gotUpstreamPayload["model"] != "ep-fast" {
+		t.Fatalf("upstream model = %#v payload=%#v", gotUpstreamPayload["model"], gotUpstreamPayload)
+	}
+}
+
+func TestCreateVideoUsesResolvedControlPlaneEndpointKey(t *testing.T) {
+	var gotAuthorization string
+	var gotUpstreamPayload map[string]any
+	var gotPreparePayload map[string]any
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotUpstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-control-plane-key"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"content":          gotPreparePayload["content"],
+			"upstream_api_key": "fresh-control-plane-key",
+			"upstream_model":   "ep-control-plane-fresh",
+		})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-control-plane-key",
+		"u_control_plane_key",
+		`["dreamina-seedance-2-0-260128"]`,
+		10,
+		1.0,
+		"stale-db-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_control_plane_key", `{
+		"byteplus_endpoint_map":{
+			"dreamina-seedance-2-0-260128":"ep-stale-db"
+		}
+	}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"control plane key refresh"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-control-plane-key")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if gotPreparePayload["client_model"] != "dreamina-seedance-2-0-260128" {
+		t.Fatalf("prepare client_model = %#v", gotPreparePayload["client_model"])
+	}
+	if gotPreparePayload["upstream_model"] != "dreamina-seedance-2-0-260128" {
+		t.Fatalf("prepare upstream_model = %#v", gotPreparePayload["upstream_model"])
+	}
+	if gotAuthorization != "Bearer fresh-control-plane-key" {
+		t.Fatalf("authorization = %q", gotAuthorization)
+	}
+	if gotUpstreamPayload["model"] != "ep-control-plane-fresh" {
 		t.Fatalf("upstream model = %#v payload=%#v", gotUpstreamPayload["model"], gotUpstreamPayload)
 	}
 }

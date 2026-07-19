@@ -437,12 +437,18 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 			reserved = false
 		}
 	}
-	preparedContent, ok := s.prepareVideoContent(w, r, user, req)
+	preparedContent, preparedUpstreamKey, preparedUpstreamModel, ok := s.prepareVideoContent(w, r, user, req, model.UpstreamID)
 	if !ok {
 		refundReserved()
 		return
 	}
 	req.Content = preparedContent
+	if strings.TrimSpace(preparedUpstreamKey) != "" {
+		upstreamKey = strings.TrimSpace(preparedUpstreamKey)
+	}
+	if strings.TrimSpace(preparedUpstreamModel) != "" {
+		upstreamModel = strings.TrimSpace(preparedUpstreamModel)
+	}
 	upstreamPayload := map[string]any{
 		"model":      upstreamModel,
 		"content":    req.Content,
@@ -490,12 +496,9 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 	defer upstreamResp.Body.Close()
 	if upstreamResp.StatusCode != http.StatusOK {
 		refundReserved()
-		extra := map[string]string{}
-		if requestID := upstreamRequestID(upstreamResp.Header); requestID != "" {
-			extra["request_id"] = requestID
-		}
-		s.logVideoCreate(r, user, req, "video_create_failed", http.StatusBadGateway, "upstream_error", "", extra["request_id"], string(payloadBytes))
-		writeJSON(w, http.StatusBadGateway, errorBodyWithMetadata("upstream_error", "upstream returned an error", extra))
+		extra, logCode := safeUpstreamErrorMetadata(upstreamResp)
+		s.logVideoCreate(r, user, req, "video_create_failed", http.StatusBadGateway, logCode, "", stringFromAny(extra["request_id"]), string(payloadBytes))
+		writeJSON(w, http.StatusBadGateway, errorBodyWithFields("upstream_error", "upstream returned an error", extra))
 		return
 	}
 	var upstreamBody struct {
@@ -584,22 +587,24 @@ func (s *Server) listVideos(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) prepareVideoContent(w http.ResponseWriter, r *http.Request, user *store.User, req createVideoRequest) ([]map[string]any, bool) {
+func (s *Server) prepareVideoContent(w http.ResponseWriter, r *http.Request, user *store.User, req createVideoRequest, upstreamModel string) ([]map[string]any, string, string, bool) {
 	if s.cfg.RuntimeInternalToken == "" {
 		if realPersonMode(req.ExtraBody) {
 			writeJSON(w, http.StatusConflict, errorBody("real_person_not_supported", "real_person_mode requires runtime control-plane delegation"))
-			return nil, false
+			return nil, "", "", false
 		}
-		return req.Content, true
+		return req.Content, "", "", true
 	}
 	payloadBytes, err := json.Marshal(map[string]any{
-		"user_id":    user.ID,
-		"content":    req.Content,
-		"extra_body": req.ExtraBody,
+		"user_id":        user.ID,
+		"content":        req.Content,
+		"extra_body":     req.ExtraBody,
+		"client_model":   req.Model,
+		"upstream_model": upstreamModel,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody("invalid_payload", "Invalid request payload"))
-		return nil, false
+		return nil, "", "", false
 	}
 	prepareReq, err := http.NewRequestWithContext(
 		r.Context(),
@@ -609,32 +614,36 @@ func (s *Server) prepareVideoContent(w http.ResponseWriter, r *http.Request, use
 	)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("prepare_error", "invalid control-plane URL"))
-		return nil, false
+		return nil, "", "", false
 	}
 	prepareReq.Header.Set("Content-Type", "application/json")
 	prepareReq.Header.Set("X-Runtime-Token", s.cfg.RuntimeInternalToken)
 	resp, err := s.client.Do(prepareReq)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, errorBody("prepare_error", "control-plane prepare failed"))
-		return nil, false
+		return nil, "", "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		writeJSON(w, resp.StatusCode, errorBody("prepare_error", "control-plane rejected video content"))
-		return nil, false
+		body, _ := io.ReadAll(resp.Body)
+		extra := safeControlPlaneErrorMetadata(body)
+		writeJSON(w, resp.StatusCode, errorBodyWithFields("prepare_error", "control-plane rejected video content", extra))
+		return nil, "", "", false
 	}
 	var prepared struct {
-		Content []map[string]any `json:"content"`
+		Content        []map[string]any `json:"content"`
+		UpstreamAPIKey string           `json:"upstream_api_key"`
+		UpstreamModel  string           `json:"upstream_model"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&prepared); err != nil {
 		writeJSON(w, http.StatusBadGateway, errorBody("prepare_error", "invalid control-plane prepare response"))
-		return nil, false
+		return nil, "", "", false
 	}
 	if len(prepared.Content) == 0 {
 		writeJSON(w, http.StatusBadGateway, errorBody("prepare_error", "control-plane returned empty content"))
-		return nil, false
+		return nil, "", "", false
 	}
-	return prepared.Content, true
+	return prepared.Content, prepared.UpstreamAPIKey, prepared.UpstreamModel, true
 }
 
 func (s *Server) getVideo(w http.ResponseWriter, r *http.Request) {
@@ -1073,6 +1082,77 @@ func upstreamRequestID(headers http.Header) string {
 		}
 	}
 	return ""
+}
+
+func safeUpstreamErrorMetadata(resp *http.Response) (map[string]any, string) {
+	extra := map[string]any{"upstream_status": resp.StatusCode}
+	if requestID := upstreamRequestID(resp.Header); requestID != "" {
+		extra["request_id"] = requestID
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	upstreamCode, upstreamType, upstreamMessage := parseNestedError(body)
+	if upstreamCode != "" {
+		extra["upstream_code"] = upstreamCode
+	}
+	if upstreamType != "" {
+		extra["upstream_type"] = upstreamType
+	}
+	if upstreamMessage != "" {
+		extra["upstream_message"] = upstreamMessage
+	}
+	logCode := "upstream_error"
+	if upstreamCode != "" {
+		logCode = "upstream_error:" + truncate(upstreamCode, 100)
+	}
+	return extra, logCode
+}
+
+func safeControlPlaneErrorMetadata(body []byte) map[string]any {
+	extra := map[string]any{}
+	code, typ, message := parseNestedError(body)
+	if code != "" {
+		extra["upstream_code"] = code
+	}
+	if typ != "" {
+		extra["upstream_type"] = typ
+	}
+	if message != "" {
+		extra["upstream_message"] = message
+	}
+	return extra
+}
+
+func parseNestedError(body []byte) (string, string, string) {
+	var decoded map[string]any
+	if len(body) == 0 || json.Unmarshal(body, &decoded) != nil {
+		return "", "", ""
+	}
+	errObj, _ := decoded["error"].(map[string]any)
+	if errObj == nil {
+		if detail, _ := decoded["detail"].(map[string]any); detail != nil {
+			errObj, _ = detail["error"].(map[string]any)
+		}
+	}
+	if errObj == nil {
+		return "", "", ""
+	}
+	code := safeMetadataString(errObj["code"], 120)
+	typ := safeMetadataString(errObj["type"], 120)
+	message := safeMetadataString(errObj["message"], 500)
+	return code, typ, message
+}
+
+func safeMetadataString(value any, limit int) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return truncate(sanitizeRequestLogString(strings.TrimSpace(text)), limit)
+}
+
+func stringFromAny(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func requestLogSecretKey(key string) bool {
