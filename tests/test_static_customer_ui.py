@@ -94,6 +94,53 @@ class StaticCustomerUiTests(unittest.TestCase):
             "apiJsonPreview",
             "videoRequestBody()",
             "addManualAsset()",
+            "normalizeAssetRef(value)",
+            "asset://${raw}",
+        ]:
+            self.assertIn(fragment, app_html)
+
+    def test_customer_ui_generation_form_is_model_capability_driven(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("el-radio-group v-model=\"form.resolution\"", app_html)
+        for fragment in [
+            "resolutionOptions",
+            "supportedResolutions()",
+            "supportedRatios()",
+            "durationRange()",
+            "normalizeModelParams()",
+            "supported_resolutions",
+            "supported_ratios",
+            "duration_seconds",
+            "480p 标清",
+            "720p 高清",
+            "1080p 全高清",
+            "16:9 横屏",
+            "9:16 竖屏",
+            "1:1 方形",
+        ]:
+            self.assertIn(fragment, app_html)
+
+    def test_customer_ui_creation_modes_drive_required_references_and_uploads(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        for fragment in [
+            'required_roles: ["first_frame"]',
+            'required_roles: ["first_frame", "last_frame"]',
+            'required_roles: ["reference_image"]',
+            'required_roles: ["reference_video"]',
+            'required_roles: ["visual_reference"]',
+            "generationValidationError(requirePrompt=true)",
+            "validateGenerationForm()",
+            "submitValidationMessage",
+            "上传首帧并加入",
+            "上传尾帧并加入",
+            "上传参考图并加入",
+            "上传视频并加入",
+            "上传音频并加入",
+            "handleSlotUploadFile($event, 'first_frame')",
+            "handleSlotUploadFile($event, 'reference_audio')",
+            "uploadFileForRole(file, role)",
         ]:
             self.assertIn(fragment, app_html)
 

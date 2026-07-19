@@ -227,6 +227,30 @@ POST /v1/videos
 | `watermark` | boolean | 否 | 是否添加官方水印，默认 `false` |
 | `extra_body` | object | 否 | 高级参数，普通集成可不传；仅在管理员确认账号开关后使用 |
 
+客户使用端会按 `/v1/models` 返回的能力动态展示参数：
+
+- `supported_resolutions` 决定分辨率下拉，例如 `480p 标清`、`720p 高清`、`1080p 全高清`。
+- `supported_ratios` 决定构图下拉，例如 `16:9 横屏`、`9:16 竖屏`、`1:1 方形`。
+- `duration_seconds.min/max` 决定时长输入范围。
+- 切换模型后，如果当前分辨率、构图或时长不被新模型支持，页面会自动回落到该模型支持的合法值。
+
+客户使用端的创作模式和 `content[] role` 对应关系：
+
+| 创作模式 | 页面必填素材 | 提交到 `content[]` 的 role |
+|---|---|---|
+| 文生视频 | 无，只需要 prompt | `text` |
+| 首帧图生视频 | 1 张首帧图 | `first_frame` |
+| 首尾帧动画 | 首帧图 + 尾帧图 | `first_frame`、`last_frame` |
+| 多参考图 | 至少 1 张参考图，最多 9 张 | `reference_image` |
+| 参考视频 | 至少 1 个参考视频，最多 3 个 | `reference_video` |
+| 混合参考/编辑 | 至少 1 个图片或视频素材；音频不能单独使用 | `reference_image`、`reference_video`、`reference_audio` |
+
+页面内添加素材有三种方式，最终都会生成同样的 `content[]`：
+
+- 在生成页直接上传并加入，页面调用 `POST /v1/uploads`，上传成功后自动放进当前槽位。
+- 从“我的素材库”下拉选择已有素材。
+- 直接粘贴 `asset-...` 或 `asset://asset-...`；裸 `asset-...` 会自动规范成 `asset://asset-...`。
+
 ### 6.1 `content[]` 内容块规则
 
 | 类型 | 写法 | 常用 `role` | 说明 |

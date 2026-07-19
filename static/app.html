@@ -263,6 +263,7 @@
   .slot-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
   .slot-title { font-weight: 800; font-size: 13.5px; }
   .slot-note { color: var(--text-muted); font-size: 12px; line-height: 1.55; margin-top: 3px; }
+  .slot-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
   .manual-asset-row { display: grid; grid-template-columns: minmax(0, 1fr) 160px auto; gap: 8px; align-items: center; margin-top: 10px; }
   .reference-list { display: grid; gap: 8px; margin-top: 10px; }
   .reference-item {
@@ -277,6 +278,8 @@
   }
   .reference-item .asset-preview { width: 54px; height: 38px; aspect-ratio: auto; border-radius: 7px; }
   .json-preview { margin-top: 14px; }
+  .param-hint { margin-top: 6px; font-size: 11.5px; color: var(--text-muted); line-height: 1.45; }
+  .hidden-file-input { display: none; }
   .file-picker {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     border: 1px dashed #cbd5e1; border-radius: 10px; padding: 14px 16px; background: #f8fafc;
@@ -500,22 +503,35 @@
             <div class="card card-pad" style="margin-bottom:20px">
               <div class="card-title"><el-icon><FolderOpened /></el-icon> 参考素材与 Asset ID</div>
               <div class="reference-section">
+                <el-alert
+                  v-if="generationValidationMessage"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                >
+                  {{ generationValidationMessage }}
+                </el-alert>
                 <div class="reference-slot">
                   <div class="slot-head">
                     <div>
                       <div class="slot-title">首帧 / 尾帧</div>
                       <div class="slot-note">首帧控制开场画面；尾帧可选，用来生成从 A 到 B 的过渡。</div>
                     </div>
-                    <el-button size="small" @click="switchTab('assets')"><el-icon><Upload /></el-icon> 上传素材</el-button>
+                    <div class="slot-actions">
+                      <input ref="slotUploadFirstFrame" class="hidden-file-input" type="file" accept="image/jpeg,image/png,image/webp" @change="handleSlotUploadFile($event, 'first_frame')" />
+                      <input ref="slotUploadLastFrame" class="hidden-file-input" type="file" accept="image/jpeg,image/png,image/webp" @change="handleSlotUploadFile($event, 'last_frame')" />
+                      <el-button size="small" :loading="slotUploadRole === 'first_frame'" @click="$refs.slotUploadFirstFrame.click()"><el-icon><Upload /></el-icon> 上传首帧并加入</el-button>
+                      <el-button size="small" :loading="slotUploadRole === 'last_frame'" @click="$refs.slotUploadLastFrame.click()">上传尾帧并加入</el-button>
+                    </div>
                   </div>
                   <el-row :gutter="10">
                     <el-col :xs="24" :sm="12">
-                      <el-select v-model="form.first_frame_id" placeholder="选择首帧图片" clearable filterable style="width:100%" @focus="loadUploads">
+                      <el-select :model-value="form.first_frame_id" placeholder="从素材库选择首帧图片" clearable filterable style="width:100%" @focus="loadUploads" @change="setFrameSelection('first_frame', $event)">
                         <el-option v-for="a in imageUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
                       </el-select>
                     </el-col>
                     <el-col :xs="24" :sm="12">
-                      <el-select v-model="form.last_frame_id" placeholder="选择尾帧图片（可选）" clearable filterable style="width:100%" @focus="loadUploads">
+                      <el-select :model-value="form.last_frame_id" placeholder="从素材库选择尾帧图片（可选）" clearable filterable style="width:100%" @focus="loadUploads" @change="setFrameSelection('last_frame', $event)">
                         <el-option v-for="a in imageUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
                       </el-select>
                     </el-col>
@@ -541,6 +557,14 @@
                     <div>
                       <div class="slot-title">多参考素材</div>
                       <div class="slot-note">参考图最多 9 张，参考视频最多 3 个，参考音频最多 3 个。数组顺序就是 prompt 里的 Image 1、Image 2。</div>
+                    </div>
+                    <div class="slot-actions">
+                      <input ref="slotUploadReferenceImage" class="hidden-file-input" type="file" accept="image/jpeg,image/png,image/webp" @change="handleSlotUploadFile($event, 'reference_image')" />
+                      <input ref="slotUploadReferenceVideo" class="hidden-file-input" type="file" accept="video/mp4,video/quicktime" @change="handleSlotUploadFile($event, 'reference_video')" />
+                      <input ref="slotUploadReferenceAudio" class="hidden-file-input" type="file" accept="audio/mpeg,audio/wav" @change="handleSlotUploadFile($event, 'reference_audio')" />
+                      <el-button size="small" :loading="slotUploadRole === 'reference_image'" @click="$refs.slotUploadReferenceImage.click()"><el-icon><Upload /></el-icon> 上传参考图并加入</el-button>
+                      <el-button size="small" :loading="slotUploadRole === 'reference_video'" @click="$refs.slotUploadReferenceVideo.click()">上传视频并加入</el-button>
+                      <el-button size="small" :loading="slotUploadRole === 'reference_audio'" @click="$refs.slotUploadReferenceAudio.click()">上传音频并加入</el-button>
                     </div>
                   </div>
                   <el-row :gutter="10">
@@ -620,28 +644,40 @@
                 <el-row :gutter="16">
                   <el-col :xs="24" :sm="8">
                     <el-form-item label="分辨率">
-                      <el-radio-group v-model="form.resolution" style="width:100%">
-                        <el-radio-button label="480p" />
-                        <el-radio-button label="720p" />
-                        <el-radio-button label="1080p" />
-                      </el-radio-group>
+                      <el-select v-model="form.resolution" style="width:100%" @change="scheduleEstimate">
+                        <el-option
+                          v-for="opt in resolutionOptions"
+                          :key="opt.value"
+                          :label="opt.label"
+                          :value="opt.value"
+                        />
+                      </el-select>
+                      <div class="param-hint">选项来自当前模型支持的 supported_resolutions。</div>
                     </el-form-item>
                   </el-col>
                   <el-col :xs="12" :sm="8">
                     <el-form-item label="画面比例">
-                      <el-select v-model="form.ratio" style="width:100%">
-                        <el-option label="16:9 横屏" value="16:9" />
-                        <el-option label="9:16 竖屏" value="9:16" />
-                        <el-option label="1:1 方形" value="1:1" />
-                        <el-option label="4:3" value="4:3" />
-                        <el-option label="3:4" value="3:4" />
-                        <el-option label="21:9 影院" value="21:9" />
+                      <el-select v-model="form.ratio" style="width:100%" @change="scheduleEstimate">
+                        <el-option
+                          v-for="opt in ratioOptions"
+                          :key="opt.value"
+                          :label="opt.label"
+                          :value="opt.value"
+                        />
                       </el-select>
+                      <div class="param-hint">只显示当前模型支持的 supported_ratios。</div>
                     </el-form-item>
                   </el-col>
                   <el-col :xs="12" :sm="8">
                     <el-form-item label="时长（秒）">
-                      <el-input-number v-model="form.duration" :min="2" :max="15" controls-position="right" style="width:100%" />
+                      <el-input-number
+                        v-model="form.duration"
+                        :min="durationRange.min"
+                        :max="durationRange.max"
+                        controls-position="right"
+                        style="width:100%"
+                      />
+                      <div class="param-hint">当前模型支持 {{ durationRange.min }}-{{ durationRange.max }} 秒。</div>
                     </el-form-item>
                   </el-col>
                 </el-row>
@@ -699,10 +735,13 @@
                   </el-alert>
                   <el-button
                     type="primary" size="large" style="width:100%"
-                    :disabled="!form.prompt.trim() || !enoughBalance"
+                    :disabled="!!submitValidationMessage || !enoughBalance"
                     :loading="loading.submit"
                     @click="submitGen"
                   ><el-icon><MagicStick /></el-icon> 提交生成</el-button>
+                  <p v-if="submitValidationMessage" style="font-size:11px; color:#b45309; text-align:center; margin:8px 0 0;">
+                    {{ submitValidationMessage }}
+                  </p>
                   <p style="font-size:11px; color:var(--text-muted); text-align:center; margin:10px 0 0;">
                     提交后从余额预扣，任务完成后自动结算。
                   </p>
@@ -1315,6 +1354,7 @@ const App = {
       uploads: [],
       uploadForm: { file: null, face_allowlist: false, face_asset_label: "" },
       lastUploadedAsset: null,
+      slotUploadRole: "",
       loading: { submit: false, history: false, clearHistory: false, assets: false, upload: false, docs: false, password: false },
       docsHtml: "",
       creationModes: [
@@ -1324,6 +1364,7 @@ const App = {
           note: "只用提示词生成，适合概念片、广告镜头和分镜草案。",
           placeholder: "A clean commercial video of a white electric scooter driving through a modern city street, morning light, smooth camera movement, realistic style",
           hint: "写清主体、动作、场景、镜头、光线和风格。",
+          required_roles: [],
           template: "Subject: ...\nAction: ...\nScene: ...\nCamera: smooth tracking shot, cinematic movement\nStyle: realistic, commercial, clean lighting\nConstraints: no text, no logo distortion"
         },
         {
@@ -1332,6 +1373,7 @@ const App = {
           note: "用一张图控制开场画面，让画面自然动起来。",
           placeholder: "Animate from Image 1. Keep the same subject identity, outfit, background, and composition. Gentle camera push-in, natural movement.",
           hint: "首帧图片放到 first_frame，不要只把 asset id 写进提示词。",
+          required_roles: ["first_frame"],
           template: "Animate from the first frame. Keep the same subject identity, outfit, background, and composition. Add natural movement, gentle camera push-in, cinematic lighting."
         },
         {
@@ -1340,6 +1382,7 @@ const App = {
           note: "指定开始图和结束图，生成中间过渡。",
           placeholder: "Create a smooth transition from the first frame to the last frame. Preserve identity and scene continuity.",
           hint: "首帧用 first_frame，尾帧用 last_frame，prompt 描述中间怎么变化。",
+          required_roles: ["first_frame", "last_frame"],
           template: "Create a smooth transition from the first frame to the last frame. Preserve subject identity, clothing, lighting continuity, and camera direction. Natural motion, no sudden cuts."
         },
         {
@@ -1348,6 +1391,7 @@ const App = {
           note: "用 Image 1 / Image 2 / Image 3 分别控制人物、产品、服装或场景。",
           placeholder: "Use Image 1 as the character reference, Image 2 as the product reference, and Image 3 as the scene style reference.",
           hint: "参考图数组顺序就是 Image 1、Image 2、Image 3。",
+          required_roles: ["reference_image"],
           template: "Use Image 1 as the main character reference, Image 2 as the product reference, and Image 3 as the scene/style reference. Keep character identity and product details consistent. Create a polished commercial video."
         },
         {
@@ -1356,6 +1400,7 @@ const App = {
           note: "参考动作节奏、镜头运动或姿态变化。",
           placeholder: "Use the reference video only for motion rhythm and camera movement. Generate a new scene with the selected subject/style.",
           hint: "参考视频放到 reference_video，prompt 说明参考哪一部分，不要复制 logo/文字。",
+          required_roles: ["reference_video"],
           template: "Use the reference video only for motion rhythm, body movement, and camera pacing. Do not copy logos, text, or background objects. Generate a new cinematic scene with the requested subject."
         },
         {
@@ -1364,6 +1409,7 @@ const App = {
           note: "图片、视频、音频一起参考，适合复用素材后再编辑。",
           placeholder: "Combine the image references for identity/product consistency and the video reference for motion rhythm. Refine the scene according to the prompt.",
           hint: "用于编辑复用时，保留需要固定的素材，prompt 写清要改变的部分。",
+          required_roles: ["visual_reference"],
           template: "Combine the image references for identity/product consistency and the video reference for motion rhythm. Change only the scene styling and camera mood. Preserve the selected subject and product details."
         },
       ],
@@ -1608,10 +1654,26 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     currentModel() { return this.models.find(m => m.id === this.form.model); },
     selectedUpload() { return this.uploads.find(a => a.id === this.form.upload_id); },
     currentCreationMode() { return this.creationModes.find(m => m.id === this.form.creation_mode) || this.creationModes[0]; },
+    supportedResolutions() { return this.currentModel?.supported_resolutions?.length ? this.currentModel.supported_resolutions : ["480p", "720p", "1080p"]; },
+    supportedRatios() { return this.currentModel?.supported_ratios?.length ? this.currentModel.supported_ratios : ["16:9", "9:16", "1:1"]; },
+    durationRange() {
+      const range = this.currentModel?.duration_seconds || {};
+      return { min: Number(range.min) || 2, max: Number(range.max) || 15 };
+    },
+    resolutionOptions() {
+      const labels = { "480p": "480p 标清", "720p": "720p 高清", "1080p": "1080p 全高清" };
+      return this.supportedResolutions.map(value => ({ value, label: labels[value] || value }));
+    },
+    ratioOptions() {
+      const labels = { "16:9": "16:9 横屏", "9:16": "9:16 竖屏", "1:1": "1:1 方形" };
+      return this.supportedRatios.map(value => ({ value, label: labels[value] || value }));
+    },
     imageUploads() { return this.uploads.filter(a => a.purpose === "image"); },
     videoUploads() { return this.uploads.filter(a => a.purpose === "video"); },
     audioUploads() { return this.uploads.filter(a => a.purpose === "audio"); },
     referenceItems() { return this.form.references || []; },
+    generationValidationMessage() { return this.generationValidationError(false); },
+    submitValidationMessage() { return this.generationValidationError(true); },
     apiJsonPreview() { return JSON.stringify(this.videoRequestBody(), null, 2); },
     estimatedTokens() {
       if (this.estimateInfo?.estimated_tokens) return this.estimateInfo.estimated_tokens;
@@ -1630,6 +1692,10 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     },
   },
   watch: {
+    "form.model"() {
+      this.normalizeModelParams();
+      this.scheduleEstimate();
+    },
     form: {
       handler() { this.scheduleEstimate(); },
       deep: true,
@@ -1817,6 +1883,19 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       const r = await this.api("/v1/models");
       this.models = r.data;
       if (!this.models.find(m => m.id === this.form.model)) this.form.model = this.models[0]?.id;
+      this.normalizeModelParams();
+    },
+    normalizeModelParams() {
+      if (!this.supportedResolutions.includes(this.form.resolution)) {
+        this.form.resolution = this.supportedResolutions.includes("720p") ? "720p" : this.supportedResolutions[0];
+      }
+      if (!this.supportedRatios.includes(this.form.ratio)) {
+        this.form.ratio = this.supportedRatios.includes("16:9") ? "16:9" : this.supportedRatios[0];
+      }
+      const min = this.durationRange.min;
+      const max = this.durationRange.max;
+      const duration = Number(this.form.duration) || min;
+      this.form.duration = Math.max(min, Math.min(max, duration));
     },
     switchTab(name) {
       this.tab = name;
@@ -1827,6 +1906,14 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     },
     selectCreationMode(modeId) {
       this.form.creation_mode = modeId;
+      const defaults = {
+        first_frame: "first_frame",
+        first_last: "first_frame",
+        multi_reference: "reference_image",
+        video_reference: "reference_video",
+        mixed: "reference_image",
+      };
+      this.manualAsset.role = defaults[modeId] || "reference_image";
       this.scheduleEstimate();
     },
     insertPromptTemplate(replace=false) {
@@ -1865,6 +1952,44 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       this.manualAsset.value = "";
       this.scheduleEstimate();
       ElMessage.success("Asset ID 已加入 content[]");
+    },
+    setFrameSelection(role, id) {
+      if (role === "first_frame") this.form.first_frame_id = id || "";
+      if (role === "last_frame") this.form.last_frame_id = id || "";
+      this.form.references = this.referenceItems.filter(item => item.role !== role);
+      this.scheduleEstimate();
+    },
+    roleCount(role) {
+      let count = this.referenceItems.filter(item => item.role === role).length;
+      if (role === "first_frame" && this.form.first_frame_id) count += 1;
+      if (role === "last_frame" && this.form.last_frame_id) count += 1;
+      return count;
+    },
+    hasVisualReference() {
+      return this.roleCount("first_frame") > 0 ||
+        this.roleCount("last_frame") > 0 ||
+        this.roleCount("reference_image") > 0 ||
+        this.roleCount("reference_video") > 0;
+    },
+    generationValidationError(requirePrompt=true) {
+      if (requirePrompt && !this.form.prompt.trim()) return "请输入提示词";
+      const mode = this.form.creation_mode;
+      if (mode === "first_frame" && this.roleCount("first_frame") < 1) return "首帧图生视频需要上传、选择或填写一个 first_frame 图片素材";
+      if (mode === "first_last" && this.roleCount("first_frame") < 1) return "首尾帧动画需要先提供 first_frame 首帧图片";
+      if (mode === "first_last" && this.roleCount("last_frame") < 1) return "首尾帧动画需要再提供 last_frame 尾帧图片";
+      if (mode === "multi_reference" && this.roleCount("reference_image") < 1) return "多参考图模式至少需要 1 张 reference_image";
+      if (mode === "video_reference" && this.roleCount("reference_video") < 1) return "参考视频模式至少需要 1 个 reference_video";
+      if (mode === "mixed" && !this.hasVisualReference()) return "混合参考/编辑至少需要 1 个图片或视频素材作为视觉目标";
+      if (this.roleCount("reference_audio") > 0 && !this.hasVisualReference()) return "reference_audio 不能单独使用，请同时加入参考图、首帧、尾帧或参考视频";
+      return "";
+    },
+    validateGenerationForm() {
+      const message = this.generationValidationError(true);
+      if (message) {
+        ElMessage.warning(message);
+        return false;
+      }
+      return true;
     },
     referenceLimitReached(role) {
       const limits = { reference_image: 9, reference_video: 3, reference_audio: 3 };
@@ -1921,6 +2046,10 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     },
     async loadEstimate() {
       if (this.view !== "app") return;
+      if (this.generationValidationError(false)) {
+        this.estimateInfo = null;
+        return;
+      }
       try {
         const body = this.videoRequestBody();
         this.estimateInfo = await this.api("/v1/videos/estimate", { method: "POST", body: JSON.stringify(body) });
@@ -1936,6 +2065,32 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     },
     handleAssetFile(e) {
       this.uploadForm.file = e.target.files?.[0] || null;
+    },
+    async uploadFileForRole(file, role) {
+      if (!file) { ElMessage.warning("请选择要上传的文件"); return; }
+      this.slotUploadRole = role;
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        const r = await fetch("/v1/uploads", { method: "POST", credentials: "include", body: fd });
+        let body; try { body = await r.json(); } catch { body = {}; }
+        if (!r.ok) throw { status: r.status, body };
+        this.uploads = [body, ...this.uploads.filter(a => a.id !== body.id)];
+        const added = this.useUploadInCurrentForm(body, true, role);
+        this.lastUploadedAsset = body;
+        this.scheduleEstimate();
+        if (added) ElMessage.success("上传成功，已加入当前生成请求");
+        else ElMessage.warning("上传成功，但文件类型不适合当前槽位，请从素材库选择正确用途");
+      } catch (e) {
+        ElMessage.error(this.errMsg(e));
+      } finally {
+        this.slotUploadRole = "";
+      }
+    },
+    handleSlotUploadFile(e, role) {
+      const file = e.target.files?.[0] || null;
+      if (e.target) e.target.value = "";
+      this.uploadFileForRole(file, role);
     },
     async uploadAsset() {
       if (!this.uploadForm.file) { ElMessage.warning("请选择要上传的文件"); return; }
@@ -1966,8 +2121,13 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       this.switchTab("generate");
     },
     useUploadInCurrentForm(asset, silent=false, forcedRole=null) {
-      if (!asset) return;
+      if (!asset) return false;
       const role = forcedRole || (asset.purpose === "image" ? "reference_image" : asset.purpose === "video" ? "reference_video" : "reference_audio");
+      const requiredPurpose = this.purposeForRole(role);
+      if (asset.purpose !== requiredPurpose) {
+        if (!silent) ElMessage.warning(`${role} 需要 ${requiredPurpose} 素材`);
+        return false;
+      }
       if (role === "first_frame") {
         this.form.first_frame_id = asset.id;
       } else if (role === "last_frame") {
@@ -1975,7 +2135,7 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       } else {
         if (this.referenceLimitReached(role)) {
           if (!silent) ElMessage.warning(this.referenceLimitMessage(role));
-          return;
+          return false;
         }
         if (!this.referenceItems.some(item => item.upload_id === asset.id && item.role === role)) {
           const item = this.referenceFromUpload(asset, role);
@@ -1983,6 +2143,7 @@ curl -X POST https://seedance3.eu/v1/uploads \\
         }
       }
       if (!silent) ElMessage.success(`${asset.original_filename || asset.id} 已加入 ${role}`);
+      return true;
     },
     assetInForm(asset) {
       if (!asset) return false;
@@ -2068,7 +2229,7 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       finally { this.loading.password = false; }
     },
     async submitGen() {
-      if (!this.form.prompt.trim()) { ElMessage.warning("请输入提示词"); return; }
+      if (!this.validateGenerationForm()) return;
       this.loading.submit = true;
       const body = this.videoRequestBody();
       try {
