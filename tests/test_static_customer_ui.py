@@ -79,6 +79,24 @@ class StaticCustomerUiTests(unittest.TestCase):
         self.assertIn("contentCountdown(historyTask)", app_html)
         self.assertIn("保留进行中的任务", app_html)
 
+    def test_customer_ui_supports_multi_reference_and_direct_asset_id(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        for fragment in [
+            "创作模式",
+            "首帧 / 尾帧",
+            "多参考素材",
+            "直接粘贴 asset id",
+            "asset://asset-...",
+            "reference_image: 9",
+            "reference_video: 3",
+            "reference_audio: 3",
+            "apiJsonPreview",
+            "videoRequestBody()",
+            "addManualAsset()",
+        ]:
+            self.assertIn(fragment, app_html)
+
     def test_customer_ui_template_has_no_obvious_broken_attributes_or_tags(self):
         app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
 

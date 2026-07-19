@@ -250,6 +250,20 @@ POST /v1/videos
 - 不要把 `asset://...` 写进 prompt 文本里；它应该放在 `content[]` 的 URL 字段里。
 - 客户只能使用自己账号上传/注册的素材；复制其他客户的 `asset://...` 会被拒绝。
 
+直接使用 Asset ID 的写法：
+
+```json
+{
+  "type": "image_url",
+  "image_url": {
+    "url": "asset://asset-20260719000123-abcd1"
+  },
+  "role": "reference_image"
+}
+```
+
+如果客户手上只有裸 ID，例如 `asset-20260719000123-abcd1`，请补成 `asset://asset-20260719000123-abcd1` 后放入 URL 字段。图片素材放进 `image_url.url`，视频素材放进 `video_url.url`，音频素材放进 `audio_url.url`。
+
 ### 6.2 文生视频示例
 
 ```bash

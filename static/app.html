@@ -239,6 +239,44 @@
   .upload-result-copy { margin-top: 4px; color: #166534; font-size: 13px; line-height: 1.6; }
   .asset-inline-preview { display: flex; gap: 12px; align-items: center; min-width: 0; }
   .asset-inline-preview .asset-preview { width: 88px; height: 58px; aspect-ratio: auto; border-radius: 8px; flex: 0 0 auto; }
+  .mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+  .mode-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: #fff;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .mode-card:hover { border-color: #c7d2fe; box-shadow: 0 6px 18px rgba(99,102,241,0.08); }
+  .mode-card.active { border-color: var(--brand); background: #eef2ff; box-shadow: 0 0 0 2px rgba(99,102,241,0.12); }
+  .mode-title { font-weight: 800; font-size: 13.5px; margin-bottom: 4px; }
+  .mode-copy { color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+  .prompt-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
+  .reference-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .reference-slot {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    background: #fbfdff;
+  }
+  .slot-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+  .slot-title { font-weight: 800; font-size: 13.5px; }
+  .slot-note { color: var(--text-muted); font-size: 12px; line-height: 1.55; margin-top: 3px; }
+  .manual-asset-row { display: grid; grid-template-columns: minmax(0, 1fr) 160px auto; gap: 8px; align-items: center; margin-top: 10px; }
+  .reference-list { display: grid; gap: 8px; margin-top: 10px; }
+  .reference-item {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
+  }
+  .reference-item .asset-preview { width: 54px; height: 38px; aspect-ratio: auto; border-radius: 7px; }
+  .json-preview { margin-top: 14px; }
   .file-picker {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     border: 1px dashed #cbd5e1; border-radius: 10px; padding: 14px 16px; background: #f8fafc;
@@ -258,6 +296,7 @@
   .method-card .code-block { border-radius: 0; box-shadow: none; margin: 0; max-height: 360px; }
   .method-foot { display: flex; justify-content: flex-end; padding: 10px 12px; border-top: 1px solid var(--border); background: #fff; }
   @media (max-width: 760px) { .guide-row { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) { .manual-asset-row { grid-template-columns: 1fr; } }
   @media (max-width: 760px) { .method-grid { grid-template-columns: 1fr; } }
 
   /* Account */
@@ -423,54 +462,136 @@
         <el-row :gutter="24">
           <el-col :xs="24" :lg="16">
             <div class="card card-pad" style="margin-bottom:20px">
-              <div class="card-title"><el-icon><EditPen /></el-icon> 提示词 (Prompt)</div>
-              <el-input
-                v-model="form.prompt"
-                type="textarea"
-                :rows="4"
-                resize="vertical"
-                placeholder="A red lobster wearing a tiny chef hat dances on a neon-lit Tokyo street, cinematic, 35mm film"
-              />
-              <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color:var(--text-muted);">
-                <span><el-icon :size="12"><InfoFilled /></el-icon> 建议英文，部分模型也支持中文/日语/西语等</span>
-                <span>{{ form.prompt.length }} 字</span>
+              <div class="card-title"><el-icon><MagicStick /></el-icon> 创作模式</div>
+              <div class="mode-grid">
+                <div
+                  v-for="mode in creationModes"
+                  :key="mode.id"
+                  :class="['mode-card', form.creation_mode === mode.id && 'active']"
+                  @click="selectCreationMode(mode.id)"
+                >
+                  <div class="mode-title">{{ mode.title }}</div>
+                  <div class="mode-copy">{{ mode.note }}</div>
+                </div>
               </div>
             </div>
 
             <div class="card card-pad" style="margin-bottom:20px">
-              <div class="card-title"><el-icon><FolderOpened /></el-icon> 参考素材</div>
-              <div style="display:flex; gap:10px; align-items:center;">
-                <el-select v-model="form.upload_id" placeholder="不使用素材" clearable filterable style="flex:1" @focus="loadUploads">
-                  <el-option label="不使用素材" value="" />
-                  <el-option
-                    v-for="a in uploads"
-                    :key="a.id"
-                    :label="`${a.original_filename || a.id} / ${purposeLabel(a.purpose)}${a.face_asset_whitelisted ? ' / 白名单' : ''}`"
-                    :value="a.id"
-                  />
-                </el-select>
-                <el-button @click="switchTab('assets')"><el-icon><Upload /></el-icon> 上传</el-button>
-              </div>
-              <div v-if="selectedUpload" style="display:flex; gap:12px; align-items:center; margin-top:12px; padding:10px; border:1px solid var(--border); border-radius:10px; background:#f8fafc;">
-                <div class="asset-preview" style="width:76px; height:52px; aspect-ratio:auto; border-radius:8px;">
-                  <img v-if="selectedUpload.purpose === 'image'" :src="selectedUpload.url" loading="lazy" />
-                  <video v-else-if="selectedUpload.purpose === 'video'" :src="selectedUpload.url" muted preload="metadata"></video>
-                  <div v-else class="asset-preview-fallback"><el-icon><Headset /></el-icon><span>音频素材</span></div>
+              <div class="card-title"><el-icon><EditPen /></el-icon> 提示词 (Prompt)</div>
+              <el-input
+                v-model="form.prompt"
+                type="textarea"
+                :rows="5"
+                resize="vertical"
+                :placeholder="currentCreationMode?.placeholder || 'A clean commercial video, cinematic, smooth camera movement'"
+              />
+              <div class="prompt-toolbar">
+                <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                  <el-button size="small" @click="insertPromptTemplate(false)"><el-icon><EditPen /></el-icon> 插入模板</el-button>
+                  <el-button size="small" @click="insertPromptTemplate(true)"><el-icon><Refresh /></el-icon> 替换为模板</el-button>
                 </div>
-                <div style="min-width:0; flex:1">
-                  <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ selectedUpload.original_filename || selectedUpload.id }}</div>
-                  <div style="font-size:12px; color:var(--text-muted); margin-top:3px;">
-                    {{ uploadUsageHint(selectedUpload) }}
+                <span style="font-size:12px; color:var(--text-muted);">{{ form.prompt.length }} 字</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color:var(--text-muted);">
+                <span><el-icon :size="12"><InfoFilled /></el-icon> {{ currentCreationMode?.hint || '建议写清主体、动作、镜头、光线、风格和不要改变的内容。' }}</span>
+              </div>
+            </div>
+
+            <div class="card card-pad" style="margin-bottom:20px">
+              <div class="card-title"><el-icon><FolderOpened /></el-icon> 参考素材与 Asset ID</div>
+              <div class="reference-section">
+                <div class="reference-slot">
+                  <div class="slot-head">
+                    <div>
+                      <div class="slot-title">首帧 / 尾帧</div>
+                      <div class="slot-note">首帧控制开场画面；尾帧可选，用来生成从 A 到 B 的过渡。</div>
+                    </div>
+                    <el-button size="small" @click="switchTab('assets')"><el-icon><Upload /></el-icon> 上传素材</el-button>
                   </div>
-                  <div class="asset-meta-row">
-                    <span class="asset-id-pill" :title="assetReferenceUrl(selectedUpload)">
-                      <span>引用</span><span class="mono">{{ assetReferenceUrl(selectedUpload) }}</span>
-                    </span>
-                    <div style="display:flex; gap:8px; flex-shrink:0;">
-                      <el-button size="small" @click="copyAssetUrl(selectedUpload)"><el-icon><CopyDocument /></el-icon> 复制 ID</el-button>
-                      <el-button size="small" @click="copyContentBlock(selectedUpload)"><el-icon><CopyDocument /></el-icon> 复制 content</el-button>
+                  <el-row :gutter="10">
+                    <el-col :xs="24" :sm="12">
+                      <el-select v-model="form.first_frame_id" placeholder="选择首帧图片" clearable filterable style="width:100%" @focus="loadUploads">
+                        <el-option v-for="a in imageUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                    <el-col :xs="24" :sm="12">
+                      <el-select v-model="form.last_frame_id" placeholder="选择尾帧图片（可选）" clearable filterable style="width:100%" @focus="loadUploads">
+                        <el-option v-for="a in imageUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                  </el-row>
+                  <div class="manual-asset-row">
+                    <el-input v-model="manualAsset.value" placeholder="也可以直接粘贴 asset id，例如 asset-20260719000123-abcd1 或 asset://asset-..." clearable />
+                    <el-select v-model="manualAsset.role" placeholder="角色">
+                      <el-option label="首帧 first_frame" value="first_frame" />
+                      <el-option label="尾帧 last_frame" value="last_frame" />
+                      <el-option label="参考图 reference_image" value="reference_image" />
+                      <el-option label="参考视频 reference_video" value="reference_video" />
+                      <el-option label="参考音频 reference_audio" value="reference_audio" />
+                    </el-select>
+                    <el-button @click="addManualAsset"><el-icon><Plus /></el-icon> 加入</el-button>
+                  </div>
+                  <div class="asset-help">
+                    直接使用 Asset ID 时，不要写进提示词。把 <span class="mono">asset-...</span> 或 <span class="mono">asset://asset-...</span> 填在这里，系统会自动放入 <span class="mono">content[].image_url.url</span> / <span class="mono">video_url.url</span>。
+                  </div>
+                </div>
+
+                <div class="reference-slot">
+                  <div class="slot-head">
+                    <div>
+                      <div class="slot-title">多参考素材</div>
+                      <div class="slot-note">参考图最多 9 张，参考视频最多 3 个，参考音频最多 3 个。数组顺序就是 prompt 里的 Image 1、Image 2。</div>
                     </div>
                   </div>
+                  <el-row :gutter="10">
+                    <el-col :xs="24" :md="8">
+                      <el-select v-model="picker.reference_image" placeholder="加参考图" clearable filterable style="width:100%" @focus="loadUploads" @change="addPickedReference('reference_image')">
+                        <el-option v-for="a in imageUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                    <el-col :xs="24" :md="8">
+                      <el-select v-model="picker.reference_video" placeholder="加参考视频" clearable filterable style="width:100%" @focus="loadUploads" @change="addPickedReference('reference_video')">
+                        <el-option v-for="a in videoUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                    <el-col :xs="24" :md="8">
+                      <el-select v-model="picker.reference_audio" placeholder="加参考音频" clearable filterable style="width:100%" @focus="loadUploads" @change="addPickedReference('reference_audio')">
+                        <el-option v-for="a in audioUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                  </el-row>
+                  <div v-if="referenceItems.length" class="reference-list">
+                    <div v-for="(item, idx) in referenceItems" :key="item.key" class="reference-item">
+                      <div class="asset-preview">
+                        <img v-if="item.purpose === 'image' && item.url && !item.manual" :src="item.url" loading="lazy" />
+                        <video v-else-if="item.purpose === 'video' && item.url && !item.manual" :src="item.url" muted preload="metadata"></video>
+                        <div v-else class="asset-preview-fallback"><el-icon><FolderOpened /></el-icon></div>
+                      </div>
+                      <div style="min-width:0">
+                        <div style="font-weight:700; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                          {{ referenceLabel(item, idx) }}
+                        </div>
+                        <div class="mono" style="font-size:11px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ item.url }}</div>
+                      </div>
+                      <div style="display:flex; gap:4px;">
+                        <el-button size="small" text :disabled="idx === 0" @click="moveReference(idx, -1)">上移</el-button>
+                        <el-button size="small" text :disabled="idx === referenceItems.length - 1" @click="moveReference(idx, 1)">下移</el-button>
+                        <el-button size="small" text type="danger" @click="removeReference(idx)">移除</el-button>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else class="asset-help">还没有添加多参考素材。纯文生视频可以不加素材。</div>
+                </div>
+
+                <div class="reference-slot">
+                  <div class="slot-head">
+                    <div>
+                      <div class="slot-title">API JSON 预览</div>
+                      <div class="slot-note">这里就是会提交到 <span class="mono">/v1/videos</span> 的请求体，可直接复制给客户后台使用。</div>
+                    </div>
+                    <el-button size="small" @click="copyText(apiJsonPreview)"><el-icon><CopyDocument /></el-icon> 复制 JSON</el-button>
+                  </div>
+                  <pre class="code-block json-preview">{{ apiJsonPreview }}</pre>
                 </div>
               </div>
             </div>
@@ -775,7 +896,7 @@
             <p style="color:var(--text-muted); margin-top:14px;">还没有素材，先上传一张参考图或一段视频。</p>
           </div>
           <div v-else class="asset-grid">
-            <div v-for="a in uploads" :key="a.id" :class="['asset-card', form.upload_id === a.id && 'selected']">
+            <div v-for="a in uploads" :key="a.id" :class="['asset-card', assetInForm(a) && 'selected']">
               <div class="asset-preview">
                 <img v-if="a.purpose === 'image'" :src="a.url" loading="lazy" />
                 <video v-else-if="a.purpose === 'video'" :src="a.url" muted preload="metadata"></video>
@@ -792,7 +913,11 @@
                   </el-tag>
                 </div>
                 <div class="asset-toolbar" style="margin-top:12px">
-                  <el-button size="small" @click="useUpload(a)"><el-icon><Check /></el-icon> 用作参考</el-button>
+                  <el-button v-if="a.purpose === 'image'" size="small" @click="useUpload(a, 'first_frame')"><el-icon><Check /></el-icon> 首帧</el-button>
+                  <el-button v-if="a.purpose === 'image'" size="small" @click="useUpload(a, 'last_frame')">尾帧</el-button>
+                  <el-button v-if="a.purpose === 'image'" size="small" @click="useUpload(a, 'reference_image')">参考图</el-button>
+                  <el-button v-if="a.purpose === 'video'" size="small" @click="useUpload(a, 'reference_video')"><el-icon><Check /></el-icon> 参考视频</el-button>
+                  <el-button v-if="a.purpose === 'audio'" size="small" @click="useUpload(a, 'reference_audio')"><el-icon><Check /></el-icon> 参考音频</el-button>
                   <el-button size="small" @click="copyAssetUrl(a)"><el-icon><CopyDocument /></el-icon> 复制 ID</el-button>
                   <el-button size="small" @click="copyContentBlock(a)"><el-icon><CopyDocument /></el-icon> 复制 content</el-button>
                   <el-button size="small" text @click="openUrl(a.url)">打开</el-button>
@@ -1159,6 +1284,7 @@ const App = {
 
       models: [],
       form: {
+        creation_mode: "text",
         model: "dreamina-seedance-2-0-260128",
         prompt: "",
         resolution: "720p",
@@ -1168,7 +1294,12 @@ const App = {
         generate_audio: false,
         watermark: false,
         upload_id: "",
+        first_frame_id: "",
+        last_frame_id: "",
+        references: [],
       },
+      picker: { reference_image: "", reference_video: "", reference_audio: "" },
+      manualAsset: { value: "", role: "reference_image" },
 
       currentTask: null,
       pollTimer: null,
@@ -1186,6 +1317,56 @@ const App = {
       lastUploadedAsset: null,
       loading: { submit: false, history: false, clearHistory: false, assets: false, upload: false, docs: false, password: false },
       docsHtml: "",
+      creationModes: [
+        {
+          id: "text",
+          title: "文生视频",
+          note: "只用提示词生成，适合概念片、广告镜头和分镜草案。",
+          placeholder: "A clean commercial video of a white electric scooter driving through a modern city street, morning light, smooth camera movement, realistic style",
+          hint: "写清主体、动作、场景、镜头、光线和风格。",
+          template: "Subject: ...\nAction: ...\nScene: ...\nCamera: smooth tracking shot, cinematic movement\nStyle: realistic, commercial, clean lighting\nConstraints: no text, no logo distortion"
+        },
+        {
+          id: "first_frame",
+          title: "首帧图生视频",
+          note: "用一张图控制开场画面，让画面自然动起来。",
+          placeholder: "Animate from Image 1. Keep the same subject identity, outfit, background, and composition. Gentle camera push-in, natural movement.",
+          hint: "首帧图片放到 first_frame，不要只把 asset id 写进提示词。",
+          template: "Animate from the first frame. Keep the same subject identity, outfit, background, and composition. Add natural movement, gentle camera push-in, cinematic lighting."
+        },
+        {
+          id: "first_last",
+          title: "首尾帧动画",
+          note: "指定开始图和结束图，生成中间过渡。",
+          placeholder: "Create a smooth transition from the first frame to the last frame. Preserve identity and scene continuity.",
+          hint: "首帧用 first_frame，尾帧用 last_frame，prompt 描述中间怎么变化。",
+          template: "Create a smooth transition from the first frame to the last frame. Preserve subject identity, clothing, lighting continuity, and camera direction. Natural motion, no sudden cuts."
+        },
+        {
+          id: "multi_reference",
+          title: "多参考图",
+          note: "用 Image 1 / Image 2 / Image 3 分别控制人物、产品、服装或场景。",
+          placeholder: "Use Image 1 as the character reference, Image 2 as the product reference, and Image 3 as the scene style reference.",
+          hint: "参考图数组顺序就是 Image 1、Image 2、Image 3。",
+          template: "Use Image 1 as the main character reference, Image 2 as the product reference, and Image 3 as the scene/style reference. Keep character identity and product details consistent. Create a polished commercial video."
+        },
+        {
+          id: "video_reference",
+          title: "参考视频",
+          note: "参考动作节奏、镜头运动或姿态变化。",
+          placeholder: "Use the reference video only for motion rhythm and camera movement. Generate a new scene with the selected subject/style.",
+          hint: "参考视频放到 reference_video，prompt 说明参考哪一部分，不要复制 logo/文字。",
+          template: "Use the reference video only for motion rhythm, body movement, and camera pacing. Do not copy logos, text, or background objects. Generate a new cinematic scene with the requested subject."
+        },
+        {
+          id: "mixed",
+          title: "混合参考/编辑",
+          note: "图片、视频、音频一起参考，适合复用素材后再编辑。",
+          placeholder: "Combine the image references for identity/product consistency and the video reference for motion rhythm. Refine the scene according to the prompt.",
+          hint: "用于编辑复用时，保留需要固定的素材，prompt 写清要改变的部分。",
+          template: "Combine the image references for identity/product consistency and the video reference for motion rhythm. Change only the scene styling and camera mood. Preserve the selected subject and product details."
+        },
+      ],
       guideUploadCurl: `KEY="sk_xxxxxxxxxxxxxxxx"
 
 curl -X POST https://seedance3.eu/v1/uploads \\
@@ -1228,6 +1409,24 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     "extra_body": {"real_person_mode": true}
   }'`,
       methodExamples: [
+        {
+          id: "direct-asset-id",
+          title: "直接使用 Asset ID",
+          note: "客户拿到 asset-... 时，把它写到 url 字段；asset-... 和 asset://asset-... 都可以，推荐完整 asset:// 写法。",
+          code: `{
+  "model": "dreamina-seedance-2-0-260128",
+  "content": [
+    { "type": "text", "text": "Use this approved asset as the main character reference. Keep identity and outfit consistent." },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset-20260719000123-abcd1" },
+      "role": "reference_image"
+    }
+  ],
+  "resolution": "720p",
+  "duration": 5
+}`,
+        },
         {
           id: "legacy-references",
           title: "旧 references 字段迁移",
@@ -1408,6 +1607,12 @@ curl -X POST https://seedance3.eu/v1/uploads \\
   computed: {
     currentModel() { return this.models.find(m => m.id === this.form.model); },
     selectedUpload() { return this.uploads.find(a => a.id === this.form.upload_id); },
+    currentCreationMode() { return this.creationModes.find(m => m.id === this.form.creation_mode) || this.creationModes[0]; },
+    imageUploads() { return this.uploads.filter(a => a.purpose === "image"); },
+    videoUploads() { return this.uploads.filter(a => a.purpose === "video"); },
+    audioUploads() { return this.uploads.filter(a => a.purpose === "audio"); },
+    referenceItems() { return this.form.references || []; },
+    apiJsonPreview() { return JSON.stringify(this.videoRequestBody(), null, 2); },
     estimatedTokens() {
       if (this.estimateInfo?.estimated_tokens) return this.estimateInfo.estimated_tokens;
       const tps = (TOKENS_PER_SEC[this.form.model] || TOKENS_PER_SEC["dreamina-seedance-2-0-260128"])[this.form.resolution];
@@ -1495,8 +1700,31 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     assetReferenceUrl(asset) {
       return asset?.asset_url || asset?.url || "";
     },
+    assetOptionLabel(asset) {
+      return `${asset.original_filename || asset.id} / ${this.purposeLabel(asset.purpose)}${asset.face_asset_whitelisted ? " / 白名单" : ""}`;
+    },
     assetRoleLabel(asset) {
       return ({ image: "reference_image", video: "reference_video", audio: "reference_audio" })[asset?.purpose] || "reference";
+    },
+    normalizeAssetRef(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      if (raw.startsWith("asset://")) return raw;
+      if (raw.startsWith("asset-")) return `asset://${raw}`;
+      return raw;
+    },
+    purposeForRole(role) {
+      if (role === "reference_video") return "video";
+      if (role === "reference_audio") return "audio";
+      return "image";
+    },
+    contentBlockForUrl(url, role, purpose) {
+      const normalizedUrl = this.normalizeAssetRef(url);
+      if (!normalizedUrl) return null;
+      const normalizedPurpose = purpose || this.purposeForRole(role);
+      if (normalizedPurpose === "video") return { type: "video_url", video_url: { url: normalizedUrl }, role: role || "reference_video" };
+      if (normalizedPurpose === "audio") return { type: "audio_url", audio_url: { url: normalizedUrl }, role: role || "reference_audio" };
+      return { type: "image_url", image_url: { url: normalizedUrl }, role: role || "reference_image" };
     },
     uploadUsageHint(asset) {
       if (!asset) return "";
@@ -1504,13 +1732,45 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       if (ref.startsWith("asset://")) return "生成时会使用 asset:// 引用，适合真人、人脸、角色或产品一致性参考。";
       return "生成时会使用公开 URL 引用；如需真人白名单，请上传时打开白名单开关。";
     },
-    contentBlockForUpload(asset) {
-      if (asset?.suggested_content_block) return asset.suggested_content_block;
+    contentBlockForUpload(asset, role) {
+      if (asset?.suggested_content_block && !role) return asset.suggested_content_block;
       const url = this.assetReferenceUrl(asset);
       if (!url) return null;
-      if (asset?.purpose === "video") return { type: "video_url", video_url: { url }, role: "reference_video" };
-      if (asset?.purpose === "audio") return { type: "audio_url", audio_url: { url }, role: "reference_audio" };
-      return { type: "image_url", image_url: { url }, role: "reference_image" };
+      return this.contentBlockForUrl(url, role || this.assetRoleLabel(asset), asset?.purpose);
+    },
+    referenceFromUpload(asset, role) {
+      if (!asset) return null;
+      return {
+        key: `${role}:${asset.id}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+        upload_id: asset.id,
+        role,
+        purpose: asset.purpose,
+        url: this.assetReferenceUrl(asset),
+        label: asset.original_filename || asset.id,
+        manual: false,
+      };
+    },
+    referenceFromManual(value, role) {
+      const url = this.normalizeAssetRef(value);
+      if (!url) return null;
+      return {
+        key: `${role}:${url}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+        upload_id: "",
+        role,
+        purpose: this.purposeForRole(role),
+        url,
+        label: url,
+        manual: true,
+      };
+    },
+    referenceLabel(item, idx) {
+      const prefix = item.role === "reference_image" ? `Image ${this.referenceImageOrdinal(idx)}` : item.role;
+      return `${prefix} / ${item.label || item.url}`;
+    },
+    referenceImageOrdinal(idx) {
+      let count = 0;
+      for (let i = 0; i <= idx; i++) if (this.referenceItems[i]?.role === "reference_image") count += 1;
+      return count || 1;
     },
     copyAssetUrl(asset) {
       const value = this.assetReferenceUrl(asset);
@@ -1565,14 +1825,95 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       if (name === "docs")    this.loadDocs();
       if (name === "generate") this.scheduleEstimate();
     },
+    selectCreationMode(modeId) {
+      this.form.creation_mode = modeId;
+      this.scheduleEstimate();
+    },
+    insertPromptTemplate(replace=false) {
+      const template = this.currentCreationMode?.template || "";
+      if (!template) return;
+      if (replace || !this.form.prompt.trim()) this.form.prompt = template;
+      else this.form.prompt = `${this.form.prompt.trim()}\n\n${template}`;
+      this.scheduleEstimate();
+    },
+    addPickedReference(role) {
+      const id = this.picker[role];
+      if (!id) return;
+      const asset = this.uploads.find(a => a.id === id);
+      const item = this.referenceFromUpload(asset, role);
+      this.picker[role] = "";
+      if (!item) return;
+      if (this.referenceLimitReached(role)) {
+        ElMessage.warning(this.referenceLimitMessage(role));
+        return;
+      }
+      this.form.references.push(item);
+      this.scheduleEstimate();
+    },
+    addManualAsset() {
+      const item = this.referenceFromManual(this.manualAsset.value, this.manualAsset.role);
+      if (!item) { ElMessage.warning("请输入 asset id 或 asset:// 引用"); return; }
+      if (["first_frame","last_frame"].includes(item.role)) {
+        if (item.role === "first_frame") this.form.first_frame_id = "";
+        if (item.role === "last_frame") this.form.last_frame_id = "";
+        this.form.references = this.referenceItems.filter(existing => existing.role !== item.role);
+      } else if (this.referenceLimitReached(item.role)) {
+        ElMessage.warning(this.referenceLimitMessage(item.role));
+        return;
+      }
+      this.form.references.push(item);
+      this.manualAsset.value = "";
+      this.scheduleEstimate();
+      ElMessage.success("Asset ID 已加入 content[]");
+    },
+    referenceLimitReached(role) {
+      const limits = { reference_image: 9, reference_video: 3, reference_audio: 3 };
+      const limit = limits[role];
+      if (!limit) return false;
+      return this.referenceItems.filter(item => item.role === role).length >= limit;
+    },
+    referenceLimitMessage(role) {
+      return ({ reference_image: "参考图最多 9 张", reference_video: "参考视频最多 3 个", reference_audio: "参考音频最多 3 个" })[role] || "参考素材数量已达上限";
+    },
+    removeReference(idx) {
+      this.form.references.splice(idx, 1);
+      this.scheduleEstimate();
+    },
+    moveReference(idx, delta) {
+      const next = idx + delta;
+      if (next < 0 || next >= this.form.references.length) return;
+      const items = this.form.references;
+      const [item] = items.splice(idx, 1);
+      items.splice(next, 0, item);
+      this.scheduleEstimate();
+    },
     buildContent() {
       const content = [];
       if (this.form.prompt.trim()) content.push({type: "text", text: this.form.prompt.trim()});
-      const block = this.contentBlockForUpload(this.selectedUpload);
-      if (block) {
-        content.push(block);
+      const firstFrame = this.uploads.find(a => a.id === this.form.first_frame_id);
+      const lastFrame = this.uploads.find(a => a.id === this.form.last_frame_id);
+      const firstBlock = this.contentBlockForUpload(firstFrame, "first_frame");
+      const lastBlock = this.contentBlockForUpload(lastFrame, "last_frame");
+      if (firstBlock) content.push(firstBlock);
+      if (lastBlock) content.push(lastBlock);
+      for (const item of this.referenceItems) {
+        const block = this.contentBlockForUrl(item.url, item.role, item.purpose);
+        if (block) content.push(block);
       }
       return content;
+    },
+    videoRequestBody() {
+      const body = {
+        model: this.form.model,
+        content: this.buildContent(),
+        resolution: this.form.resolution,
+        ratio: this.form.ratio,
+        duration: Number(this.form.duration) || 5,
+        watermark: !!this.form.watermark,
+      };
+      if (this.form.seed) body.seed = Number(this.form.seed);
+      if (this.form.generate_audio) body.generate_audio = true;
+      return body;
     },
     scheduleEstimate() {
       if (this.estimateTimer) clearTimeout(this.estimateTimer);
@@ -1581,14 +1922,7 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     async loadEstimate() {
       if (this.view !== "app") return;
       try {
-        const body = {
-          model: this.form.model,
-          content: this.buildContent(),
-          resolution: this.form.resolution,
-          ratio: this.form.ratio,
-          duration: Number(this.form.duration) || 5,
-          generate_audio: !!this.form.generate_audio,
-        };
+        const body = this.videoRequestBody();
         this.estimateInfo = await this.api("/v1/videos/estimate", { method: "POST", body: JSON.stringify(body) });
       } catch (e) {
         console.warn("estimate failed", e);
@@ -1617,7 +1951,7 @@ curl -X POST https://seedance3.eu/v1/uploads \\
         let body; try { body = await r.json(); } catch { body = {}; }
         if (!r.ok) throw { status: r.status, body };
         this.uploads = [body, ...this.uploads.filter(a => a.id !== body.id)];
-        this.form.upload_id = body.id;
+        this.useUploadInCurrentForm(body, true);
         this.lastUploadedAsset = body;
         this.uploadForm = { file: null, face_allowlist: false, face_asset_label: "" };
         if (this.$refs.assetFileInput) this.$refs.assetFileInput.value = "";
@@ -1626,10 +1960,34 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.upload = false; }
     },
-    useUpload(asset) {
-      this.form.upload_id = asset.id;
+    useUpload(asset, role=null) {
+      this.useUploadInCurrentForm(asset, false, role);
       this.scheduleEstimate();
       this.switchTab("generate");
+    },
+    useUploadInCurrentForm(asset, silent=false, forcedRole=null) {
+      if (!asset) return;
+      const role = forcedRole || (asset.purpose === "image" ? "reference_image" : asset.purpose === "video" ? "reference_video" : "reference_audio");
+      if (role === "first_frame") {
+        this.form.first_frame_id = asset.id;
+      } else if (role === "last_frame") {
+        this.form.last_frame_id = asset.id;
+      } else {
+        if (this.referenceLimitReached(role)) {
+          if (!silent) ElMessage.warning(this.referenceLimitMessage(role));
+          return;
+        }
+        if (!this.referenceItems.some(item => item.upload_id === asset.id && item.role === role)) {
+          const item = this.referenceFromUpload(asset, role);
+          if (item) this.form.references.push(item);
+        }
+      }
+      if (!silent) ElMessage.success(`${asset.original_filename || asset.id} 已加入 ${role}`);
+    },
+    assetInForm(asset) {
+      if (!asset) return false;
+      if (this.form.first_frame_id === asset.id || this.form.last_frame_id === asset.id) return true;
+      return this.referenceItems.some(item => item.upload_id === asset.id);
     },
     copyContentBlock(asset) {
       const block = this.contentBlockForUpload(asset);
@@ -1642,10 +2000,10 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       try {
         const result = await this.api(`/v1/uploads/${asset.id}`, { method: "DELETE" });
         this.uploads = this.uploads.filter(a => a.id !== asset.id);
-        if (this.form.upload_id === asset.id) {
-          this.form.upload_id = "";
-          this.scheduleEstimate();
-        }
+        if (this.form.first_frame_id === asset.id) this.form.first_frame_id = "";
+        if (this.form.last_frame_id === asset.id) this.form.last_frame_id = "";
+        this.form.references = this.referenceItems.filter(item => item.upload_id !== asset.id);
+        this.scheduleEstimate();
         const request = result.asset_delete_request;
         if (request?.status === "pending_admin") {
           ElMessage.success("素材已删除，BytePlus asset 等待平台批量删除");
@@ -1712,16 +2070,7 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     async submitGen() {
       if (!this.form.prompt.trim()) { ElMessage.warning("请输入提示词"); return; }
       this.loading.submit = true;
-      const body = {
-        model: this.form.model,
-        content: this.buildContent(),
-        resolution: this.form.resolution,
-        ratio: this.form.ratio,
-        duration: Number(this.form.duration) || 5,
-        watermark: this.form.watermark,
-      };
-      if (this.form.seed) body.seed = Number(this.form.seed);
-      if (this.form.generate_audio) body.generate_audio = true;
+      const body = this.videoRequestBody();
       try {
         const r = await this.api("/v1/videos", {method:"POST", body: JSON.stringify(body)});
         ElMessage.success(`任务已提交，预扣 $${this.fmt(r.held_usd)}`);
