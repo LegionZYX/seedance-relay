@@ -68,6 +68,17 @@ class StaticCustomerUiTests(unittest.TestCase):
         self.assertNotIn('@click="goToTask(t.id)"', app_html)
         self.assertNotIn('this.switchTab("generate");\n      try {\n        const t = await this.api(`/v1/videos/${vid}`);', app_html)
 
+    def test_customer_ui_can_clear_history_and_explains_failures_and_countdowns(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        self.assertIn('@click="clearHistory"', app_html)
+        self.assertIn("async clearHistory()", app_html)
+        self.assertIn('/v1/videos/history', app_html)
+        self.assertIn("failureMessage(task)", app_html)
+        self.assertIn("generationCountdown(task)", app_html)
+        self.assertIn("contentCountdown(historyTask)", app_html)
+        self.assertIn("保留进行中的任务", app_html)
+
     def test_customer_ui_template_has_no_obvious_broken_attributes_or_tags(self):
         app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
 

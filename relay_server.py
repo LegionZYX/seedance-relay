@@ -837,6 +837,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     cached_video_url_until   INTEGER,
     local_video_path         TEXT,
     local_video_expires_at   INTEGER,
+    customer_hidden_at       INTEGER,
+    error_message            TEXT,
     prompt_text              TEXT,
     request_payload          TEXT,
     created_at               INTEGER NOT NULL,
@@ -1028,6 +1030,8 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN completion_tokens INTEGER",
     "ALTER TABLE tasks ADD COLUMN local_video_path TEXT",
     "ALTER TABLE tasks ADD COLUMN local_video_expires_at INTEGER",
+    "ALTER TABLE tasks ADD COLUMN customer_hidden_at INTEGER",
+    "ALTER TABLE tasks ADD COLUMN error_message TEXT",
     "ALTER TABLE tasks ADD COLUMN prompt_text TEXT",
     "ALTER TABLE tasks ADD COLUMN request_payload TEXT",
     "ALTER TABLE uploads ADD COLUMN deleted_at INTEGER",
@@ -2688,9 +2692,26 @@ def _format_task(t: dict, error: Optional[str] = None) -> dict:
             out["content_retention_seconds"] = VIDEO_RETENTION_SECONDS
             out["content_seconds_remaining"] = max(0, content_expires_at - now)
             out["content_expired"] = content_expires_at <= now
-    if error:
-        out["error"] = {"message": sanitize(error)}
+    error_message = error or t.get("error_message")
+    if error_message and t.get("status") in {"failed", "cancelled", "expired"}:
+        out["error"] = {"message": sanitize(str(error_message))}
     return out
+
+
+def _task_error_message_from_upstream(info: dict) -> Optional[str]:
+    for key in ("error", "last_error"):
+        value = info.get(key)
+        if isinstance(value, dict):
+            message = value.get("message") or value.get("reason") or value.get("code")
+            if message:
+                return sanitize(str(message))[:1000]
+        elif value:
+            return sanitize(str(value))[:1000]
+    for key in ("error_message", "failure_reason", "message"):
+        value = info.get(key)
+        if value:
+            return sanitize(str(value))[:1000]
+    return None
 
 
 def _task_content_expires_at(t: dict) -> Optional[int]:
@@ -2785,6 +2806,7 @@ def _apply_terminal_task_refresh_once(
     cached_video_url_until: int,
     updated_at: int,
     refund_usd: float,
+    error_message: Optional[str] = None,
 ) -> dict:
     try:
         db.execute("BEGIN IMMEDIATE")
@@ -2793,7 +2815,9 @@ def _apply_terminal_task_refresh_once(
               SET status=?, actual_cost_usd=?,
                   upstream_actual_cost_usd=?, completion_tokens=?,
                   settled=1,
-                  cached_video_url=?, cached_video_url_until=?, updated_at=?
+                  cached_video_url=?, cached_video_url_until=?,
+                  error_message=COALESCE(?, error_message),
+                  updated_at=?
               WHERE id=? AND user_id=? AND settled=0""",
             (
                 status,
@@ -2802,6 +2826,7 @@ def _apply_terminal_task_refresh_once(
                 completion_tokens,
                 cached_video_url,
                 cached_video_url_until,
+                error_message,
                 updated_at,
                 task_id,
                 user_id,
@@ -2901,6 +2926,7 @@ async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url
     completion_tokens = (info.get("usage") or {}).get("completion_tokens")
     actual_cost_usd = t.get("actual_cost_usd")
     upstream_cost = t.get("upstream_actual_cost_usd")
+    error_message = _task_error_message_from_upstream(info) if new_status in {"failed", "cancelled", "expired"} else None
     if new_status in ("succeeded", "failed", "cancelled", "expired") \
             and not t["settled"]:
         if new_status == "succeeded":
@@ -2932,6 +2958,7 @@ async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url
             completion_tokens=completion_tokens,
             cached_video_url=cached_url,
             cached_video_url_until=cached_until,
+            error_message=error_message,
             updated_at=now,
             refund_usd=refund,
         )
@@ -2940,8 +2967,10 @@ async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url
             _schedule_video_persist_if_needed(t)
     else:
         db.execute("""UPDATE tasks SET status=?, cached_video_url=?,
-                      cached_video_url_until=?, updated_at=? WHERE id=?""",
-                   (new_status, cached_url, cached_until, now, task_id))
+                      cached_video_url_until=?,
+                      error_message=COALESCE(?, error_message),
+                      updated_at=? WHERE id=?""",
+                   (new_status, cached_url, cached_until, error_message, now, task_id))
 
     t["status"] = new_status
     t["cached_video_url"] = cached_url
@@ -2949,6 +2978,8 @@ async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url
     t["actual_cost_usd"] = actual_cost_usd
     t["upstream_actual_cost_usd"] = upstream_cost
     t["completion_tokens"] = completion_tokens
+    if error_message:
+        t["error_message"] = error_message
     return t
 
 
@@ -5000,6 +5031,34 @@ async def head_video_content(request: Request, vid: str, user=Depends(auth_user)
         return Response(status_code=status_code, headers=response_headers, media_type=media_type)
 
 
+@app.delete("/v1/videos/history")
+async def clear_video_history(user=Depends(auth_user)):
+    db = get_db()
+    now = int(time.time())
+    try:
+        active = db.execute(
+            """SELECT COUNT(*) c FROM tasks
+               WHERE user_id=? AND customer_hidden_at IS NULL
+                 AND status NOT IN ('succeeded','failed','cancelled','expired')""",
+            (user["id"],),
+        ).fetchone()["c"]
+        cursor = db.execute(
+            """UPDATE tasks
+               SET customer_hidden_at=?, updated_at=?
+               WHERE user_id=? AND customer_hidden_at IS NULL
+                 AND status IN ('succeeded','failed','cancelled','expired')""",
+            (now, now, user["id"]),
+        )
+        hidden = max(0, cursor.rowcount or 0)
+    finally:
+        db.close()
+    return {
+        "hidden": hidden,
+        "kept_active": active,
+        "message": "History cleared. Active tasks are kept visible.",
+    }
+
+
 @app.delete("/v1/videos/{vid}")
 async def delete_video(vid: str, user=Depends(auth_user)):
     db = get_db()
@@ -5047,14 +5106,14 @@ async def list_videos(user=Depends(auth_user),
                       limit: int = 20, offset: int = 0,
                       status: Optional[str] = None):
     db = get_db()
-    sql = "SELECT * FROM tasks WHERE user_id=?"
+    sql = "SELECT * FROM tasks WHERE user_id=? AND customer_hidden_at IS NULL"
     args: list = [user["id"]]
     if status:
         sql += " AND status=?"; args.append(status)
     sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
     args.extend([limit, offset])
     rows = db.execute(sql, args).fetchall()
-    total = db.execute("SELECT COUNT(*) c FROM tasks WHERE user_id=?",
+    total = db.execute("SELECT COUNT(*) c FROM tasks WHERE user_id=? AND customer_hidden_at IS NULL",
                        (user["id"],)).fetchone()["c"]
     return {"data": [_format_task(dict(r)) for r in rows],
             "total": total, "limit": limit, "offset": offset}

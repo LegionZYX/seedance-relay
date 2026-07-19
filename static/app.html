@@ -641,7 +641,7 @@
           <template v-else-if="['failed','cancelled','expired'].includes(currentTask.status)">
             <el-alert type="error" :closable="false" show-icon>
               <template #title>任务 {{ statusLabel(currentTask.status) }}</template>
-              {{ currentTask.error?.message || '请查看详情' }}
+              {{ failureMessage(currentTask) }}
             </el-alert>
           </template>
           <template v-else>
@@ -649,7 +649,9 @@
               <div class="pulse"></div>
               <div>
                 <div style="font-weight:600">{{ currentTask.status === 'queued' ? '排队中' : '正在生成' }}</div>
-                <div style="font-size:12.5px; color:var(--text-muted)">通常需要 2-10 分钟，页面会自动刷新。</div>
+                <div style="font-size:12.5px; color:var(--text-muted)">
+                  {{ generationCountdown(currentTask) }}，页面会自动刷新。
+                </div>
               </div>
             </div>
           </template>
@@ -658,9 +660,14 @@
 
       <!-- HISTORY -->
       <section v-if="tab === 'history'">
-        <div class="page-header">
-          <h1 class="page-title">我的视频</h1>
-          <p class="page-sub">最近的生成任务，点击卡片查看状态、播放或下载。</p>
+        <div class="page-header" style="display:flex; justify-content:space-between; gap:16px; align-items:flex-start;">
+          <div>
+            <h1 class="page-title">我的视频</h1>
+            <p class="page-sub">最近的生成任务，点击卡片查看状态、播放或下载。</p>
+          </div>
+          <el-button v-if="history.length" @click="clearHistory" :loading="loading.clearHistory">
+            <el-icon><Delete /></el-icon> 清空历史记录
+          </el-button>
         </div>
         <div v-loading="loading.history" style="min-height:200px">
           <div v-if="!loading.history && history.length === 0" class="card card-pad" style="text-align:center; padding:60px 24px;">
@@ -694,6 +701,9 @@
                 </div>
                 <div v-if="t.status === 'succeeded' && t.content_expires_at" style="margin-top:8px; font-size:11.5px; color:var(--text-muted);">
                   保存剩余：<span class="mono" :style="{color: contentExpired(t) ? '#b91c1c' : 'var(--text)'}">{{ contentCountdown(t) }}</span>
+                </div>
+                <div v-else-if="['queued','running'].includes(t.status)" style="margin-top:8px; font-size:11.5px; color:var(--text-muted);">
+                  预计等待：<span class="mono">{{ generationCountdown(t) }}</span>
                 </div>
               </div>
             </div>
@@ -1066,6 +1076,18 @@ curl https://seedance3.eu/v1/videos \
             预计 ${{ fmt(historyTask.estimated_cost_usd) }} / 已冻结 <b style="color:var(--text)">${{ fmt(historyTask.held_usd || historyTask.estimated_cost_usd) }}</b>
           </template>
         </div>
+        <el-alert
+          v-if="historyTask.status === 'succeeded' && historyTask.content_expires_at"
+          :type="contentExpired(historyTask) ? 'warning' : 'info'"
+          :closable="false"
+          show-icon
+          style="margin-bottom:14px;"
+        >
+          <template #title>
+            视频默认保存 2 天，下载剩余：{{ contentCountdown(historyTask) }}
+          </template>
+          请在倒计时结束前下载；过期后需要重新生成。
+        </el-alert>
 
         <template v-if="historyTask.status === 'succeeded' && historyTask.video_url">
           <div style="background:#0f172a; border-radius:10px; overflow:hidden;">
@@ -1080,7 +1102,7 @@ curl https://seedance3.eu/v1/videos \
         <template v-else-if="['failed','cancelled','expired'].includes(historyTask.status)">
           <el-alert type="error" :closable="false" show-icon>
             <template #title>任务 {{ statusLabel(historyTask.status) }}</template>
-            {{ historyTask.error?.message || '请稍后重试，或联系管理员查看失败原因。' }}
+            {{ failureMessage(historyTask) }}
           </el-alert>
         </template>
         <template v-else>
@@ -1088,7 +1110,9 @@ curl https://seedance3.eu/v1/videos \
             <div class="pulse"></div>
             <div>
               <div style="font-weight:600">{{ historyTask.status === 'queued' ? '排队中' : '正在生成' }}</div>
-              <div style="font-size:12.5px; color:var(--text-muted)">详情会自动刷新，不会跳回新建视频页面。</div>
+              <div style="font-size:12.5px; color:var(--text-muted)">
+                {{ generationCountdown(historyTask) }}，详情会自动刷新，不会跳回新建视频页面。
+              </div>
             </div>
           </div>
         </template>
@@ -1160,7 +1184,7 @@ const App = {
       uploads: [],
       uploadForm: { file: null, face_allowlist: false, face_asset_label: "" },
       lastUploadedAsset: null,
-      loading: { submit: false, history: false, assets: false, upload: false, docs: false, password: false },
+      loading: { submit: false, history: false, clearHistory: false, assets: false, upload: false, docs: false, password: false },
       docsHtml: "",
       guideUploadCurl: `KEY="sk_xxxxxxxxxxxxxxxx"
 
@@ -1437,6 +1461,30 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       if (hours > 0) return `${hours}小时 ${minutes}分钟`;
       return `${Math.max(1, minutes)}分钟`;
     },
+    terminalTask(task) {
+      return ["succeeded","failed","cancelled","expired"].includes(task?.status);
+    },
+    generationSecondsRemaining(task) {
+      if (!task?.created_at || this.terminalTask(task)) return null;
+      const duration = Math.max(5, Number(task.duration) || 5);
+      const expectedSeconds = Math.max(180, Math.min(900, duration * 60));
+      return Math.max(0, Number(task.created_at) + expectedSeconds - this.countdownNow);
+    },
+    generationCountdown(task) {
+      const remaining = this.generationSecondsRemaining(task);
+      if (remaining == null) return "状态更新中";
+      if (remaining <= 0) return "已接近预计完成时间";
+      const minutes = Math.floor(remaining / 60);
+      const seconds = remaining % 60;
+      return `预计还需 ${minutes}:${String(seconds).padStart(2, "0")}`;
+    },
+    failureMessage(task) {
+      if (task?.status === "cancelled") return "任务已取消，冻结金额已退回可用余额。";
+      if (task?.status === "expired") return "任务结果已过期，请重新生成。";
+      const message = task?.error?.message;
+      if (message) return message;
+      return "任务生成失败，未产生费用；请调整提示词或素材后重试，必要时联系管理员查看失败原因。";
+    },
     formatBytes(n) {
       const size = Number(n || 0);
       if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(2) + " MB";
@@ -1689,9 +1737,10 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       try {
         const t = await this.api(`/v1/videos/${this.currentTask.id}`);
         this.currentTask = t;
-        if (["succeeded","failed","cancelled","expired"].includes(t.status)) {
+        if (this.terminalTask(t)) {
           this.refreshMe();
           if (t.status === "succeeded") ElMessage.success("视频已生成");
+          if (t.status === "failed") ElMessage.error(this.failureMessage(t));
           return;
         }
       } catch (e) { console.warn(e); }
@@ -1709,6 +1758,24 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       if (!task?.id) return;
       this.history = this.history.map(item => item.id === task.id ? { ...item, ...task } : item);
     },
+    async clearHistory() {
+      const terminalCount = this.history.filter(t => this.terminalTask(t)).length;
+      if (!terminalCount) {
+        ElMessage.info("没有可清空的已完成/失败记录，保留进行中的任务。");
+        return;
+      }
+      if (!confirm(`清空 ${terminalCount} 条历史记录？保留进行中的任务，后台账务记录不会删除。`)) return;
+      this.loading.clearHistory = true;
+      try {
+        const result = await this.api("/v1/videos/history", { method: "DELETE" });
+        this.history = this.history.filter(t => !this.terminalTask(t));
+        ElMessage.success(`已清空 ${result.hidden || terminalCount} 条历史记录，保留进行中的任务。`);
+      } catch (e) {
+        ElMessage.error(this.errMsg(e));
+      } finally {
+        this.loading.clearHistory = false;
+      }
+    },
     async openHistoryTask(task) {
       if (!task?.id) return;
       if (this.historyPollTimer) clearTimeout(this.historyPollTimer);
@@ -1718,7 +1785,7 @@ curl -X POST https://seedance3.eu/v1/uploads \\
         const t = await this.api(`/v1/videos/${task.id}`);
         this.historyTask = t;
         this.updateHistoryTask(t);
-        if (!["succeeded","failed","cancelled","expired"].includes(t.status)) this.pollHistoryTask();
+        if (!this.terminalTask(t)) this.pollHistoryTask();
       } catch (e) { ElMessage.error(this.errMsg(e)); }
     },
     async pollHistoryTask() {
@@ -1728,9 +1795,10 @@ curl -X POST https://seedance3.eu/v1/uploads \\
         const t = await this.api(`/v1/videos/${this.historyTask.id}`);
         this.historyTask = t;
         this.updateHistoryTask(t);
-        if (["succeeded","failed","cancelled","expired"].includes(t.status)) {
+        if (this.terminalTask(t)) {
           this.refreshMe();
           if (t.status === "succeeded") ElMessage.success("视频已生成");
+          if (t.status === "failed") ElMessage.error(this.failureMessage(t));
           return;
         }
       } catch (e) { console.warn(e); }
@@ -1744,7 +1812,7 @@ curl -X POST https://seedance3.eu/v1/uploads \\
   async mounted() {
     this.countdownTimer = setInterval(() => {
       this.countdownNow = Math.floor(Date.now() / 1000);
-    }, 60000);
+    }, 1000);
     await this.checkAuth();
   },
   beforeUnmount() {
