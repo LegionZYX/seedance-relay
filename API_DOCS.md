@@ -218,25 +218,195 @@ POST /v1/videos
 | 字段 | 类型 | 必填 | 说明 |
 |---|---:|---:|---|
 | `model` | string | 是 | `/v1/models` 返回的模型 ID |
-| `content` | array | 是 | 原生内容块数组 |
-| `resolution` | string | 否 | `480p`、`720p`、`1080p` |
-| `ratio` | string | 否 | `16:9`、`9:16`、`1:1` 等 |
-| `duration` | integer | 否 | 秒数，按模型能力限制 |
-| `seed` | integer | 否 | 随机种子 |
-| `generate_audio` | boolean | 否 | 是否生成音频 |
-| `watermark` | boolean | 否 | 是否带水印 |
+| `content` | array | 是 | BytePlus 原生内容块数组，至少包含一个 `text` 块 |
+| `resolution` | string | 否 | `480p`、`720p`、`1080p`，默认 `720p` |
+| `ratio` | string | 否 | `16:9`、`9:16`、`1:1` 等，默认 `16:9` |
+| `duration` | integer | 否 | 秒数，默认 `5`；可用范围以 `/v1/models` 返回为准 |
+| `seed` | integer | 否 | 官方整数随机种子；相同 prompt 和 seed 只能尽量接近，不保证完全一致 |
+| `generate_audio` | boolean | 否 | 是否生成音频；仅支持音频的模型可用 |
+| `watermark` | boolean | 否 | 是否添加官方水印，默认 `false` |
+| `extra_body` | object | 否 | 高级参数，普通集成可不传；仅在管理员确认账号开关后使用 |
 
-`content[]` 示例：
+### 6.1 `content[]` 内容块规则
 
-```json
-[
-  {"type": "text", "text": "clean commercial video"},
-  {"type": "image_url", "image_url": {"url": "https://seedance3.eu/uploads/upl_123.jpg"}, "role": "first_frame"},
-  {"type": "video_url", "video_url": {"url": "https://seedance3.eu/uploads/upl_456.mp4"}, "role": "reference_video"}
-]
+| 类型 | 写法 | 常用 `role` | 说明 |
+|---|---|---|---|
+| 文本 | `{"type":"text","text":"..."}` | 不需要 | 提示词。建议用清楚的英文描述主体、动作、镜头、风格、光线和限制。 |
+| 图片 | `{"type":"image_url","image_url":{"url":"..."}}` | `first_frame`、`last_frame`、`reference_image` | 图片可以使用上传返回的 Relay URL，也可以使用 `asset://...`。最多 9 张图片。 |
+| 视频 | `{"type":"video_url","video_url":{"url":"..."}}` | `reference_video` | 用作动作、节奏、镜头或风格参考。最多 3 个视频。 |
+| 音频 | `{"type":"audio_url","audio_url":{"url":"..."}}` | 可省略 | 仅在模型和账号支持时使用。 |
+
+支持的 `role`：
+
+- `first_frame`：首帧图片，严格控制开场画面。
+- `last_frame`：尾帧图片，可选，用于首尾帧动画。
+- `reference_image`：参考图，多图时按数组顺序对应 Image 1、Image 2、Image 3。
+- `reference_video`：参考视频，用于动作、镜头、节奏或风格。
+
+素材 URL 规则：
+
+- 客户上传素材后，先看上传接口返回的 `asset_url` 和 `suggested_content_block`。
+- 如果返回了 `asset://asset-...`，生成视频时优先把这个 `asset://...` 放进 `image_url.url` 或 `video_url.url`。
+- 不要把 `asset://...` 写进 prompt 文本里；它应该放在 `content[]` 的 URL 字段里。
+- 客户只能使用自己账号上传/注册的素材；复制其他客户的 `asset://...` 会被拒绝。
+
+### 6.2 文生视频示例
+
+```bash
+curl https://seedance3.eu/v1/videos \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "dreamina-seedance-2-0-260128",
+    "content": [
+      {
+        "type": "text",
+        "text": "A clean commercial video of a white electric scooter driving through a modern city street, morning light, smooth camera movement, realistic style"
+      }
+    ],
+    "resolution": "720p",
+    "ratio": "16:9",
+    "duration": 5,
+    "watermark": false
+  }'
 ```
 
-Relay 会校验结构、模型能力、素材归属和余额。Relay 不做额外的提示词内容限制；上游生成是否成功仍取决于上游模型和账号配置。
+### 6.3 首尾帧动画示例
+
+先上传图片并复制返回的 `asset_url`。如果上传返回：
+
+```json
+{
+  "asset_url": "asset://asset-20260719000123-abcd1"
+}
+```
+
+创建视频时这样使用：
+
+```bash
+curl https://seedance3.eu/v1/videos \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "dreamina-seedance-2-0-260128",
+    "content": [
+      {
+        "type": "text",
+        "text": "Animate from the first frame into a gentle camera push-in. Keep the same subject identity, outfit, and background. Natural movement, cinematic lighting."
+      },
+      {
+        "type": "image_url",
+        "image_url": { "url": "asset://asset-20260719000123-abcd1" },
+        "role": "first_frame"
+      },
+      {
+        "type": "image_url",
+        "image_url": { "url": "asset://asset-20260719000124-efgh2" },
+        "role": "last_frame"
+      }
+    ],
+    "resolution": "720p",
+    "ratio": "16:9",
+    "duration": 5
+  }'
+```
+
+`last_frame` 可以不传；只传 `first_frame` 时就是从首帧继续生成。
+
+### 6.4 多参考图示例
+
+```bash
+curl https://seedance3.eu/v1/videos \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "dreamina-seedance-2-0-260128",
+    "content": [
+      {
+        "type": "text",
+        "text": "Use Image 1 as the main character reference and Image 2 as the product reference. Create a stylish product demo video with smooth handheld camera movement."
+      },
+      {
+        "type": "image_url",
+        "image_url": { "url": "asset://asset-20260719000123-abcd1" },
+        "role": "reference_image"
+      },
+      {
+        "type": "image_url",
+        "image_url": { "url": "asset://asset-20260719000125-ijkl3" },
+        "role": "reference_image"
+      }
+    ],
+    "resolution": "720p",
+    "duration": 5
+  }'
+```
+
+数组里的第一张 `reference_image` 对应 prompt 里的 Image 1，第二张对应 Image 2，以此类推。
+
+### 6.5 参考视频示例
+
+```bash
+curl https://seedance3.eu/v1/videos \
+  -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "dreamina-seedance-2-0-260128",
+    "content": [
+      {
+        "type": "text",
+        "text": "Generate a new product video using the reference video only for camera rhythm and movement style. Do not copy logos or text from the reference."
+      },
+      {
+        "type": "video_url",
+        "video_url": { "url": "asset://asset-20260719000126-mnop4" },
+        "role": "reference_video"
+      }
+    ],
+    "resolution": "720p",
+    "ratio": "9:16",
+    "duration": 5
+  }'
+```
+
+包含 `video_url` 时，预估价格会按“带视频参考”的规则计算。建议提交前先调用 `/v1/videos/estimate`。
+
+### 6.6 创建成功响应
+
+```json
+{
+  "id": "vid_a3f9c1b2d8e4f7a6",
+  "status": "queued",
+  "model": "dreamina-seedance-2-0-260128",
+  "upstream_task_id": "cgt-20260719000123-xxxxx",
+  "estimated_cost_usd": 0.7623,
+  "held_usd": 0.83853,
+  "created_at": 1760000000
+}
+```
+
+拿到 `id` 后，用 `GET /v1/videos/{id}` 轮询状态。成功后响应里会出现 `video_url`，下载或播放使用 `GET /v1/videos/{id}/content`。
+
+### 6.7 常见错误
+
+| HTTP | `error.code` | 说明 | 处理建议 |
+|---:|---|---|---|
+| 400 | `missing_content` | 没有传 `content[]` | 至少传一个 `text` 块 |
+| 400 | `invalid_content_block` | `content[]` 类型不支持 | 只使用 `text`、`image_url`、`video_url`、`audio_url` |
+| 400 | `invalid_content_role` | `role` 不支持 | 使用 `first_frame`、`last_frame`、`reference_image`、`reference_video` |
+| 400 | `too_many_reference_images` | 图片数量超过 9 | 减少图片数量 |
+| 400 | `too_many_reference_videos` | 视频数量超过 3 | 减少视频数量 |
+| 400 | `visual_reference_required` | 当前模型需要图片或视频参考 | 增加 `image_url` 或 `video_url` |
+| 402 | `insufficient_balance` | 余额不足以预授权 | 充值或降低分辨率/时长 |
+| 403 | `model_not_enabled` | 当前账号未开通该模型 | 联系管理员开通模型 |
+| 403 | `asset_forbidden` | 素材不属于当前账号 | 使用自己素材库里的 `asset://...` |
+| 502 | `upstream_error` | BytePlus 拒绝或上游不可用 | 查看返回的 `upstream_code`、`upstream_message`、`request_id`，按提示调整素材、prompt、模型或联系管理员 |
+
+Relay 会校验结构、模型能力、素材归属、endpoint key 和余额。上游生成是否成功仍取决于 BytePlus 模型、账号权限、素材状态和内容审核结果。
 
 ## 7. 查询任务
 
