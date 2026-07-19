@@ -259,6 +259,48 @@ class RequestLogTests(unittest.TestCase):
         self.assertEqual(row["upstream_request_id"], "req-fallback-failed")
         self.assertEqual(row["status_code"], 502)
 
+    def test_fastapi_create_upstream_failure_returns_safe_structured_reason(self):
+        self.fake_http.post_response = FakeResponse(
+            payload={
+                "error": {
+                    "code": "EndpointNotFound",
+                    "message": "The configured endpoint is not available for this model",
+                }
+            },
+            status_code=400,
+            headers={"x-request-id": "req-fallback-structured"},
+        )
+
+        response = self.client.post(
+            "/v1/videos",
+            headers=self.auth_headers(),
+            json={
+                "model": "dreamina-seedance-2-0-260128",
+                "content": [{"type": "text", "text": "structured failure prompt"}],
+                "resolution": "480p",
+                "ratio": "16:9",
+                "duration": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 502, response.text)
+        error = response.json()["detail"]["error"]
+        self.assertEqual(error["code"], "upstream_error")
+        self.assertEqual(error["request_id"], "req-fallback-structured")
+        self.assertEqual(error["upstream_code"], "EndpointNotFound")
+        self.assertIn("endpoint is not available", error["message"])
+
+        db = self.server.get_db()
+        row = db.execute(
+            "SELECT * FROM request_logs WHERE user_id=? AND action=? ORDER BY created_at DESC LIMIT 1",
+            ("u_log_owner", "video_create_failed"),
+        ).fetchone()
+        db.close()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["error_code"], "upstream_error:EndpointNotFound")
+        self.assertIn("EndpointNotFound", row["request_payload"])
+        self.assertIn("req-fallback-structured", row["request_payload"])
+
     def test_fastapi_create_rejected_writes_request_log(self):
         db = self.server.get_db()
         db.execute("UPDATE users SET balance_usd=0.01 WHERE id=?", ("u_log_owner",))

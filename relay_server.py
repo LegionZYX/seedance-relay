@@ -440,6 +440,48 @@ def _upstream_request_id(headers) -> Optional[str]:
     return None
 
 
+def _upstream_error_info(response) -> dict:
+    info: dict = {}
+    status_code = getattr(response, "status_code", None)
+    if status_code:
+        info["status_code"] = int(status_code)
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return info
+
+    error_obj = body.get("error") or body.get("Error") or body
+    if isinstance(error_obj, dict):
+        upstream_code = (
+            error_obj.get("code")
+            or error_obj.get("Code")
+            or error_obj.get("error_code")
+            or error_obj.get("ErrorCode")
+        )
+        upstream_message = (
+            error_obj.get("message")
+            or error_obj.get("Message")
+            or error_obj.get("reason")
+            or error_obj.get("ErrorMessage")
+        )
+    else:
+        upstream_code = body.get("code") or body.get("Code")
+        upstream_message = body.get("message") or body.get("Message")
+    if upstream_code:
+        info["upstream_code"] = sanitize(str(upstream_code))[:128]
+    if upstream_message:
+        info["upstream_message"] = sanitize(str(upstream_message))[:500]
+    request_id = body.get("request_id") or body.get("RequestId") or body.get("requestId")
+    metadata = body.get("ResponseMetadata")
+    if not request_id and isinstance(metadata, dict):
+        request_id = metadata.get("RequestId")
+    if request_id:
+        info["request_id"] = sanitize(str(request_id))[:128]
+    return info
+
+
 def _record_get(record, key: str, default=None):
     if record is None:
         return default
@@ -4802,13 +4844,28 @@ async def create_video(req: CreateVideoRequest, request: Request, user=Depends(a
         }})
     if r.status_code != 200:
         _refund_reserved_balance(user["id"], your_max_cost)
+        upstream_info = _upstream_error_info(r)
         error = {
             "code": "upstream_error",
             "message": "upstream returned an error",
         }
-        request_id = _upstream_request_id(getattr(r, "headers", {}))
+        if upstream_info.get("upstream_message"):
+            error["message"] = upstream_info["upstream_message"]
+        if upstream_info.get("upstream_code"):
+            error["upstream_code"] = upstream_info["upstream_code"]
+        if upstream_info.get("status_code"):
+            error["upstream_status"] = upstream_info["status_code"]
+        request_id = _upstream_request_id(getattr(r, "headers", {})) or upstream_info.get("request_id")
         if request_id:
             error["request_id"] = request_id
+            upstream_info["request_id"] = request_id
+        log_payload = {
+            **payload,
+            "_upstream_error": upstream_info,
+        }
+        log_error_code = "upstream_error"
+        if upstream_info.get("upstream_code"):
+            log_error_code = f"upstream_error:{upstream_info['upstream_code']}"
         _request_log(
             user_id=user["id"],
             task_id=None,
@@ -4816,9 +4873,9 @@ async def create_video(req: CreateVideoRequest, request: Request, user=Depends(a
             action="video_create_failed",
             model=client_model,
             prompt_text=next((b.text for b in content if b.type == "text" and b.text), ""),
-            request_payload=payload,
+            request_payload=log_payload,
             status_code=502,
-            error_code="upstream_error",
+            error_code=log_error_code,
             upstream_request_id=request_id,
             request=request,
         )
