@@ -178,16 +178,19 @@ def check_caddy_snippet(path: Path, report: Report) -> None:
     required = (
         "@runtime_models path /v1/models",
         "@runtime_video_estimate path /v1/videos/estimate",
+        "method POST",
         "path /v1/videos",
-        "path_regexp runtime_video_detail ^/v1/videos/[^/]+$",
-        "path_regexp runtime_video_content ^/v1/videos/[^/]+/content$",
         "header {",
     )
     for needle in required:
         if needle not in text:
             report.fail(f"Caddy snippet missing: {needle}")
-    if lines.count("flush_interval -1") < 2:
+    if lines.count("flush_interval -1") < 1:
         report.fail("Caddy snippet must keep flush_interval -1 active for streaming proxies")
+    if "method GET POST" in text:
+        report.fail("Caddy snippet must route only POST /v1/videos to the Go runtime")
+    if "runtime_video_detail" in text or "runtime_video_content" in text:
+        report.fail("Caddy snippet must route task reads and content through the Relay service")
     if "path /v1/videos*" in text or "path_regexp runtime_all_videos" in text:
         report.fail("Caddy snippet must not route /v1/videos* with a broad wildcard")
     report.ok(f"checked Caddy snippet: {path}")

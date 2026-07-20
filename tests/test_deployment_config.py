@@ -54,14 +54,15 @@ class DeploymentConfigTests(unittest.TestCase):
         ):
             self.assertIn(pattern, gitignore)
 
-    def test_caddy_routes_hot_paths_explicitly_without_broad_video_wildcard(self):
+    def test_caddy_routes_only_video_create_to_runtime(self):
         caddy = self.read("deploy/caddy_video.snippet")
         self.assertIn("@runtime_models path /v1/models", caddy)
         self.assertIn("@runtime_video_estimate path /v1/videos/estimate", caddy)
-        self.assertIn("method GET POST", caddy)
+        self.assertIn("method POST", caddy)
         self.assertIn("path /v1/videos", caddy)
-        self.assertIn("^/v1/videos/[^/]+$", caddy)
-        self.assertIn("^/v1/videos/[^/]+/content$", caddy)
+        self.assertNotIn("method GET POST", caddy)
+        self.assertNotIn("runtime_video_detail", caddy)
+        self.assertNotIn("runtime_video_content", caddy)
         self.assertNotIn("path /v1/videos*", caddy)
         self.assertNotIn("path_regexp runtime_all_videos", caddy)
 
@@ -72,7 +73,7 @@ class DeploymentConfigTests(unittest.TestCase):
             for line in caddy.splitlines()
             if line.strip() and not line.strip().startswith("#")
         ]
-        self.assertGreaterEqual(active_lines.count("flush_interval -1"), 2)
+        self.assertGreaterEqual(active_lines.count("flush_interval -1"), 1)
         self.assertIn("header {", active_lines)
         self.assertFalse(
             any(

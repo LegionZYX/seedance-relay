@@ -24,38 +24,10 @@ video.customer-domain.com {
     }
 
     @runtime_video_create {
-        method GET POST
+        method POST
         path /v1/videos
     }
     reverse_proxy @runtime_video_create 127.0.0.1:8012 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
-
-    @runtime_video_content path_regexp runtime_video_content ^/v1/videos/[^/]+/content$
-    reverse_proxy @runtime_video_content 127.0.0.1:8012 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-        flush_interval -1
-
-        transport http {
-            keepalive 120s
-            keepalive_idle_conns 64
-            compression off
-            dial_timeout 10s
-            response_header_timeout 600s
-        }
-    }
-
-    @runtime_video_detail {
-        method GET
-        path_regexp runtime_video_detail ^/v1/videos/[^/]+$
-    }
-    reverse_proxy @runtime_video_detail 127.0.0.1:8012 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
         header_up X-Forwarded-For {remote_host}
