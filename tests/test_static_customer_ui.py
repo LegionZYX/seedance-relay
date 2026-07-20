@@ -53,7 +53,7 @@ class StaticCustomerUiTests(unittest.TestCase):
     def test_customer_ui_shows_video_retention_countdown(self):
         app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
 
-        self.assertIn("服务器网关：保存 2 小时", app_html)
+        self.assertIn("服务器网关：保存 2 天", app_html)
         self.assertIn("BytePlus 原始文件：官方保存 24 小时", app_html)
         self.assertIn("服务器网关下载", app_html)
         self.assertIn("BytePlus 原始下载", app_html)

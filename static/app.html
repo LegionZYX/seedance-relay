@@ -785,7 +785,7 @@
             <template #title>
               下载地址与保存时间
             </template>
-            <div>服务器网关：保存 2 小时，剩余 {{ contentCountdown(currentTask) }}</div>
+            <div>服务器网关：保存 2 天，剩余 {{ contentCountdown(currentTask) }}</div>
             <div>BytePlus 原始文件：官方保存 24 小时，剩余 {{ upstreamContentCountdown(currentTask) }}</div>
             <div>请优先下载到本地；任一地址过期后将无法继续使用对应链接。</div>
           </el-alert>
@@ -1256,7 +1256,7 @@ curl https://seedance3.eu/v1/videos \
           <template #title>
             下载地址与保存时间
           </template>
-          <div>服务器网关：保存 2 小时，剩余 {{ contentCountdown(historyTask) }}</div>
+          <div>服务器网关：保存 2 天，剩余 {{ contentCountdown(historyTask) }}</div>
           <div>BytePlus 原始文件：官方保存 24 小时，剩余 {{ upstreamContentCountdown(historyTask) }}</div>
           <div>请优先下载到本地；任一地址过期后将无法继续使用对应链接。</div>
         </el-alert>

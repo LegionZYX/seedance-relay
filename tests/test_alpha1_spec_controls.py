@@ -1547,7 +1547,7 @@ class Alpha1SpecControlTests(unittest.TestCase):
                 1,
                 "https://byteplus.example.test/video.mp4",
                 now + 86400,
-                now + 7200,
+                now + 172800,
                 now,
                 now,
             ),
@@ -1561,8 +1561,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertEqual(body["content_retention_seconds"], 7200)
-        self.assertGreater(body["content_seconds_remaining"], 7100)
+        self.assertEqual(body["content_retention_seconds"], 172800)
+        self.assertGreater(body["content_seconds_remaining"], 172700)
         self.assertFalse(body["content_expired"])
         self.assertEqual(body["upstream_video_url"], "https://byteplus.example.test/video.mp4")
         self.assertEqual(body["upstream_content_retention_seconds"], 86400)
@@ -1577,12 +1577,12 @@ class Alpha1SpecControlTests(unittest.TestCase):
             expires_at = self.server._task_content_expires_at({
                 "status": "succeeded",
                 "updated_at": now,
-                "local_video_expires_at": now + 172800,
+                "local_video_expires_at": now + 604800,
             })
         finally:
             self.server.VIDEO_PERSIST_MODE = original_mode
 
-        self.assertEqual(expires_at, now + 7200)
+        self.assertEqual(expires_at, now + 172800)
 
     def test_expired_local_video_returns_clear_error_and_removes_file(self):
         user = self.create_user("expired-local-video@example.test")
