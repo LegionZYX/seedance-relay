@@ -103,7 +103,8 @@ DB_PATH        = os.getenv("DB_PATH", "/data/relay.sqlite")
 VIDEO_DIR      = Path(os.getenv("VIDEO_DIR", "/data/videos"))
 UPLOAD_DIR     = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
 VIDEO_PERSIST_MODE = os.getenv("VIDEO_PERSIST_MODE", "proxy_only").strip().lower() or "proxy_only"
-VIDEO_RETENTION_SECONDS = int(os.getenv("VIDEO_RETENTION_SECONDS", "172800"))
+VIDEO_RETENTION_SECONDS = int(os.getenv("VIDEO_RETENTION_SECONDS", "7200"))
+BYTEPLUS_VIDEO_RETENTION_SECONDS = 24 * 3600
 UPLOAD_PUBLIC_BASE_URL = os.getenv("UPLOAD_PUBLIC_BASE_URL", "").strip().rstrip("/")
 PRICE_MULTIPLIER_BACKFILL_SETTING = "migration.price_multiplier_backfill.v1"
 ADMIN_KEY      = os.getenv("ADMIN_KEY", "").strip()
@@ -2895,6 +2896,15 @@ def _format_task(t: dict, error: Optional[str] = None) -> dict:
             out["content_retention_seconds"] = VIDEO_RETENTION_SECONDS
             out["content_seconds_remaining"] = max(0, content_expires_at - now)
             out["content_expired"] = content_expires_at <= now
+        upstream_video_url = str(t.get("cached_video_url") or "").strip()
+        upstream_expires_at = _upstream_content_expires_at(t)
+        if upstream_video_url and (not upstream_expires_at or upstream_expires_at > now):
+            out["upstream_video_url"] = upstream_video_url
+        if upstream_expires_at:
+            out["upstream_content_expires_at"] = upstream_expires_at
+            out["upstream_content_retention_seconds"] = BYTEPLUS_VIDEO_RETENTION_SECONDS
+            out["upstream_content_seconds_remaining"] = max(0, upstream_expires_at - now)
+            out["upstream_content_expired"] = upstream_expires_at <= now
     error_message = error or t.get("error_message")
     if error_message and t.get("status") in {"failed", "cancelled", "expired"}:
         out["error"] = {"message": sanitize(str(error_message))}
@@ -2920,9 +2930,23 @@ def _task_error_message_from_upstream(info: dict) -> Optional[str]:
 def _task_content_expires_at(t: dict) -> Optional[int]:
     if t.get("status") != "succeeded":
         return None
+    policy_expires = None
+    if VIDEO_PERSIST_MODE != "proxy_only":
+        succeeded_at = int(t.get("updated_at") or t.get("created_at") or time.time())
+        policy_expires = succeeded_at + VIDEO_RETENTION_SECONDS
     local_expires = t.get("local_video_expires_at")
     if local_expires:
-        return int(local_expires)
+        return min(int(local_expires), policy_expires) if policy_expires else int(local_expires)
+    if policy_expires:
+        return policy_expires
+    signed_expires = _signed_video_url_expires_at(t.get("cached_video_url") or "")
+    if signed_expires:
+        return signed_expires
+    cached_until = t.get("cached_video_url_until")
+    return int(cached_until) if cached_until else None
+
+
+def _upstream_content_expires_at(t: dict) -> Optional[int]:
     signed_expires = _signed_video_url_expires_at(t.get("cached_video_url") or "")
     if signed_expires:
         return signed_expires
@@ -2979,7 +3003,7 @@ def _schedule_video_persist_if_needed(task: dict) -> None:
 def _content_expired_response() -> HTTPException:
     return HTTPException(410, {"error": {
         "code": "video_expired",
-        "message": "video content has expired; generated videos are kept for 2 days",
+        "message": f"video content has expired; relay copies are kept for {VIDEO_RETENTION_SECONDS} seconds",
     }})
 
 

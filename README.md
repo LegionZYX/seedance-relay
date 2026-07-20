@@ -165,7 +165,7 @@ ADMIN_EMAIL=admin@example.com
 BRAND_NAME=Your Brand
 DB_PATH=./data/relay.sqlite                  # 本地开发用相对路径
 VIDEO_DIR=./data/videos
-VIDEO_RETENTION_SECONDS=172800
+VIDEO_RETENTION_SECONDS=7200
 UPLOAD_DIR=./data/uploads
 ```
 
@@ -257,7 +257,7 @@ BRAND_NAME=Your Brand Studio
 # 数据库 + 视频路径（容器内路径，会挂载到宿主机 ./data）
 DB_PATH=/data/relay.sqlite
 VIDEO_DIR=/data/videos
-VIDEO_RETENTION_SECONDS=172800
+VIDEO_RETENTION_SECONDS=7200
 UPLOAD_DIR=/data/uploads
 
 # 上传中转站（留空时用 https://PUBLIC_DOMAIN/uploads/...）
@@ -374,7 +374,7 @@ ssh root@<server-ip> "cd /opt/seedance-relay && \
 | `BRAND_NAME` | `Example Video Relay` | 品牌名（脱敏替换 / UI 标题） |
 | `DB_PATH` | `/data/relay.sqlite` | SQLite 数据库路径 |
 | `VIDEO_DIR` | `/data/videos` | 视频落地目录 |
-| `VIDEO_RETENTION_SECONDS` | `172800` | 成功视频默认保存期，172800 秒即 2 天 |
+| `VIDEO_RETENTION_SECONDS` | `7200` | Relay 服务器成功视频默认保存期，7200 秒即 2 小时；BytePlus 原始生成文件官方保存 24 小时 |
 | `UPLOAD_DIR` | `/data/uploads` | 上传中转站本地保存目录 |
 | `UPLOAD_PUBLIC_BASE_URL` | 空 | 上传 URL 的公网 base；留空用 `https://PUBLIC_DOMAIN` |
 | `UPLOAD_MAX_IMAGE_MB` | `10` | 图片上传白名单大小上限 |

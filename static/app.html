@@ -783,18 +783,23 @@
             style="margin-bottom:14px;"
           >
             <template #title>
-              视频默认保存 2 天，保存剩余：{{ contentCountdown(currentTask) }}
+              下载地址与保存时间
             </template>
-            请在倒计时结束前下载；过期后需要重新生成。
+            <div>服务器网关：保存 2 小时，剩余 {{ contentCountdown(currentTask) }}</div>
+            <div>BytePlus 原始文件：官方保存 24 小时，剩余 {{ upstreamContentCountdown(currentTask) }}</div>
+            <div>请优先下载到本地；任一地址过期后将无法继续使用对应链接。</div>
           </el-alert>
 
           <template v-if="currentTask.status === 'succeeded' && currentTask.video_url">
             <div style="background:#0f172a; border-radius:10px; overflow:hidden; max-width:720px; margin:0 auto;">
               <video :src="currentTask.video_url" controls autoplay playsinline style="width:100%; display:block;"></video>
             </div>
-            <div style="display:flex; justify-content:center; margin-top:14px;">
+            <div style="display:flex; justify-content:center; flex-wrap:wrap; gap:8px; margin-top:14px;">
               <el-button tag="a" :href="currentTask.video_url" :download="currentTask.id + '.mp4'">
-                <el-icon style="margin-right:6px"><Download /></el-icon>下载视频
+                <el-icon style="margin-right:6px"><Download /></el-icon>服务器网关下载
+              </el-button>
+              <el-button v-if="currentTask.upstream_video_url" tag="a" :href="currentTask.upstream_video_url" target="_blank" rel="noopener noreferrer">
+                <el-icon style="margin-right:6px"><Link /></el-icon>BytePlus 原始下载
               </el-button>
             </div>
           </template>
@@ -860,7 +865,8 @@
                   <span class="mono" style="font-weight:600; color:var(--text)">${{ fmt(t.actual_cost_usd ?? t.estimated_cost_usd) }}</span>
                 </div>
                 <div v-if="t.status === 'succeeded' && t.content_expires_at" style="margin-top:8px; font-size:11.5px; color:var(--text-muted);">
-                  保存剩余：<span class="mono" :style="{color: contentExpired(t) ? '#b91c1c' : 'var(--text)'}">{{ contentCountdown(t) }}</span>
+                  网关剩余：<span class="mono" :style="{color: contentExpired(t) ? '#b91c1c' : 'var(--text)'}">{{ contentCountdown(t) }}</span>
+                  <span v-if="t.upstream_content_expires_at"> / BytePlus：<span class="mono">{{ upstreamContentCountdown(t) }}</span></span>
                 </div>
                 <div v-else-if="['queued','running'].includes(t.status)" style="margin-top:8px; font-size:11.5px; color:var(--text-muted);">
                   预计等待：<span class="mono">{{ generationCountdown(t) }}</span>
@@ -1248,9 +1254,11 @@ curl https://seedance3.eu/v1/videos \
           style="margin-bottom:14px;"
         >
           <template #title>
-            视频默认保存 2 天，下载剩余：{{ contentCountdown(historyTask) }}
+            下载地址与保存时间
           </template>
-          请在倒计时结束前下载；过期后需要重新生成。
+          <div>服务器网关：保存 2 小时，剩余 {{ contentCountdown(historyTask) }}</div>
+          <div>BytePlus 原始文件：官方保存 24 小时，剩余 {{ upstreamContentCountdown(historyTask) }}</div>
+          <div>请优先下载到本地；任一地址过期后将无法继续使用对应链接。</div>
         </el-alert>
 
         <template v-if="historyTask.status === 'succeeded' && historyTask.video_url">
@@ -1259,7 +1267,10 @@ curl https://seedance3.eu/v1/videos \
           </div>
           <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
             <el-button tag="a" :href="historyTask.video_url" :download="historyTask.id + '.mp4'">
-              <el-icon style="margin-right:6px"><Download /></el-icon>下载视频
+              <el-icon style="margin-right:6px"><Download /></el-icon>服务器网关下载
+            </el-button>
+            <el-button v-if="historyTask.upstream_video_url" tag="a" :href="historyTask.upstream_video_url" target="_blank" rel="noopener noreferrer">
+              <el-icon style="margin-right:6px"><Link /></el-icon>BytePlus 原始下载
             </el-button>
           </div>
         </template>
@@ -1724,6 +1735,20 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     contentCountdown(task) {
       const remaining = this.contentSecondsRemaining(task);
       if (remaining == null) return "-";
+      if (remaining <= 0) return "已过期";
+      const days = Math.floor(remaining / 86400);
+      const hours = Math.floor((remaining % 86400) / 3600);
+      const minutes = Math.floor((remaining % 3600) / 60);
+      if (days > 0) return `${days}天 ${hours}小时`;
+      if (hours > 0) return `${hours}小时 ${minutes}分钟`;
+      return `${Math.max(1, minutes)}分钟`;
+    },
+    upstreamContentCountdown(task) {
+      if (!task?.upstream_content_expires_at) return "等待上游返回有效期";
+      return this.countdownFromTimestamp(task.upstream_content_expires_at);
+    },
+    countdownFromTimestamp(expiresAt) {
+      const remaining = Math.max(0, Number(expiresAt) - this.countdownNow);
       if (remaining <= 0) return "已过期";
       const days = Math.floor(remaining / 86400);
       const hours = Math.floor((remaining % 86400) / 3600);

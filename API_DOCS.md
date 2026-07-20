@@ -61,6 +61,13 @@ curl https://seedance3.eu/v1/videos/vid_a3f9c1b2d8e4f7a6 \
 }
 ```
 
+成功任务同时返回两种下载地址：
+
+- `video_url`：Relay 服务器网关地址。服务器副本默认保存 2 小时，实际到期时间见 `content_expires_at`。
+- `upstream_video_url`：BytePlus 原始下载地址。BytePlus 官方说明生成视频会在 24 小时后删除，实际到期时间见 `upstream_content_expires_at`。
+
+请优先把成品下载到自己的长期存储。任务历史可查询时间不等于视频文件保存时间。
+
 播放或下载：
 
 ```bash
@@ -490,13 +497,18 @@ curl https://seedance3.eu/v1/videos/vid_a3f9c1b2d8e4f7a6/content \
 ```json
 {
   "content_expires_at": 1760000000,
-  "content_retention_seconds": 172800,
-  "content_seconds_remaining": 86400,
-  "content_expired": false
+  "content_retention_seconds": 7200,
+  "content_seconds_remaining": 7100,
+  "content_expired": false,
+  "upstream_video_url": "https://ark-content-generation.../result.mp4?...",
+  "upstream_content_expires_at": 1760079200,
+  "upstream_content_retention_seconds": 86400,
+  "upstream_content_seconds_remaining": 86300,
+  "upstream_content_expired": false
 }
 ```
 
-视频文件默认保存 2 天。请在倒计时结束前下载；过期后内容接口会返回 `video_expired`，需要重新生成。
+Relay 服务器副本默认保存 2 小时，BytePlus 原始生成文件官方保存 24 小时。请在任一倒计时结束前下载；网关副本过期后内容接口会返回 `video_expired`。
 
 ## 9. 上传素材
 

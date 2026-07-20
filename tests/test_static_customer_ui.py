@@ -53,9 +53,14 @@ class StaticCustomerUiTests(unittest.TestCase):
     def test_customer_ui_shows_video_retention_countdown(self):
         app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
 
-        self.assertIn("视频默认保存 2 天", app_html)
-        self.assertIn("保存剩余", app_html)
+        self.assertIn("服务器网关：保存 2 小时", app_html)
+        self.assertIn("BytePlus 原始文件：官方保存 24 小时", app_html)
+        self.assertIn("服务器网关下载", app_html)
+        self.assertIn("BytePlus 原始下载", app_html)
         self.assertIn("contentCountdown(task)", app_html)
+        self.assertIn("upstreamContentCountdown(task)", app_html)
+        self.assertIn("upstream_video_url", app_html)
+        self.assertIn("upstream_content_expires_at", app_html)
         self.assertIn("content_expires_at", app_html)
 
     def test_history_cards_open_task_detail_without_switching_to_generate_form(self):
