@@ -61,7 +61,7 @@ from pydantic import BaseModel, Field, EmailStr
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent))
-from modelark import estimate_video_cost, actual_video_cost
+from modelark import estimate_video_cost, actual_video_cost, get_price
 from create_asset_white_label import (
     build_create_asset_body,
     build_create_asset_group_body,
@@ -3098,6 +3098,19 @@ def _cancel_task_once(
         raise
 
 
+def _task_pricing_model(task: dict[str, Any]) -> str:
+    client_model = str(task.get("client_model") or "").strip()
+    candidates = (
+        client_model,
+        MODEL_MAP.get(client_model, ""),
+        str(task.get("upstream_model") or "").strip(),
+    )
+    for candidate in candidates:
+        if candidate and get_price(candidate):
+            return candidate
+    return next((candidate for candidate in candidates if candidate), "")
+
+
 async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url: bool = False) -> dict:
     db = get_db()
     t = db.execute("SELECT * FROM tasks WHERE id=? AND user_id=?",
@@ -3157,7 +3170,7 @@ async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url
     if new_status in ("succeeded", "failed", "cancelled", "expired") \
             and not t["settled"]:
         if new_status == "succeeded":
-            pricing_model = str(t.get("upstream_model") or "")
+            pricing_model = _task_pricing_model(t)
             pricing_resolution = str(t.get("resolution") or info.get("resolution") or "")
             upstream_cost = actual_video_cost(
                 info,

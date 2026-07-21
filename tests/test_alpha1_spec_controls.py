@@ -391,6 +391,70 @@ class Alpha1SpecControlTests(unittest.TestCase):
         self.assertEqual(task["actual_cost_usd"], 1.447446)
         self.assertEqual(task["settled"], 1)
 
+    def test_settlement_prices_dedicated_endpoint_from_client_model_snapshot(self):
+        user = self.create_user("settle-endpoint-model@example.test", price_multiplier=1.2)
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, has_video_ref, status,
+                estimated_cost_usd, held_usd, price_multiplier,
+                settled, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_settle_endpoint_model",
+                user["id"],
+                "upstream-settle-endpoint-model",
+                "ep-dedicated-seedance-2",
+                "dreamina-seedance-2-0-260128",
+                "720p",
+                5,
+                0,
+                "queued",
+                0.0084,
+                0.01,
+                1.2,
+                0,
+                1,
+                1,
+            ),
+        )
+        db.execute(
+            "UPDATE users SET balance_usd=? WHERE id=?",
+            (9.99, user["id"]),
+        )
+        db.close()
+        self.fake_http.get_payload = {
+            "status": "succeeded",
+            "model": "dreamina-seedance-2-0-260128",
+            "resolution": "720p",
+            "usage": {"completion_tokens": 1000},
+            "content": {"video_url": "https://byteplus.example.test/private-video.mp4"},
+        }
+
+        response = self.client.get(
+            "/v1/videos/vid_settle_endpoint_model",
+            headers=self.auth_headers(user["api_key"]),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["actual_cost_usd"], 0.0084)
+
+        db = self.server.get_db()
+        task = db.execute(
+            "SELECT upstream_actual_cost_usd, actual_cost_usd, settled FROM tasks WHERE id=?",
+            ("vid_settle_endpoint_model",),
+        ).fetchone()
+        balance = db.execute(
+            "SELECT balance_usd FROM users WHERE id=?",
+            (user["id"],),
+        ).fetchone()["balance_usd"]
+        db.close()
+        self.assertEqual(task["upstream_actual_cost_usd"], 0.007)
+        self.assertEqual(task["actual_cost_usd"], 0.0084)
+        self.assertEqual(task["settled"], 1)
+        self.assertEqual(round(balance, 6), 9.9916)
+
     def test_fastapi_terminal_refresh_refunds_only_once_at_db_boundary(self):
         user = self.create_user("fastapi-settle-once@example.test")
         db = self.server.get_db()
