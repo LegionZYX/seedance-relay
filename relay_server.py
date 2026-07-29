@@ -1650,6 +1650,17 @@ class UploadFromUrlRequest(BaseModel):
 
 
 # ─── 内部工具 ────────────────────────────────────────────────────
+def _effective_face_allowlist(requested: bool, purpose: str) -> bool:
+    return bool(
+        requested
+        or (
+            FACE_ASSET_ENFORCE
+            and FACE_ASSET_SELF_SERVICE
+            and purpose in ("image", "video")
+        )
+    )
+
+
 def _normalize_asset_url(asset_url: str) -> str:
     value = (asset_url or "").strip()
     if not value.startswith("asset://"):
@@ -2852,7 +2863,6 @@ def _validate_customer_asset_access(content: list[ContentBlock], user_id: str) -
     if not asset_urls:
         return
 
-    global_allowlist = _active_face_asset_allowlist()
     db = get_db()
     try:
         for asset_url in asset_urls:
@@ -2863,7 +2873,7 @@ def _validate_customer_asset_access(content: list[ContentBlock], user_id: str) -
             if not rows:
                 continue
             owners = {row["user_id"] for row in rows}
-            if user_id not in owners and asset_url not in global_allowlist:
+            if user_id not in owners:
                 raise HTTPException(403, {"error": {
                     "code": "asset_not_owned",
                     "message": "This asset:// material belongs to another account",
@@ -4669,6 +4679,7 @@ async def upload_media(
         }})
 
     inferred_purpose = spec["purpose"]
+    face_allowlist = _effective_face_allowlist(face_allowlist, inferred_purpose)
     if purpose and purpose.strip().lower() != inferred_purpose:
         raise HTTPException(400, {"error": {
             "code": "invalid_upload_purpose",
@@ -4798,12 +4809,13 @@ async def upload_media_from_url(req: UploadFromUrlRequest, user=Depends(auth_use
         req.purpose,
         req.size_bytes,
     )
-    if req.face_allowlist and not FACE_ASSET_SELF_SERVICE:
+    face_allowlist = _effective_face_allowlist(req.face_allowlist, inferred_purpose)
+    if face_allowlist and not FACE_ASSET_SELF_SERVICE:
         raise HTTPException(403, {"error": {
             "code": "face_asset_self_service_disabled",
             "message": "Self-service face asset whitelisting is disabled",
         }})
-    if req.face_allowlist and inferred_purpose not in ("image", "video"):
+    if face_allowlist and inferred_purpose not in ("image", "video"):
         raise HTTPException(400, {"error": {
             "code": "invalid_face_asset_type",
             "message": "Only image and video uploads can be added to the face asset whitelist",
@@ -4812,14 +4824,14 @@ async def upload_media_from_url(req: UploadFromUrlRequest, user=Depends(auth_use
     upload_id = "upl_" + secrets.token_hex(8)
     asset_info: dict = {}
     should_register_asset = (
-        req.face_allowlist
+        face_allowlist
         or (ASSET_AUTO_REGISTER_UPLOADS and inferred_purpose in ASSET_AUTO_REGISTER_PURPOSES)
     )
     if should_register_asset:
         asset_info = await asyncio.to_thread(_register_upload_asset, req.url, inferred_purpose, dict(user))
 
     face_asset_note_to_store: Optional[str] = None
-    if req.face_allowlist:
+    if face_allowlist:
         face_asset_note_to_store = req.face_asset_note or f"self-service URL upload by {user['id']}"
         row = _upsert_face_asset_record(
             asset_info["asset_url"],
@@ -4840,7 +4852,7 @@ async def upload_media_from_url(req: UploadFromUrlRequest, user=Depends(auth_use
         purpose=inferred_purpose,
         original_filename=req.original_filename or _filename_from_url(req.url),
         asset_info=asset_info,
-        face_asset_whitelisted=req.face_allowlist,
+        face_asset_whitelisted=face_allowlist,
         face_asset_label=req.face_asset_label,
         face_asset_note=face_asset_note_to_store,
     )

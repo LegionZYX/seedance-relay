@@ -277,6 +277,21 @@ class CustomerPricingTests(unittest.TestCase):
                 now,
             ),
         )
+        db.execute(
+            """INSERT INTO face_assets
+               (asset_url, asset_id, asset_type, label, note, is_active, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                "asset://asset-owned-by-other",
+                "asset-owned-by-other",
+                "image",
+                "owner face",
+                "",
+                1,
+                now,
+                now,
+            ),
+        )
         db.close()
 
         response = self.client.post(

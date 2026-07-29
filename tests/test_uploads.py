@@ -333,6 +333,43 @@ class UploadEndpointTests(unittest.TestCase):
         self.assertEqual(row["label"], "customer approved face")
         self.assertEqual(row["is_active"], 1)
 
+    def test_enforced_reference_assets_are_whitelisted_by_default(self):
+        self.server.FACE_ASSET_ENFORCE = True
+        self.server.FACE_ASSET_SELF_SERVICE = True
+
+        response = self.client.post(
+            "/v1/uploads",
+            headers=self.auth_headers(),
+            files={"file": ("reference.png", b"\x89PNG\r\n\x1a\nseedance", "image/png")},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["face_asset_whitelisted"])
+
+        db = self.server.get_db()
+        row = db.execute(
+            "SELECT asset_url, asset_type, is_active FROM face_assets WHERE asset_url=?",
+            (body["asset_url"],),
+        ).fetchone()
+        db.close()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["asset_type"], "image")
+        self.assertEqual(row["is_active"], 1)
+
+    def test_enforced_remote_reference_assets_are_whitelisted_by_default(self):
+        self.server.FACE_ASSET_ENFORCE = True
+        self.server.FACE_ASSET_SELF_SERVICE = True
+
+        response = self.client.post(
+            "/v1/uploads/from-url",
+            headers=self.auth_headers(),
+            json={"url": "https://cdn.example.test/assets/reference.png"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["face_asset_whitelisted"])
+
     def test_upload_from_url_records_customer_owned_material(self):
         response = self.client.post(
             "/v1/uploads/from-url",
