@@ -341,6 +341,9 @@
         <div :class="['sb-nav-item', tab==='tasks' && 'active']" @click="switchTab('tasks')">
           <el-icon><List /></el-icon> 任务流水
         </div>
+        <div :class="['sb-nav-item', tab==='requestLogs' && 'active']" @click="switchTab('requestLogs')">
+          <el-icon><Document /></el-icon> 请求日志
+        </div>
         <div :class="['sb-nav-item', tab==='audit' && 'active']" @click="switchTab('audit')">
           <el-icon><View /></el-icon> 审计
         </div>
@@ -424,6 +427,51 @@
                     </el-tag>
                   </div>
                   <div style="font-size:12px; margin-top:8px;">开启后客户可用一行参数触发 asset:// 注册。</div>
+                </div>
+              </el-col>
+            </el-row>
+          </div>
+          <div class="panel panel-pad" style="margin-top:8px">
+            <h3 style="margin:0 0 12px; font-size:15px; display:flex; align-items:center; gap:8px;">
+              <el-icon><CircleCheck /></el-icon> Endpoint Map Health
+            </h3>
+            <el-table :data="endpointHealth" size="small" style="width:100%" empty-text="No endpoint map health data">
+              <el-table-column label="Customer" min-width="180">
+                <template #default="{ row }">
+                  <b>{{ row.email || row.user_id }}</b>
+                  <div style="font-size:12px;color:var(--muted);">{{ row.user_id }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="Status" width="110">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="row.status === 'ok' ? 'success' : 'warning'">{{ row.status }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Missing mappings" min-width="220">
+                <template #default="{ row }">{{ (row.missing_models || []).join(', ') || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="Key mode" width="150">
+                <template #default="{ row }">
+                  {{ row.endpoint_key_mode || '-' }}
+                  <el-tag v-if="row.endpoint_key_map_configured" size="small" effect="plain">key map</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+          <div class="panel panel-pad" style="margin-top:8px">
+            <h3 style="margin:0 0 12px; font-size:15px; display:flex; align-items:center; gap:8px;">
+              <el-icon><InfoFilled /></el-icon> Quota Center Reminders
+            </h3>
+            <el-row :gutter="12">
+              <el-col v-for="item in quotaReminders" :key="item.resource" :xs="24" :sm="8">
+                <div class="info-box">
+                  <b>{{ item.resource }}</b>
+                  <div style="margin-top:8px">
+                    <el-tag :type="item.status === 'warning' ? 'warning' : 'success'" effect="light">
+                      {{ item.used }} / {{ item.warn_at || '-' }}
+                    </el-tag>
+                  </div>
+                  <div style="font-size:12px; margin-top:8px;">{{ item.reminder }}</div>
                 </div>
               </el-col>
             </el-row>
@@ -698,6 +746,63 @@
               <el-table-column label="状态" width="120">
                 <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small" effect="light">{{ statusLabel(row.status) }}</el-tag></template>
               </el-table-column>
+              <el-table-column label="操作" width="150" fixed="right">
+                <template #default="{ row }">
+                  <el-button size="small" text @click="openTaskDetail(row)">详情</el-button>
+                  <el-button v-if="row.status === 'succeeded'" size="small" text @click="openTaskContent(row)">内容</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </template>
+      <!-- Request logs -->
+      <template v-if="tab === 'requestLogs'">
+        <div class="main-bar">
+          <div>
+            <h2>请求日志</h2>
+            <div class="sub">客户视频生成请求、提示词、上游结果和任务关联</div>
+          </div>
+          <el-button @click="loadRequestLogs"><el-icon><Refresh /></el-icon> 刷新</el-button>
+        </div>
+        <div class="main-content">
+          <div class="filter-row">
+            <el-select v-model="requestLogFilters.user_id" placeholder="全部客户" clearable style="width:240px" @change="loadRequestLogs">
+              <el-option label="全部客户" value="" />
+              <el-option v-for="u in users" :key="u.id" :label="u.email || u.id" :value="u.id" />
+            </el-select>
+            <el-select v-model="requestLogFilters.action" placeholder="全部动作" clearable style="width:200px" @change="loadRequestLogs">
+              <el-option label="创建成功" value="video_create_success" />
+              <el-option label="创建失败" value="video_create_failed" />
+              <el-option label="余额不足" value="video_create_rejected" />
+            </el-select>
+            <el-input v-model="requestLogFilters.task_id" clearable placeholder="Task ID" style="width:240px" @keyup.enter="loadRequestLogs" />
+            <el-input v-model="requestLogFilters.model" clearable placeholder="Model" style="width:240px" @keyup.enter="loadRequestLogs" />
+            <el-button @click="loadRequestLogs"><el-icon><Search /></el-icon> 查询</el-button>
+          </div>
+          <div class="panel">
+            <el-table :data="requestLogs" v-loading="loading.requestLogs" style="width:100%" stripe>
+              <el-table-column label="时间" width="170">
+                <template #default="{ row }"><span style="font-size:12px; color:var(--text-muted)">{{ fmtTs(row.created_at) }}</span></template>
+              </el-table-column>
+              <el-table-column label="客户" min-width="180">
+                <template #default="{ row }">
+                  <div>{{ row.user_email || row.user_id || '-' }}</div>
+                  <div class="mono" style="font-size:12px; color:var(--text-muted)">{{ row.user_id || '-' }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="动作" width="160">
+                <template #default="{ row }"><el-tag size="small" effect="light">{{ requestLogActionLabel(row.action) }}</el-tag></template>
+              </el-table-column>
+              <el-table-column label="模型" min-width="180" show-overflow-tooltip prop="model" />
+              <el-table-column label="Prompt" min-width="260" show-overflow-tooltip prop="prompt_text" />
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }"><span class="mono">{{ row.status_code || '-' }}</span></template>
+              </el-table-column>
+              <el-table-column label="任务" min-width="180" show-overflow-tooltip prop="task_id" />
+              <el-table-column label="操作" width="110" fixed="right">
+                <template #default="{ row }"><el-button size="small" text @click="openRequestLogDetail(row)">详情</el-button></template>
+              </el-table-column>
             </el-table>
           </div>
         </div>
@@ -910,20 +1015,20 @@
           <div class="info-box" style="margin-bottom:18px;">
             <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:12px;">
               <div>
-                <b>Customer Endpoint</b>
-                <div style="font-size:12px; margin-top:3px;">shared = 普通客户；auto_dedicated = 独立 project / endpoint / asset group。</div>
+                <b>Customer Project Resources</b>
+                <div style="font-size:12px; margin-top:3px;">One customer uses one BytePlus Project, one AIGC AssetGroup, and a Model Endpoint Map for enabled models.</div>
               </div>
-              <el-tag :type="upstreamForm.upstream_mode === 'auto_dedicated' ? 'success' : 'info'" effect="light">
-                {{ upstreamForm.upstream_mode || 'shared' }}
+              <el-tag :type="upstreamForm.byteplus_project_name ? 'success' : 'warning'" effect="light">
+                {{ upstreamForm.byteplus_project_name ? 'project configured' : 'project missing' }}
               </el-tag>
             </div>
             <el-row :gutter="10">
               <el-col :span="8">
-                <el-form-item label="Mode">
+                <el-form-item label="resource_mode">
                   <el-select v-model="upstreamForm.upstream_mode" style="width:100%">
-                    <el-option label="shared" value="shared" />
-                    <el-option label="manual_dedicated" value="manual_dedicated" />
-                    <el-option label="auto_dedicated" value="auto_dedicated" />
+                    <el-option label="not provisioned" value="shared" />
+                    <el-option label="manual resources" value="manual_dedicated" />
+                    <el-option label="auto provisioned resources" value="auto_dedicated" />
                   </el-select>
                 </el-form-item>
               </el-col>
@@ -935,12 +1040,54 @@
               <el-col :span="8"><el-form-item label="asset_group_id"><el-input v-model="upstreamForm.modelark_asset_group_id" placeholder="group-..." /></el-form-item></el-col>
               <el-col :span="8"><el-form-item label="endpoint key"><el-input v-model="upstreamForm.endpoint_api_key" :placeholder="upstreamForm.endpoint_api_key_masked ? `当前: ${upstreamForm.endpoint_api_key_masked}` : '留空不改'" /></el-form-item></el-col>
             </el-row>
+            <div style="margin:8px 0 12px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <b>Model Endpoint Map</b>
+                <el-tag size="small" :type="endpointMappingMissingModels.length ? 'warning' : 'success'" effect="plain">
+                  {{ endpointMapRows.length }} 已映射 / {{ endpointMappingMissingModels.length }} 缺失
+                </el-tag>
+              </div>
+              <el-table v-if="endpointMapRows.length" :data="endpointMapRows" size="small" border style="width:100%">
+                <el-table-column prop="model_id" label="model_id" min-width="320" show-overflow-tooltip>
+                  <template #default="{ row }"><span class="mono">{{ row.model_id }}</span></template>
+                </el-table-column>
+                <el-table-column prop="endpoint_id" label="endpoint_id" min-width="240" show-overflow-tooltip>
+                  <template #default="{ row }"><span class="mono">{{ row.endpoint_id }}</span></template>
+                </el-table-column>
+              </el-table>
+              <div v-else class="credential-box">
+                <div class="credential-label">Model Endpoint Map</div>
+                <div class="credential-value">No endpoint mapping stored yet</div>
+              </div>
+              <el-alert
+                v-if="endpointMappingMissingModels.length"
+                type="warning"
+                :closable="false"
+                show-icon
+                style="margin-top:8px;"
+              >
+                <template #title>mapping missing: {{ endpointMappingMissingModels.join(", ") }}</template>
+              </el-alert>
+              <el-alert
+                v-if="endpointSkippedModelRows.length"
+                type="warning"
+                :closable="false"
+                show-icon
+                style="margin-top:8px;"
+              >
+                <template #title>skipped by BytePlus: {{ endpointSkippedModelRows.map(row => row.model_id).join(", ") }}</template>
+              </el-alert>
+            </div>
             <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
               <el-checkbox v-model="upstreamForm.endpoint_key_rotation_enabled">自动轮换 endpoint key</el-checkbox>
-              <el-button size="small" :loading="loading.upstream" @click="saveUpstreamConfig">保存 Endpoint 配置</el-button>
-              <el-button size="small" plain :loading="loading.provision" @click="provisionCustomerEndpoint(true)">Dry run</el-button>
-              <el-button size="small" type="primary" :loading="loading.provision" @click="provisionCustomerEndpoint(false)">创建独立 Endpoint</el-button>
-              <el-button size="small" type="warning" plain :loading="loading.rotateEndpointKey" :disabled="!upstreamForm.byteplus_endpoint_id" @click="rotateEndpointKey">轮换 endpoint key</el-button>
+              <el-button size="small" :loading="loading.upstream" @click="saveUpstreamConfig">保存 Project 资源配置</el-button>
+              <el-tooltip content="只预检计划，不调用 BytePlus 创建资源，也不写回客户配置。" placement="top">
+                <el-button size="small" plain :loading="loading.provision" @click="provisionCustomerEndpoint(true)">预检（不创建）</el-button>
+              </el-tooltip>
+              <el-tooltip content="自动创建缺失模型的 BytePlus Endpoints，复用已有映射，并轮换 endpoint key。" placement="top">
+                <el-button size="small" type="primary" :loading="loading.provision" @click="provisionCustomerEndpoint(false)">{{ endpointProvisionActionLabel }}</el-button>
+              </el-tooltip>
+              <el-button size="small" type="warning" plain :loading="loading.rotateEndpointKey" :disabled="!endpointMapRows.length && !upstreamForm.byteplus_endpoint_id" @click="rotateEndpointKey">轮换 endpoint key</el-button>
             </div>
             <div v-if="upstreamForm.byteplus_endpoint_api_key_expires_at" style="font-size:12px; color:var(--text-muted); margin-top:8px;">
               expires: {{ fmtTs(upstreamForm.byteplus_endpoint_api_key_expires_at) }}
@@ -996,8 +1143,11 @@
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
               <el-button size="small" :loading="loading.billing" @click="previewBilling">预览账单</el-button>
               <el-button size="small" type="primary" :loading="loading.billing" @click="saveInvoice">保存账单</el-button>
-              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('customer')">导出客户 CSV</el-button>
-              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('internal')">导出内部 CSV</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('customer', 'csv')">导出客户 CSV</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('customer', 'xlsx')">客户 XLSX</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('customer', 'pdf')">客户 PDF</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('internal', 'csv')">导出内部 CSV</el-button>
+              <el-button size="small" :disabled="!savedInvoice" @click="exportInvoice('internal', 'xlsx')">内部 XLSX</el-button>
               <el-button size="small" type="success" plain :disabled="!savedInvoice || savedInvoice.status === 'paid'" @click="markInvoicePaid">标记已付款</el-button>
             </div>
           </el-col>
@@ -1081,6 +1231,56 @@
     </template>
   </el-dialog>
 
+  <el-dialog v-model="dialogs.taskDetail" title="任务详情" width="820px">
+    <template v-if="taskDetail">
+      <el-descriptions :column="2" border size="small">
+        <el-descriptions-item label="Task ID"><span class="mono">{{ taskDetail.id }}</span></el-descriptions-item>
+        <el-descriptions-item label="客户">{{ taskDetail.user_email || taskDetail.user_id }}</el-descriptions-item>
+        <el-descriptions-item label="模型">{{ taskDetail.client_model }}</el-descriptions-item>
+        <el-descriptions-item label="状态">
+          <el-tag :type="statusType(taskDetail.status)" size="small">{{ statusLabel(taskDetail.status) }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="规格">{{ taskDetail.resolution || '-' }} / {{ taskDetail.duration || '-' }}s</el-descriptions-item>
+        <el-descriptions-item label="创建时间">{{ fmtTs(taskDetail.created_at) }}</el-descriptions-item>
+        <el-descriptions-item label="Relay URL" :span="2">
+          <span class="mono">{{ taskDetail.admin_content_url || '-' }}</span>
+        </el-descriptions-item>
+      </el-descriptions>
+      <div style="margin-top:14px">
+        <div style="font-weight:600; margin-bottom:8px">Prompt</div>
+        <el-input :model-value="taskDetail.prompt_text || '-'" type="textarea" :rows="4" readonly />
+      </div>
+      <div style="margin-top:14px; display:flex; gap:8px; justify-content:flex-end">
+        <el-button @click="copyText(taskDetail.id, 'task id')">复制 ID</el-button>
+        <el-button v-if="taskDetail.admin_content_url" type="primary" @click="openUrl(taskDetail.admin_content_url)">打开内容</el-button>
+      </div>
+    </template>
+  </el-dialog>
+
+  <el-dialog v-model="dialogs.requestLogDetail" title="请求日志详情" width="860px">
+    <template v-if="requestLogDetail">
+      <el-descriptions :column="2" border size="small">
+        <el-descriptions-item label="Log ID"><span class="mono">{{ requestLogDetail.id }}</span></el-descriptions-item>
+        <el-descriptions-item label="时间">{{ fmtTs(requestLogDetail.created_at) }}</el-descriptions-item>
+        <el-descriptions-item label="客户">{{ requestLogDetail.user_email || requestLogDetail.user_id || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="动作">{{ requestLogActionLabel(requestLogDetail.action) }}</el-descriptions-item>
+        <el-descriptions-item label="模型">{{ requestLogDetail.model || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="状态码"><span class="mono">{{ requestLogDetail.status_code || '-' }}</span></el-descriptions-item>
+        <el-descriptions-item label="Task ID" :span="2"><span class="mono">{{ requestLogDetail.task_id || '-' }}</span></el-descriptions-item>
+        <el-descriptions-item label="Upstream Request ID" :span="2"><span class="mono">{{ requestLogDetail.upstream_request_id || '-' }}</span></el-descriptions-item>
+        <el-descriptions-item label="错误码" :span="2"><span class="mono">{{ requestLogDetail.error_code || '-' }}</span></el-descriptions-item>
+      </el-descriptions>
+      <div style="margin-top:14px">
+        <div style="font-weight:600; margin-bottom:8px">Prompt</div>
+        <el-input :model-value="requestLogDetail.prompt_text || '-'" type="textarea" :rows="4" readonly />
+      </div>
+      <div style="margin-top:14px">
+        <div style="font-weight:600; margin-bottom:8px">Request Payload</div>
+        <el-input :model-value="prettyJson(requestLogDetail.request_payload)" type="textarea" :rows="10" readonly />
+      </div>
+    </template>
+  </el-dialog>
+
 </div>
 
 <script src="https://unpkg.com/vue@3.5.13/dist/vue.global.prod.js"></script>
@@ -1108,15 +1308,21 @@ const App = {
       allModels: [],
       uploads: [],
       uploadStats: {},
+      endpointHealth: [],
+      quotaReminders: [],
       uploadFilters: { user_id: "", purpose: "", face_asset_whitelisted: "" },
       reconcile: [],
       tasks: [],
+      taskDetail: null,
+      requestLogs: [],
+      requestLogDetail: null,
+      requestLogFilters: { user_id: "", task_id: "", action: "", model: "" },
       auditEvents: [],
       auditFilters: { action: "", target_id: "" },
-      loading: { stats: false, config: false, users: false, uploads: false, reconcile: false, tasks: false, audit: false, newUser: false, saveUser: false, rotateKey: false, resetPassword: false, billing: false, docs: false, upstream: false, provision: false, rotateEndpointKey: false },
+      loading: { stats: false, config: false, health: false, users: false, uploads: false, reconcile: false, tasks: false, requestLogs: false, audit: false, newUser: false, saveUser: false, rotateKey: false, resetPassword: false, billing: false, docs: false, upstream: false, provision: false, rotateEndpointKey: false },
       docsHtml: "",
 
-      dialogs: { newUser: false, editUser: false, created: false, rotatedKey: false },
+      dialogs: { newUser: false, editUser: false, created: false, rotatedKey: false, taskDetail: false, requestLogDetail: false },
       newUserForm: this.emptyNewUser(),
       created: null,
       rotatedKey: null,
@@ -1152,6 +1358,31 @@ const App = {
         this.adminConfig?.iam?.byteplus_access_key_id_configured &&
         this.adminConfig?.iam?.byteplus_access_key_secret_configured
       );
+    },
+    endpointMapRows() {
+      const map = this.upstreamForm?.byteplus_endpoint_map || {};
+      return Object.entries(map)
+        .filter(([modelId, endpointId]) => modelId && endpointId)
+        .map(([model_id, endpoint_id]) => ({ model_id, endpoint_id }));
+    },
+    endpointSkippedModelRows() {
+      const skipped = this.upstreamForm?.byteplus_endpoint_skipped_models || {};
+      return Object.entries(skipped)
+        .filter(([modelId]) => modelId)
+        .map(([model_id, reason]) => ({ model_id, reason }));
+    },
+    endpointMappingMissingModels() {
+      const mapped = new Set(this.endpointMapRows.map(row => row.model_id));
+      const enabled = this.editForm?.enabled_models_default
+        ? (this.allModels || []).filter(m => !m.is_alias).map(m => m.id)
+        : (this.editForm?.enabled_models || []);
+      return enabled.filter(modelId => modelId && !mapped.has(modelId));
+    },
+    endpointProvisionActionLabel() {
+      const missing = this.endpointMappingMissingModels.length;
+      return missing
+        ? `自动补齐缺失 Endpoints (${missing})`
+        : "创建/同步 Project Endpoints";
     },
   },
   methods: {
@@ -1235,11 +1466,12 @@ const App = {
     // ─── Tabs ───
     switchTab(name) {
       this.tab = name;
-      if (name === "stats") { this.loadStats(); this.loadConfig(); }
+      if (name === "stats") { this.loadStats(); this.loadConfig(); this.loadOperationalHealth(); }
       if (name === "users") this.loadUsers();
       if (name === "uploads") this.loadUploads();
       if (name === "reconcile") this.loadReconcile();
       if (name === "tasks") this.loadTasks();
+      if (name === "requestLogs") this.loadRequestLogs();
       if (name === "audit") this.loadAudit();
       if (name === "docs")  this.loadDocs();
     },
@@ -1275,6 +1507,16 @@ const App = {
       try { this.adminConfig = await this.api("/admin/config"); }
       catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.config = false; }
+    },
+    async loadOperationalHealth() {
+      this.loading.health = true;
+      try {
+        const health = await this.api("/admin/upstream/endpoint-map-health?limit=20");
+        const quota = await this.api("/admin/upstream/quota-reminders");
+        this.endpointHealth = health.data || [];
+        this.quotaReminders = quota.data || [];
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.health = false; }
     },
     async loadUsers() {
       this.loading.users = true;
@@ -1316,6 +1558,51 @@ const App = {
       try { this.tasks = (await this.api("/admin/tasks?limit=100")).data; }
       catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.tasks = false; }
+    },
+    async openTaskDetail(row) {
+      if (!row?.id) return;
+      try {
+        this.taskDetail = await this.api(`/admin/tasks/${row.id}`);
+        this.dialogs.taskDetail = true;
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+    openTaskContent(row) {
+      if (!row?.id) return;
+      window.open(`/admin/tasks/${row.id}/content`, "_blank", "noopener");
+    },
+    async loadRequestLogs() {
+      this.loading.requestLogs = true;
+      try {
+        if (!this.users.length) {
+          try { this.users = (await this.api("/admin/users")).data; } catch {}
+        }
+        const qs = new URLSearchParams({ limit: "100" });
+        if (this.requestLogFilters.user_id) qs.set("user_id", this.requestLogFilters.user_id);
+        if (this.requestLogFilters.task_id) qs.set("task_id", this.requestLogFilters.task_id);
+        if (this.requestLogFilters.action) qs.set("action", this.requestLogFilters.action);
+        if (this.requestLogFilters.model) qs.set("model", this.requestLogFilters.model);
+        this.requestLogs = (await this.api(`/admin/request-logs?${qs.toString()}`)).data;
+      } catch (e) { ElMessage.error(this.errMsg(e)); }
+      finally { this.loading.requestLogs = false; }
+    },
+    openRequestLogDetail(row) {
+      this.requestLogDetail = row || null;
+      this.dialogs.requestLogDetail = true;
+    },
+    requestLogActionLabel(action) {
+      return ({
+        video_create_success: "创建成功",
+        video_create_failed: "创建失败",
+        video_create_rejected: "创建拒绝",
+      })[action] || action || "-";
+    },
+    prettyJson(value) {
+      if (!value) return "-";
+      try {
+        return JSON.stringify(typeof value === "string" ? JSON.parse(value) : value, null, 2);
+      } catch {
+        return String(value);
+      }
     },
     async loadAudit() {
       this.loading.audit = true;
@@ -1381,6 +1668,8 @@ const App = {
           byteplus_project_name: upstream.byteplus_project_name || upstream.customer_slug || "",
           byteplus_endpoint_id: upstream.byteplus_endpoint_id || "",
           modelark_asset_group_id: upstream.modelark_asset_group_id || "",
+          byteplus_endpoint_map: upstream.byteplus_endpoint_map || {},
+          byteplus_endpoint_skipped_models: upstream.byteplus_endpoint_skipped_models || {},
           endpoint_api_key: "",
           endpoint_api_key_masked: upstream.endpoint_api_key_masked || "",
           endpoint_key_rotation_enabled: !!upstream.endpoint_key_rotation_enabled,
@@ -1475,7 +1764,7 @@ const App = {
         };
         const r = await this.api(`/admin/users/${this.editing.id}/upstream`, { method: "PATCH", body: JSON.stringify(body) });
         this.upstreamForm = { ...this.upstreamForm, ...r, endpoint_api_key: "" };
-        ElMessage.success("Endpoint 配置已保存");
+        ElMessage.success("Project 资源配置已保存");
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.upstream = false; }
     },
@@ -1485,11 +1774,14 @@ const App = {
         ElMessage.warning("请先填写 customer_slug");
         return;
       }
+      const missingCount = this.endpointMappingMissingModels.length;
       if (!dryRun) {
         try {
           await ElMessageBox.confirm(
-            `确认为 ${this.editing.email || this.editing.id} 创建独立 BytePlus endpoint？`,
-            "创建独立 Endpoint",
+            missingCount
+              ? `确认为 ${this.editing.email || this.editing.id} 自动补齐 ${missingCount} 个缺失 Endpoints？已有映射会复用，不会重建。`
+              : `确认为 ${this.editing.email || this.editing.id} 创建/同步客户 Project endpoints？已有映射会复用。`,
+            missingCount ? "自动补齐缺失 Endpoints" : "创建/同步 Project Endpoints",
             { type: "warning" },
           );
         } catch { return; }
@@ -1509,13 +1801,17 @@ const App = {
           }),
         });
         this.upstreamJob = r;
-        if (r.upstream) this.upstreamForm = { ...this.upstreamForm, ...r.upstream, endpoint_api_key: "" };
-        ElMessage.success(dryRun ? "Dry run 已完成" : "独立 Endpoint 已创建");
+        if (r.upstream) {
+          this.upstreamForm = { ...this.upstreamForm, ...r.upstream, endpoint_api_key: "" };
+          this.editForm.enabled_models_default = !!r.upstream.enabled_models_default;
+          this.editForm.enabled_models = r.upstream.enabled_models || [];
+        }
+        ElMessage.success(dryRun ? "预检已完成（未创建资源）" : (missingCount ? "缺失 Endpoints 已自动补齐" : "Project endpoints 已创建/同步"));
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.provision = false; }
     },
     async rotateEndpointKey() {
-      if (!this.editing?.id || !this.upstreamForm.byteplus_endpoint_id) return;
+      if (!this.editing?.id || (!this.endpointMapRows.length && !this.upstreamForm.byteplus_endpoint_id)) return;
       try {
         await ElMessageBox.confirm(
           `确认轮换 ${this.editing.email || this.editing.id} 的 endpoint API key？`,
@@ -1570,9 +1866,9 @@ const App = {
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.billing = false; }
     },
-    async exportInvoice(view) {
+    async exportInvoice(view, format="csv") {
       if (!this.savedInvoice?.id) return;
-      const suffix = view === "internal" ? "/export?format=csv&view=internal" : "/export?format=csv&view=customer";
+      const suffix = `/export?format=${format}&view=${view}`;
       window.open(`/admin/invoices/${this.savedInvoice.id}${suffix}`, "_blank", "noopener");
     },
     async markInvoicePaid() {

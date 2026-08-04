@@ -31,6 +31,22 @@ func TestOpenConfiguresSQLiteForAlpha1Boundary(t *testing.T) {
 	}
 }
 
+func TestOpenCreatesRequestLogsTable(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "relay.sqlite"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	var count int
+	if err := db.sql.QueryRow("SELECT COUNT(*) FROM request_logs").Scan(&count); err != nil {
+		t.Fatalf("request_logs table missing: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("new request_logs table count = %d", count)
+	}
+}
+
 func TestApplyTaskRefreshRefundsTerminalTaskOnlyOnce(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "relay.sqlite"))
 	if err != nil {

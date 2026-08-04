@@ -191,7 +191,95 @@
     overflow: hidden;
   }
   .asset-preview img, .asset-preview video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .asset-preview-fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
   .asset-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .asset-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+  .asset-id-pill {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #f8fafc;
+    color: #334155;
+    font-size: 11px;
+  }
+  .asset-id-pill .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .asset-help {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    color: #475569;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .upload-result {
+    margin-top: 14px;
+    padding: 14px;
+    border: 1px solid #bbf7d0;
+    border-radius: 12px;
+    background: #f0fdf4;
+  }
+  .upload-result-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+  .upload-result-title { font-weight: 800; color: #166534; }
+  .upload-result-copy { margin-top: 4px; color: #166534; font-size: 13px; line-height: 1.6; }
+  .asset-inline-preview { display: flex; gap: 12px; align-items: center; min-width: 0; }
+  .asset-inline-preview .asset-preview { width: 88px; height: 58px; aspect-ratio: auto; border-radius: 8px; flex: 0 0 auto; }
+  .mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+  .mode-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: #fff;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .mode-card:hover { border-color: #c7d2fe; box-shadow: 0 6px 18px rgba(99,102,241,0.08); }
+  .mode-card.active { border-color: var(--brand); background: #eef2ff; box-shadow: 0 0 0 2px rgba(99,102,241,0.12); }
+  .mode-title { font-weight: 800; font-size: 13.5px; margin-bottom: 4px; }
+  .mode-copy { color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+  .prompt-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-top: 10px; }
+  .reference-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .reference-slot {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+    background: #fbfdff;
+  }
+  .slot-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+  .slot-title { font-weight: 800; font-size: 13.5px; }
+  .slot-note { color: var(--text-muted); font-size: 12px; line-height: 1.55; margin-top: 3px; }
+  .slot-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+  .manual-asset-row { display: grid; grid-template-columns: minmax(0, 1fr) 160px auto; gap: 8px; align-items: center; margin-top: 10px; }
+  .reference-list { display: grid; gap: 8px; margin-top: 10px; }
+  .reference-item {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
+  }
+  .reference-item .asset-preview { width: 54px; height: 38px; aspect-ratio: auto; border-radius: 7px; }
+  .json-preview { margin-top: 14px; }
+  .param-hint { margin-top: 6px; font-size: 11.5px; color: var(--text-muted); line-height: 1.45; }
+  .hidden-file-input { display: none; }
   .file-picker {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     border: 1px dashed #cbd5e1; border-radius: 10px; padding: 14px 16px; background: #f8fafc;
@@ -211,6 +299,7 @@
   .method-card .code-block { border-radius: 0; box-shadow: none; margin: 0; max-height: 360px; }
   .method-foot { display: flex; justify-content: flex-end; padding: 10px 12px; border-top: 1px solid var(--border); background: #fff; }
   @media (max-width: 760px) { .guide-row { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) { .manual-asset-row { grid-template-columns: 1fr; } }
   @media (max-width: 760px) { .method-grid { grid-template-columns: 1fr; } }
 
   /* Account */
@@ -376,45 +465,157 @@
         <el-row :gutter="24">
           <el-col :xs="24" :lg="16">
             <div class="card card-pad" style="margin-bottom:20px">
-              <div class="card-title"><el-icon><EditPen /></el-icon> 提示词 (Prompt)</div>
-              <el-input
-                v-model="form.prompt"
-                type="textarea"
-                :rows="4"
-                resize="vertical"
-                placeholder="A red lobster wearing a tiny chef hat dances on a neon-lit Tokyo street, cinematic, 35mm film"
-              />
-              <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color:var(--text-muted);">
-                <span><el-icon :size="12"><InfoFilled /></el-icon> 建议英文，部分模型也支持中文/日语/西语等</span>
-                <span>{{ form.prompt.length }} 字</span>
+              <div class="card-title"><el-icon><MagicStick /></el-icon> 创作模式</div>
+              <div class="mode-grid">
+                <div
+                  v-for="mode in creationModes"
+                  :key="mode.id"
+                  :class="['mode-card', form.creation_mode === mode.id && 'active']"
+                  @click="selectCreationMode(mode.id)"
+                >
+                  <div class="mode-title">{{ mode.title }}</div>
+                  <div class="mode-copy">{{ mode.note }}</div>
+                </div>
               </div>
             </div>
 
             <div class="card card-pad" style="margin-bottom:20px">
-              <div class="card-title"><el-icon><FolderOpened /></el-icon> 参考素材</div>
-              <div style="display:flex; gap:10px; align-items:center;">
-                <el-select v-model="form.upload_id" placeholder="不使用素材" clearable filterable style="flex:1" @focus="loadUploads">
-                  <el-option label="不使用素材" value="" />
-                  <el-option
-                    v-for="a in uploads"
-                    :key="a.id"
-                    :label="`${a.original_filename || a.id} / ${purposeLabel(a.purpose)}${a.face_asset_whitelisted ? ' / 白名单' : ''}`"
-                    :value="a.id"
-                  />
-                </el-select>
-                <el-button @click="switchTab('assets')"><el-icon><Upload /></el-icon> 上传</el-button>
-              </div>
-              <div v-if="selectedUpload" style="display:flex; gap:12px; align-items:center; margin-top:12px; padding:10px; border:1px solid var(--border); border-radius:10px; background:#f8fafc;">
-                <div class="asset-preview" style="width:76px; height:52px; aspect-ratio:auto; border-radius:8px;">
-                  <img v-if="selectedUpload.purpose === 'image'" :src="selectedUpload.url" loading="lazy" />
-                  <video v-else-if="selectedUpload.purpose === 'video'" :src="selectedUpload.url" muted preload="metadata"></video>
-                  <el-icon v-else><Headset /></el-icon>
+              <div class="card-title"><el-icon><EditPen /></el-icon> 提示词 (Prompt)</div>
+              <el-input
+                v-model="form.prompt"
+                type="textarea"
+                :rows="5"
+                resize="vertical"
+                :placeholder="currentCreationMode?.placeholder || 'A clean commercial video, cinematic, smooth camera movement'"
+              />
+              <div class="prompt-toolbar">
+                <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                  <el-button size="small" @click="insertPromptTemplate(false)"><el-icon><EditPen /></el-icon> 插入模板</el-button>
+                  <el-button size="small" @click="insertPromptTemplate(true)"><el-icon><Refresh /></el-icon> 替换为模板</el-button>
                 </div>
-                <div style="min-width:0; flex:1">
-                  <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ selectedUpload.original_filename || selectedUpload.id }}</div>
-                  <div style="font-size:12px; color:var(--text-muted); margin-top:3px;">
-                    {{ selectedUpload.face_asset_whitelisted ? '已进入人脸白名单，生成时会使用 asset:// 引用' : '普通素材，生成时会使用公开 URL 引用' }}
+                <span style="font-size:12px; color:var(--text-muted);">{{ form.prompt.length }} 字</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color:var(--text-muted);">
+                <span><el-icon :size="12"><InfoFilled /></el-icon> {{ currentCreationMode?.hint || '建议写清主体、动作、镜头、光线、风格和不要改变的内容。' }}</span>
+              </div>
+            </div>
+
+            <div class="card card-pad" style="margin-bottom:20px">
+              <div class="card-title"><el-icon><FolderOpened /></el-icon> 参考素材与 Asset ID</div>
+              <div class="reference-section">
+                <el-alert
+                  v-if="generationValidationMessage"
+                  type="warning"
+                  :closable="false"
+                  show-icon
+                >
+                  {{ generationValidationMessage }}
+                </el-alert>
+                <div class="reference-slot">
+                  <div class="slot-head">
+                    <div>
+                      <div class="slot-title">首帧 / 尾帧</div>
+                      <div class="slot-note">首帧控制开场画面；尾帧可选，用来生成从 A 到 B 的过渡。</div>
+                    </div>
+                    <div class="slot-actions">
+                      <input ref="slotUploadFirstFrame" class="hidden-file-input" type="file" accept="image/jpeg,image/png,image/webp" @change="handleSlotUploadFile($event, 'first_frame')" />
+                      <input ref="slotUploadLastFrame" class="hidden-file-input" type="file" accept="image/jpeg,image/png,image/webp" @change="handleSlotUploadFile($event, 'last_frame')" />
+                      <el-button size="small" :loading="slotUploadRole === 'first_frame'" @click="$refs.slotUploadFirstFrame.click()"><el-icon><Upload /></el-icon> 上传首帧并加入</el-button>
+                      <el-button size="small" :loading="slotUploadRole === 'last_frame'" @click="$refs.slotUploadLastFrame.click()">上传尾帧并加入</el-button>
+                    </div>
                   </div>
+                  <el-row :gutter="10">
+                    <el-col :xs="24" :sm="12">
+                      <el-select :model-value="form.first_frame_id" placeholder="从素材库选择首帧图片" clearable filterable style="width:100%" @focus="loadUploads" @change="setFrameSelection('first_frame', $event)">
+                        <el-option v-for="a in imageUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                    <el-col :xs="24" :sm="12">
+                      <el-select :model-value="form.last_frame_id" placeholder="从素材库选择尾帧图片（可选）" clearable filterable style="width:100%" @focus="loadUploads" @change="setFrameSelection('last_frame', $event)">
+                        <el-option v-for="a in imageUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                  </el-row>
+                  <div class="manual-asset-row">
+                    <el-input v-model="manualAsset.value" placeholder="也可以直接粘贴 asset id，例如 asset-20260719000123-abcd1 或 asset://asset-..." clearable />
+                    <el-select v-model="manualAsset.role" placeholder="角色">
+                      <el-option label="首帧 first_frame" value="first_frame" />
+                      <el-option label="尾帧 last_frame" value="last_frame" />
+                      <el-option label="参考图 reference_image" value="reference_image" />
+                      <el-option label="参考视频 reference_video" value="reference_video" />
+                      <el-option label="参考音频 reference_audio" value="reference_audio" />
+                    </el-select>
+                    <el-button @click="addManualAsset"><el-icon><Plus /></el-icon> 加入</el-button>
+                  </div>
+                  <div class="asset-help">
+                    直接使用 Asset ID 时，不要写进提示词。把 <span class="mono">asset-...</span> 或 <span class="mono">asset://asset-...</span> 填在这里，系统会自动放入 <span class="mono">content[].image_url.url</span> / <span class="mono">video_url.url</span>。
+                  </div>
+                </div>
+
+                <div class="reference-slot">
+                  <div class="slot-head">
+                    <div>
+                      <div class="slot-title">多参考素材</div>
+                      <div class="slot-note">参考图最多 9 张，参考视频最多 3 个，参考音频最多 3 个。数组顺序就是 prompt 里的 Image 1、Image 2。</div>
+                    </div>
+                    <div class="slot-actions">
+                      <input ref="slotUploadReferenceImage" class="hidden-file-input" type="file" accept="image/jpeg,image/png,image/webp" @change="handleSlotUploadFile($event, 'reference_image')" />
+                      <input ref="slotUploadReferenceVideo" class="hidden-file-input" type="file" accept="video/mp4,video/quicktime" @change="handleSlotUploadFile($event, 'reference_video')" />
+                      <input ref="slotUploadReferenceAudio" class="hidden-file-input" type="file" accept="audio/mpeg,audio/wav" @change="handleSlotUploadFile($event, 'reference_audio')" />
+                      <el-button size="small" :loading="slotUploadRole === 'reference_image'" @click="$refs.slotUploadReferenceImage.click()"><el-icon><Upload /></el-icon> 上传参考图并加入</el-button>
+                      <el-button size="small" :loading="slotUploadRole === 'reference_video'" @click="$refs.slotUploadReferenceVideo.click()">上传视频并加入</el-button>
+                      <el-button size="small" :loading="slotUploadRole === 'reference_audio'" @click="$refs.slotUploadReferenceAudio.click()">上传音频并加入</el-button>
+                    </div>
+                  </div>
+                  <el-row :gutter="10">
+                    <el-col :xs="24" :md="8">
+                      <el-select v-model="picker.reference_image" placeholder="加参考图" clearable filterable style="width:100%" @focus="loadUploads" @change="addPickedReference('reference_image')">
+                        <el-option v-for="a in imageUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                    <el-col :xs="24" :md="8">
+                      <el-select v-model="picker.reference_video" placeholder="加参考视频" clearable filterable style="width:100%" @focus="loadUploads" @change="addPickedReference('reference_video')">
+                        <el-option v-for="a in videoUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                    <el-col :xs="24" :md="8">
+                      <el-select v-model="picker.reference_audio" placeholder="加参考音频" clearable filterable style="width:100%" @focus="loadUploads" @change="addPickedReference('reference_audio')">
+                        <el-option v-for="a in audioUploads" :key="a.id" :label="assetOptionLabel(a)" :value="a.id" />
+                      </el-select>
+                    </el-col>
+                  </el-row>
+                  <div v-if="referenceItems.length" class="reference-list">
+                    <div v-for="(item, idx) in referenceItems" :key="item.key" class="reference-item">
+                      <div class="asset-preview">
+                        <img v-if="item.purpose === 'image' && item.url && !item.manual" :src="item.url" loading="lazy" />
+                        <video v-else-if="item.purpose === 'video' && item.url && !item.manual" :src="item.url" muted preload="metadata"></video>
+                        <div v-else class="asset-preview-fallback"><el-icon><FolderOpened /></el-icon></div>
+                      </div>
+                      <div style="min-width:0">
+                        <div style="font-weight:700; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                          {{ referenceLabel(item, idx) }}
+                        </div>
+                        <div class="mono" style="font-size:11px; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ item.url }}</div>
+                      </div>
+                      <div style="display:flex; gap:4px;">
+                        <el-button size="small" text :disabled="idx === 0" @click="moveReference(idx, -1)">上移</el-button>
+                        <el-button size="small" text :disabled="idx === referenceItems.length - 1" @click="moveReference(idx, 1)">下移</el-button>
+                        <el-button size="small" text type="danger" @click="removeReference(idx)">移除</el-button>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else class="asset-help">还没有添加多参考素材。纯文生视频可以不加素材。</div>
+                </div>
+
+                <div class="reference-slot">
+                  <div class="slot-head">
+                    <div>
+                      <div class="slot-title">API JSON 预览</div>
+                      <div class="slot-note">这里就是会提交到 <span class="mono">/v1/videos</span> 的请求体，可直接复制给客户后台使用。</div>
+                    </div>
+                    <el-button size="small" @click="copyText(apiJsonPreview)"><el-icon><CopyDocument /></el-icon> 复制 JSON</el-button>
+                  </div>
+                  <pre class="code-block json-preview">{{ apiJsonPreview }}</pre>
                 </div>
               </div>
             </div>
@@ -443,28 +644,40 @@
                 <el-row :gutter="16">
                   <el-col :xs="24" :sm="8">
                     <el-form-item label="分辨率">
-                      <el-radio-group v-model="form.resolution" style="width:100%">
-                        <el-radio-button label="480p" />
-                        <el-radio-button label="720p" />
-                        <el-radio-button label="1080p" />
-                      </el-radio-group>
+                      <el-select v-model="form.resolution" style="width:100%" @change="scheduleEstimate">
+                        <el-option
+                          v-for="opt in resolutionOptions"
+                          :key="opt.value"
+                          :label="opt.label"
+                          :value="opt.value"
+                        />
+                      </el-select>
+                      <div class="param-hint">选项来自当前模型支持的 supported_resolutions。</div>
                     </el-form-item>
                   </el-col>
                   <el-col :xs="12" :sm="8">
                     <el-form-item label="画面比例">
-                      <el-select v-model="form.ratio" style="width:100%">
-                        <el-option label="16:9 横屏" value="16:9" />
-                        <el-option label="9:16 竖屏" value="9:16" />
-                        <el-option label="1:1 方形" value="1:1" />
-                        <el-option label="4:3" value="4:3" />
-                        <el-option label="3:4" value="3:4" />
-                        <el-option label="21:9 影院" value="21:9" />
+                      <el-select v-model="form.ratio" style="width:100%" @change="scheduleEstimate">
+                        <el-option
+                          v-for="opt in ratioOptions"
+                          :key="opt.value"
+                          :label="opt.label"
+                          :value="opt.value"
+                        />
                       </el-select>
+                      <div class="param-hint">只显示当前模型支持的 supported_ratios。</div>
                     </el-form-item>
                   </el-col>
                   <el-col :xs="12" :sm="8">
                     <el-form-item label="时长（秒）">
-                      <el-input-number v-model="form.duration" :min="2" :max="15" controls-position="right" style="width:100%" />
+                      <el-input-number
+                        v-model="form.duration"
+                        :min="durationRange.min"
+                        :max="durationRange.max"
+                        controls-position="right"
+                        style="width:100%"
+                      />
+                      <div class="param-hint">当前模型支持 {{ durationRange.min }}-{{ durationRange.max }} 秒。</div>
                     </el-form-item>
                   </el-col>
                 </el-row>
@@ -522,10 +735,13 @@
                   </el-alert>
                   <el-button
                     type="primary" size="large" style="width:100%"
-                    :disabled="!form.prompt.trim() || !enoughBalance"
+                    :disabled="!!submitValidationMessage || !enoughBalance"
                     :loading="loading.submit"
                     @click="submitGen"
                   ><el-icon><MagicStick /></el-icon> 提交生成</el-button>
+                  <p v-if="submitValidationMessage" style="font-size:11px; color:#b45309; text-align:center; margin:8px 0 0;">
+                    {{ submitValidationMessage }}
+                  </p>
                   <p style="font-size:11px; color:var(--text-muted); text-align:center; margin:10px 0 0;">
                     提交后从余额预扣，任务完成后自动结算。
                   </p>
@@ -559,21 +775,38 @@
               预计 ${{ fmt(currentTask.estimated_cost_usd) }} / 已冻结 <b style="color:var(--text)">${{ fmt(currentTask.held_usd || currentTask.estimated_cost_usd) }}</b>
             </template>
           </div>
+          <el-alert
+            v-if="currentTask.status === 'succeeded' && currentTask.content_expires_at"
+            :type="contentExpired(currentTask) ? 'warning' : 'info'"
+            :closable="false"
+            show-icon
+            style="margin-bottom:14px;"
+          >
+            <template #title>
+              下载地址与保存时间
+            </template>
+            <div>服务器网关：保存 2 天，剩余 {{ contentCountdown(currentTask) }}</div>
+            <div>BytePlus 原始文件：官方保存 24 小时，剩余 {{ upstreamContentCountdown(currentTask) }}</div>
+            <div>请优先下载到本地；任一地址过期后将无法继续使用对应链接。</div>
+          </el-alert>
 
           <template v-if="currentTask.status === 'succeeded' && currentTask.video_url">
             <div style="background:#0f172a; border-radius:10px; overflow:hidden; max-width:720px; margin:0 auto;">
               <video :src="currentTask.video_url" controls autoplay playsinline style="width:100%; display:block;"></video>
             </div>
-            <div style="display:flex; justify-content:center; margin-top:14px;">
+            <div style="display:flex; justify-content:center; flex-wrap:wrap; gap:8px; margin-top:14px;">
               <el-button tag="a" :href="currentTask.video_url" :download="currentTask.id + '.mp4'">
-                <el-icon style="margin-right:6px"><Download /></el-icon>下载视频
+                <el-icon style="margin-right:6px"><Download /></el-icon>服务器网关下载
+              </el-button>
+              <el-button v-if="currentTask.upstream_video_url" tag="a" :href="currentTask.upstream_video_url" target="_blank" rel="noopener noreferrer">
+                <el-icon style="margin-right:6px"><Link /></el-icon>BytePlus 原始下载
               </el-button>
             </div>
           </template>
           <template v-else-if="['failed','cancelled','expired'].includes(currentTask.status)">
             <el-alert type="error" :closable="false" show-icon>
               <template #title>任务 {{ statusLabel(currentTask.status) }}</template>
-              {{ currentTask.error?.message || '请查看详情' }}
+              {{ failureMessage(currentTask) }}
             </el-alert>
           </template>
           <template v-else>
@@ -581,7 +814,9 @@
               <div class="pulse"></div>
               <div>
                 <div style="font-weight:600">{{ currentTask.status === 'queued' ? '排队中' : '正在生成' }}</div>
-                <div style="font-size:12.5px; color:var(--text-muted)">通常需要 2-10 分钟，页面会自动刷新。</div>
+                <div style="font-size:12.5px; color:var(--text-muted)">
+                  {{ generationCountdown(currentTask) }}，页面会自动刷新。
+                </div>
               </div>
             </div>
           </template>
@@ -590,9 +825,14 @@
 
       <!-- HISTORY -->
       <section v-if="tab === 'history'">
-        <div class="page-header">
-          <h1 class="page-title">我的视频</h1>
-          <p class="page-sub">最近的生成任务，点击视频可播放。</p>
+        <div class="page-header" style="display:flex; justify-content:space-between; gap:16px; align-items:flex-start;">
+          <div>
+            <h1 class="page-title">我的视频</h1>
+            <p class="page-sub">最近的生成任务，点击卡片查看状态、播放或下载。</p>
+          </div>
+          <el-button v-if="history.length" @click="clearHistory" :loading="loading.clearHistory">
+            <el-icon><Delete /></el-icon> 清空历史记录
+          </el-button>
         </div>
         <div v-loading="loading.history" style="min-height:200px">
           <div v-if="!loading.history && history.length === 0" class="card card-pad" style="text-align:center; padding:60px 24px;">
@@ -601,7 +841,7 @@
             <el-button type="primary" @click="switchTab('generate')" style="margin-top:8px"><el-icon><Plus /></el-icon> 新建视频</el-button>
           </div>
           <div v-else class="video-grid">
-            <div v-for="t in history" :key="t.id" class="video-card" @click="goToTask(t.id)">
+            <div v-for="t in history" :key="t.id" class="video-card" @click="openHistoryTask(t)">
               <div class="video-thumb">
                 <video v-if="t.status === 'succeeded' && t.video_url" :src="t.video_url" preload="metadata"></video>
                 <div v-else class="video-placeholder">
@@ -623,6 +863,13 @@
                 <div style="display:flex; justify-content:space-between; font-size:11.5px; color:var(--text-muted);">
                   <span>{{ t.model }} / {{ t.resolution || '-' }} / {{ t.duration || '-' }}s</span>
                   <span class="mono" style="font-weight:600; color:var(--text)">${{ fmt(t.actual_cost_usd ?? t.estimated_cost_usd) }}</span>
+                </div>
+                <div v-if="t.status === 'succeeded' && t.content_expires_at" style="margin-top:8px; font-size:11.5px; color:var(--text-muted);">
+                  网关剩余：<span class="mono" :style="{color: contentExpired(t) ? '#b91c1c' : 'var(--text)'}">{{ contentCountdown(t) }}</span>
+                  <span v-if="t.upstream_content_expires_at"> / BytePlus：<span class="mono">{{ upstreamContentCountdown(t) }}</span></span>
+                </div>
+                <div v-else-if="['queued','running'].includes(t.status)" style="margin-top:8px; font-size:11.5px; color:var(--text-muted);">
+                  预计等待：<span class="mono">{{ generationCountdown(t) }}</span>
                 </div>
               </div>
             </div>
@@ -658,6 +905,34 @@
               <el-input v-model="uploadForm.face_asset_label" placeholder="白名单标签，例如 customer-approved-face" :disabled="!uploadForm.face_allowlist" />
             </el-col>
           </el-row>
+          <div v-if="lastUploadedAsset" class="upload-result">
+            <div class="upload-result-head">
+              <div class="asset-inline-preview">
+                <div class="asset-preview">
+                  <img v-if="lastUploadedAsset.purpose === 'image'" :src="lastUploadedAsset.url" loading="lazy" />
+                  <video v-else-if="lastUploadedAsset.purpose === 'video'" :src="lastUploadedAsset.url" muted preload="metadata"></video>
+                  <div v-else class="asset-preview-fallback"><el-icon><Headset /></el-icon><span>音频素材</span></div>
+                </div>
+                <div style="min-width:0">
+                  <div class="upload-result-title">上传成功，已放入你的素材库</div>
+                  <div class="upload-result-copy">
+                    生成视频时可以点“用作参考”，页面会自动把它加入请求；API 调用请复制下面的引用。
+                  </div>
+                </div>
+              </div>
+              <el-tag type="success" effect="light">可使用</el-tag>
+            </div>
+            <div class="asset-meta-row">
+              <span class="asset-id-pill" :title="assetReferenceUrl(lastUploadedAsset)">
+                <span>素材引用</span><span class="mono">{{ assetReferenceUrl(lastUploadedAsset) }}</span>
+              </span>
+              <div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end;">
+                <el-button size="small" @click="copyAssetUrl(lastUploadedAsset)"><el-icon><CopyDocument /></el-icon> 复制素材 ID</el-button>
+                <el-button size="small" @click="copyContentBlock(lastUploadedAsset)"><el-icon><CopyDocument /></el-icon> 复制 content[]</el-button>
+                <el-button size="small" type="primary" @click="useUpload(lastUploadedAsset)"><el-icon><Check /></el-icon> 生成视频使用</el-button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div v-loading="loading.assets" style="min-height:180px">
@@ -666,11 +941,11 @@
             <p style="color:var(--text-muted); margin-top:14px;">还没有素材，先上传一张参考图或一段视频。</p>
           </div>
           <div v-else class="asset-grid">
-            <div v-for="a in uploads" :key="a.id" :class="['asset-card', form.upload_id === a.id && 'selected']">
+            <div v-for="a in uploads" :key="a.id" :class="['asset-card', assetInForm(a) && 'selected']">
               <div class="asset-preview">
                 <img v-if="a.purpose === 'image'" :src="a.url" loading="lazy" />
                 <video v-else-if="a.purpose === 'video'" :src="a.url" muted preload="metadata"></video>
-                <el-icon v-else :size="34"><Headset /></el-icon>
+                <div v-else class="asset-preview-fallback"><el-icon :size="34"><Headset /></el-icon><span>音频素材</span></div>
               </div>
               <div style="padding:14px 16px;">
                 <div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start;">
@@ -683,13 +958,19 @@
                   </el-tag>
                 </div>
                 <div class="asset-toolbar" style="margin-top:12px">
-                  <el-button size="small" @click="useUpload(a)"><el-icon><Check /></el-icon> 用作参考</el-button>
-                  <el-button size="small" @click="copyContentBlock(a)"><el-icon><CopyDocument /></el-icon> 复制引用</el-button>
+                  <el-button v-if="a.purpose === 'image'" size="small" @click="useUpload(a, 'first_frame')"><el-icon><Check /></el-icon> 首帧</el-button>
+                  <el-button v-if="a.purpose === 'image'" size="small" @click="useUpload(a, 'last_frame')">尾帧</el-button>
+                  <el-button v-if="a.purpose === 'image'" size="small" @click="useUpload(a, 'reference_image')">参考图</el-button>
+                  <el-button v-if="a.purpose === 'video'" size="small" @click="useUpload(a, 'reference_video')"><el-icon><Check /></el-icon> 参考视频</el-button>
+                  <el-button v-if="a.purpose === 'audio'" size="small" @click="useUpload(a, 'reference_audio')"><el-icon><Check /></el-icon> 参考音频</el-button>
+                  <el-button size="small" @click="copyAssetUrl(a)"><el-icon><CopyDocument /></el-icon> 复制 ID</el-button>
+                  <el-button size="small" @click="copyContentBlock(a)"><el-icon><CopyDocument /></el-icon> 复制 content</el-button>
                   <el-button size="small" text @click="openUrl(a.url)">打开</el-button>
                   <el-button size="small" text type="danger" @click="deleteUpload(a)">删除</el-button>
                 </div>
-                <div v-if="a.asset_url" class="mono" style="font-size:11px; color:var(--text-muted); margin-top:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                  {{ a.asset_url }}
+                <div class="asset-help">
+                  <div><b>生成页：</b>点“用作参考”，系统会自动放入 content[]。</div>
+                  <div><b>API：</b>使用 <span class="mono">{{ assetReferenceUrl(a) }}</span>，角色建议 {{ assetRoleLabel(a) }}。</div>
                 </div>
               </div>
             </div>
@@ -803,6 +1084,7 @@
         <div class="card card-pad markdown-body" style="margin-top:18px;">
           <h2>低审查内容生成规范</h2>
           <p>本节是技术文档页下方的客户可见操作规范，用于说明如何上传授权素材、引用素材 ID，并用当前账号的可用模型发起生成任务。</p>
+          <p>当前独立客户 Endpoint 和素材注册请求统一使用 BytePlus <code>Moderation.Strategy=Skip</code>；Relay 不额外增加内容安全审核层。</p>
           <h3>适用范围</h3>
           <ul>
             <li>仅适用于已取得授权的成年人素材、商业广告素材、剧情/影视化创作素材。</li>
@@ -818,8 +1100,8 @@
           <h3>推荐流程</h3>
           <ol>
             <li>在“素材库”上传客户自己的图片、视频或音频素材。</li>
-            <li>上传成功后复制素材 ID，例如 <code>upl_6b867a97c567d64d</code>。</li>
-            <li>在生成请求里把素材 ID 放入 <code>references[].asset_id</code>，并填写清楚的授权创作提示词。</li>
+            <li>上传成功后复制素材库显示的 <code>asset://...</code> 引用，或直接复制完整 <code>content[]</code> 块。</li>
+            <li>在生成请求里把素材放入 <code>content[]</code>，并填写清楚的授权创作提示词。</li>
             <li>任务完成后直接读取返回的视频地址；视频文件默认保留在字节侧存储，Relay 只做转发和账单记录。</li>
           </ol>
           <pre><code>curl https://seedance3.eu/v1/uploads \
@@ -831,9 +1113,13 @@
   -H "Content-Type: application/json" \
   -d '{
     "model": "dreamina-seedance-2-0-260128",
-    "prompt": "adult-only cinematic editorial video, authorized performer, elegant studio lighting",
-    "references": [
-      { "asset_id": "upl_6b867a97c567d64d", "role": "reference_image" }
+    "content": [
+      { "type": "text", "text": "adult-only cinematic editorial video, authorized performer, elegant studio lighting" },
+      {
+        "type": "image_url",
+        "image_url": { "url": "asset://asset_xxx" },
+        "role": "reference_image"
+      }
     ]
   }'</code></pre>
         </div>
@@ -929,6 +1215,84 @@ curl https://seedance3.eu/v1/videos \
       </section>
 
     </main>
+
+    <el-dialog
+      v-model="taskDetailDialog"
+      title="任务详情"
+      width="760px"
+      destroy-on-close
+      @closed="closeHistoryTaskDetail"
+    >
+      <div v-if="historyTask">
+        <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:14px;">
+          <div style="min-width:0;">
+            <div class="mono" style="font-weight:700; font-size:16px;">{{ historyTask.id }}</div>
+            <div style="font-size:13px; color:var(--text-muted); margin-top:2px;">
+              {{ historyTask.model }} / {{ historyTask.resolution || '-' }} / {{ historyTask.duration || '-' }}s / {{ fmtTs(historyTask.created_at) }}
+            </div>
+          </div>
+          <el-tag :type="statusType(historyTask.status)" effect="light">{{ statusLabel(historyTask.status) }}</el-tag>
+        </div>
+
+        <div v-if="historyTask.prompt_text" style="background:#f8fafc; border:1px solid var(--border); border-radius:8px; padding:12px 16px; font-style:italic; color:#334155; margin-bottom:14px; font-size:13px;">
+          "{{ historyTask.prompt_text }}"
+        </div>
+
+        <div style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">
+          <template v-if="historyTask.actual_cost_usd != null">
+            本次花费 <b style="color:var(--text)">${{ fmt(historyTask.actual_cost_usd) }}</b>
+          </template>
+          <template v-else>
+            预计 ${{ fmt(historyTask.estimated_cost_usd) }} / 已冻结 <b style="color:var(--text)">${{ fmt(historyTask.held_usd || historyTask.estimated_cost_usd) }}</b>
+          </template>
+        </div>
+        <el-alert
+          v-if="historyTask.status === 'succeeded' && historyTask.content_expires_at"
+          :type="contentExpired(historyTask) ? 'warning' : 'info'"
+          :closable="false"
+          show-icon
+          style="margin-bottom:14px;"
+        >
+          <template #title>
+            下载地址与保存时间
+          </template>
+          <div>服务器网关：保存 2 天，剩余 {{ contentCountdown(historyTask) }}</div>
+          <div>BytePlus 原始文件：官方保存 24 小时，剩余 {{ upstreamContentCountdown(historyTask) }}</div>
+          <div>请优先下载到本地；任一地址过期后将无法继续使用对应链接。</div>
+        </el-alert>
+
+        <template v-if="historyTask.status === 'succeeded' && historyTask.video_url">
+          <div style="background:#0f172a; border-radius:10px; overflow:hidden;">
+            <video :src="historyTask.video_url" controls autoplay playsinline style="width:100%; display:block;"></video>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+            <el-button tag="a" :href="historyTask.video_url" :download="historyTask.id + '.mp4'">
+              <el-icon style="margin-right:6px"><Download /></el-icon>服务器网关下载
+            </el-button>
+            <el-button v-if="historyTask.upstream_video_url" tag="a" :href="historyTask.upstream_video_url" target="_blank" rel="noopener noreferrer">
+              <el-icon style="margin-right:6px"><Link /></el-icon>BytePlus 原始下载
+            </el-button>
+          </div>
+        </template>
+        <template v-else-if="['failed','cancelled','expired'].includes(historyTask.status)">
+          <el-alert type="error" :closable="false" show-icon>
+            <template #title>任务 {{ statusLabel(historyTask.status) }}</template>
+            {{ failureMessage(historyTask) }}
+          </el-alert>
+        </template>
+        <template v-else>
+          <div class="running-banner">
+            <div class="pulse"></div>
+            <div>
+              <div style="font-weight:600">{{ historyTask.status === 'queued' ? '排队中' : '正在生成' }}</div>
+              <div style="font-size:12.5px; color:var(--text-muted)">
+                {{ generationCountdown(historyTask) }}，详情会自动刷新，不会跳回新建视频页面。
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </el-dialog>
   </div>
 
 </div>
@@ -947,13 +1311,13 @@ const TOKENS_PER_SEC = {
   "seedance-1-5-pro-251215":           {"480p": 7652, "720p":16456, "1080p":37027},
 };
 const RATE = {
-  "dreamina-seedance-2-0-260128":      {"480p":0.0084, "720p":0.0084, "1080p":0.00924},
-  "dreamina-seedance-2-0-fast-260128": {"480p":0.0084, "720p":0.0084, "1080p":0.00924},
-  "seedance-1-5-pro-251215":           {"480p":0.0017, "720p":0.0017, "1080p":0.0017},
-  "seedance-1-0-pro-250528":           {"480p":0.0014, "720p":0.0014, "1080p":0.0014},
-  "seedance-1-0-pro-fast-251015":      {"480p":0.001,  "720p":0.001,  "1080p":0.001},
-  "seedance-1-0-lite-t2v-250428":      {"480p":0.0007, "720p":0.0007, "1080p":0.0007},
-  "seedance-1-0-lite-i2v-250428":      {"480p":0.0007, "720p":0.0007, "1080p":0.0007},
+  "dreamina-seedance-2-0-260128":      {"480p":0.007,   "720p":0.007,   "1080p":0.0077},
+  "dreamina-seedance-2-0-fast-260128": {"480p":0.0056,  "720p":0.0056,  "1080p":0.0056},
+  "seedance-1-5-pro-251215":           {"480p":0.00216, "720p":0.00216, "1080p":0.00216},
+  "seedance-1-0-pro-250528":           {"480p":0.002375,"720p":0.002375,"1080p":0.002375},
+  "seedance-1-0-pro-fast-251015":      {"480p":0.0009,  "720p":0.0009,  "1080p":0.0009},
+  "seedance-1-0-lite-t2v-250428":      {"480p":0.00153, "720p":0.00153, "1080p":0.00153},
+  "seedance-1-0-lite-i2v-250428":      {"480p":0.00153, "720p":0.00153, "1080p":0.00153},
 };
 
 const App = {
@@ -970,6 +1334,7 @@ const App = {
 
       models: [],
       form: {
+        creation_mode: "text",
         model: "dreamina-seedance-2-0-260128",
         prompt: "",
         resolution: "720p",
@@ -979,18 +1344,86 @@ const App = {
         generate_audio: false,
         watermark: false,
         upload_id: "",
+        first_frame_id: "",
+        last_frame_id: "",
+        references: [],
       },
+      picker: { reference_image: "", reference_video: "", reference_audio: "" },
+      manualAsset: { value: "", role: "reference_image" },
 
       currentTask: null,
       pollTimer: null,
+      historyTask: null,
+      historyPollTimer: null,
+      taskDetailDialog: false,
       estimateInfo: null,
       estimateTimer: null,
+      countdownNow: Math.floor(Date.now() / 1000),
+      countdownTimer: null,
 
       history: [],
       uploads: [],
       uploadForm: { file: null, face_allowlist: false, face_asset_label: "" },
-      loading: { submit: false, history: false, assets: false, upload: false, docs: false, password: false },
+      lastUploadedAsset: null,
+      slotUploadRole: "",
+      loading: { submit: false, history: false, clearHistory: false, assets: false, upload: false, docs: false, password: false },
       docsHtml: "",
+      creationModes: [
+        {
+          id: "text",
+          title: "文生视频",
+          note: "只用提示词生成，适合概念片、广告镜头和分镜草案。",
+          placeholder: "A clean commercial video of a white electric scooter driving through a modern city street, morning light, smooth camera movement, realistic style",
+          hint: "写清主体、动作、场景、镜头、光线和风格。",
+          required_roles: [],
+          template: "Subject: ...\nAction: ...\nScene: ...\nCamera: smooth tracking shot, cinematic movement\nStyle: realistic, commercial, clean lighting\nConstraints: no text, no logo distortion"
+        },
+        {
+          id: "first_frame",
+          title: "首帧图生视频",
+          note: "用一张图控制开场画面，让画面自然动起来。",
+          placeholder: "Animate from Image 1. Keep the same subject identity, outfit, background, and composition. Gentle camera push-in, natural movement.",
+          hint: "首帧图片放到 first_frame，不要只把 asset id 写进提示词。",
+          required_roles: ["first_frame"],
+          template: "Animate from the first frame. Keep the same subject identity, outfit, background, and composition. Add natural movement, gentle camera push-in, cinematic lighting."
+        },
+        {
+          id: "first_last",
+          title: "首尾帧动画",
+          note: "指定开始图和结束图，生成中间过渡。",
+          placeholder: "Create a smooth transition from the first frame to the last frame. Preserve identity and scene continuity.",
+          hint: "首帧用 first_frame，尾帧用 last_frame，prompt 描述中间怎么变化。",
+          required_roles: ["first_frame", "last_frame"],
+          template: "Create a smooth transition from the first frame to the last frame. Preserve subject identity, clothing, lighting continuity, and camera direction. Natural motion, no sudden cuts."
+        },
+        {
+          id: "multi_reference",
+          title: "多参考图",
+          note: "用 Image 1 / Image 2 / Image 3 分别控制人物、产品、服装或场景。",
+          placeholder: "Use Image 1 as the character reference, Image 2 as the product reference, and Image 3 as the scene style reference.",
+          hint: "参考图数组顺序就是 Image 1、Image 2、Image 3。",
+          required_roles: ["reference_image"],
+          template: "Use Image 1 as the main character reference, Image 2 as the product reference, and Image 3 as the scene/style reference. Keep character identity and product details consistent. Create a polished commercial video."
+        },
+        {
+          id: "video_reference",
+          title: "参考视频",
+          note: "参考动作节奏、镜头运动或姿态变化。",
+          placeholder: "Use the reference video only for motion rhythm and camera movement. Generate a new scene with the selected subject/style.",
+          hint: "参考视频放到 reference_video，prompt 说明参考哪一部分，不要复制 logo/文字。",
+          required_roles: ["reference_video"],
+          template: "Use the reference video only for motion rhythm, body movement, and camera pacing. Do not copy logos, text, or background objects. Generate a new cinematic scene with the requested subject."
+        },
+        {
+          id: "mixed",
+          title: "混合参考/编辑",
+          note: "图片、视频、音频一起参考，适合复用素材后再编辑。",
+          placeholder: "Combine the image references for identity/product consistency and the video reference for motion rhythm. Refine the scene according to the prompt.",
+          hint: "用于编辑复用时，保留需要固定的素材，prompt 写清要改变的部分。",
+          required_roles: ["visual_reference"],
+          template: "Combine the image references for identity/product consistency and the video reference for motion rhythm. Change only the scene styling and camera mood. Preserve the selected subject and product details."
+        },
+      ],
       guideUploadCurl: `KEY="sk_xxxxxxxxxxxxxxxx"
 
 curl -X POST https://seedance3.eu/v1/uploads \\
@@ -1033,6 +1466,47 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     "extra_body": {"real_person_mode": true}
   }'`,
       methodExamples: [
+        {
+          id: "direct-asset-id",
+          title: "直接使用 Asset ID",
+          note: "客户拿到 asset-... 时，把它写到 url 字段；asset-... 和 asset://asset-... 都可以，推荐完整 asset:// 写法。",
+          code: `{
+  "model": "dreamina-seedance-2-0-260128",
+  "content": [
+    { "type": "text", "text": "Use this approved asset as the main character reference. Keep identity and outfit consistent." },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset-20260719000123-abcd1" },
+      "role": "reference_image"
+    }
+  ],
+  "resolution": "720p",
+  "duration": 5
+}`,
+        },
+        {
+          id: "legacy-references",
+          title: "旧 references 字段迁移",
+          note: "如果旧代码使用 references 数组，请迁移为 content[] 里的 image_url / video_url / audio_url 内容块。",
+          code: `{
+  "model": "dreamina-seedance-2-0-260128",
+  "content": [
+    { "type": "text", "text": "Use the product reference and create a clean studio video" },
+    {
+      "type": "image_url",
+      "image_url": { "url": "asset://asset_product_reference" },
+      "role": "reference_image"
+    }
+  ],
+  "references": [
+    {
+      "asset_id": "upl_6b867a97c567d64d",
+      "url": "asset://asset_product_reference",
+      "type": "image"
+    }
+  ]
+}`,
+        },
         {
           id: "text",
           title: "文生视频",
@@ -1190,6 +1664,28 @@ curl -X POST https://seedance3.eu/v1/uploads \\
   computed: {
     currentModel() { return this.models.find(m => m.id === this.form.model); },
     selectedUpload() { return this.uploads.find(a => a.id === this.form.upload_id); },
+    currentCreationMode() { return this.creationModes.find(m => m.id === this.form.creation_mode) || this.creationModes[0]; },
+    supportedResolutions() { return this.currentModel?.supported_resolutions?.length ? this.currentModel.supported_resolutions : ["480p", "720p", "1080p"]; },
+    supportedRatios() { return this.currentModel?.supported_ratios?.length ? this.currentModel.supported_ratios : ["16:9", "9:16", "1:1"]; },
+    durationRange() {
+      const range = this.currentModel?.duration_seconds || {};
+      return { min: Number(range.min) || 2, max: Number(range.max) || 15 };
+    },
+    resolutionOptions() {
+      const labels = { "480p": "480p 标清", "720p": "720p 高清", "1080p": "1080p 全高清" };
+      return this.supportedResolutions.map(value => ({ value, label: labels[value] || value }));
+    },
+    ratioOptions() {
+      const labels = { "16:9": "16:9 横屏", "9:16": "9:16 竖屏", "1:1": "1:1 方形" };
+      return this.supportedRatios.map(value => ({ value, label: labels[value] || value }));
+    },
+    imageUploads() { return this.uploads.filter(a => a.purpose === "image"); },
+    videoUploads() { return this.uploads.filter(a => a.purpose === "video"); },
+    audioUploads() { return this.uploads.filter(a => a.purpose === "audio"); },
+    referenceItems() { return this.form.references || []; },
+    generationValidationMessage() { return this.generationValidationError(false); },
+    submitValidationMessage() { return this.generationValidationError(true); },
+    apiJsonPreview() { return JSON.stringify(this.videoRequestBody(), null, 2); },
     estimatedTokens() {
       if (this.estimateInfo?.estimated_tokens) return this.estimateInfo.estimated_tokens;
       const tps = (TOKENS_PER_SEC[this.form.model] || TOKENS_PER_SEC["dreamina-seedance-2-0-260128"])[this.form.resolution];
@@ -1207,6 +1703,10 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     },
   },
   watch: {
+    "form.model"() {
+      this.normalizeModelParams();
+      this.scheduleEstimate();
+    },
     form: {
       handler() { this.scheduleEstimate(); },
       deep: true,
@@ -1224,6 +1724,63 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     fmt(n, d=4) { return n == null ? "-" : Number(n).toFixed(d); },
     fmtUsd(n) { return n == null ? "$-" : "$" + Number(n).toFixed(4); },
     fmtTs(ts) { return ts ? new Date(ts*1000).toLocaleString("zh-CN", {hour12: false}) : "-"; },
+    contentSecondsRemaining(task) {
+      if (!task?.content_expires_at) return null;
+      return Math.max(0, Number(task.content_expires_at) - this.countdownNow);
+    },
+    contentExpired(task) {
+      const remaining = this.contentSecondsRemaining(task);
+      return remaining != null && remaining <= 0;
+    },
+    contentCountdown(task) {
+      const remaining = this.contentSecondsRemaining(task);
+      if (remaining == null) return "-";
+      if (remaining <= 0) return "已过期";
+      const days = Math.floor(remaining / 86400);
+      const hours = Math.floor((remaining % 86400) / 3600);
+      const minutes = Math.floor((remaining % 3600) / 60);
+      if (days > 0) return `${days}天 ${hours}小时`;
+      if (hours > 0) return `${hours}小时 ${minutes}分钟`;
+      return `${Math.max(1, minutes)}分钟`;
+    },
+    upstreamContentCountdown(task) {
+      if (!task?.upstream_content_expires_at) return "等待上游返回有效期";
+      return this.countdownFromTimestamp(task.upstream_content_expires_at);
+    },
+    countdownFromTimestamp(expiresAt) {
+      const remaining = Math.max(0, Number(expiresAt) - this.countdownNow);
+      if (remaining <= 0) return "已过期";
+      const days = Math.floor(remaining / 86400);
+      const hours = Math.floor((remaining % 86400) / 3600);
+      const minutes = Math.floor((remaining % 3600) / 60);
+      if (days > 0) return `${days}天 ${hours}小时`;
+      if (hours > 0) return `${hours}小时 ${minutes}分钟`;
+      return `${Math.max(1, minutes)}分钟`;
+    },
+    terminalTask(task) {
+      return ["succeeded","failed","cancelled","expired"].includes(task?.status);
+    },
+    generationSecondsRemaining(task) {
+      if (!task?.created_at || this.terminalTask(task)) return null;
+      const duration = Math.max(5, Number(task.duration) || 5);
+      const expectedSeconds = Math.max(180, Math.min(900, duration * 60));
+      return Math.max(0, Number(task.created_at) + expectedSeconds - this.countdownNow);
+    },
+    generationCountdown(task) {
+      const remaining = this.generationSecondsRemaining(task);
+      if (remaining == null) return "状态更新中";
+      if (remaining <= 0) return "已接近预计完成时间";
+      const minutes = Math.floor(remaining / 60);
+      const seconds = remaining % 60;
+      return `预计还需 ${minutes}:${String(seconds).padStart(2, "0")}`;
+    },
+    failureMessage(task) {
+      if (task?.status === "cancelled") return "任务已取消，冻结金额已退回可用余额。";
+      if (task?.status === "expired") return "任务结果已过期，请重新生成。";
+      const message = task?.error?.message;
+      if (message) return message;
+      return "任务生成失败，未产生费用；请调整提示词或素材后重试，必要时联系管理员查看失败原因。";
+    },
     formatBytes(n) {
       const size = Number(n || 0);
       if (size >= 1024 * 1024) return (size / 1024 / 1024).toFixed(2) + " MB";
@@ -1231,6 +1788,87 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       return size + " B";
     },
     purposeLabel(p) { return ({ image: "图片", video: "视频", audio: "音频" })[p] || p || "-"; },
+    assetReferenceUrl(asset) {
+      return asset?.asset_url || asset?.url || "";
+    },
+    assetOptionLabel(asset) {
+      return `${asset.original_filename || asset.id} / ${this.purposeLabel(asset.purpose)}${asset.face_asset_whitelisted ? " / 白名单" : ""}`;
+    },
+    assetRoleLabel(asset) {
+      return ({ image: "reference_image", video: "reference_video", audio: "reference_audio" })[asset?.purpose] || "reference";
+    },
+    normalizeAssetRef(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      if (raw.startsWith("asset://")) return raw;
+      if (raw.startsWith("asset-")) return `asset://${raw}`;
+      return raw;
+    },
+    purposeForRole(role) {
+      if (role === "reference_video") return "video";
+      if (role === "reference_audio") return "audio";
+      return "image";
+    },
+    contentBlockForUrl(url, role, purpose) {
+      const normalizedUrl = this.normalizeAssetRef(url);
+      if (!normalizedUrl) return null;
+      const normalizedPurpose = purpose || this.purposeForRole(role);
+      if (normalizedPurpose === "video") return { type: "video_url", video_url: { url: normalizedUrl }, role: role || "reference_video" };
+      if (normalizedPurpose === "audio") return { type: "audio_url", audio_url: { url: normalizedUrl }, role: role || "reference_audio" };
+      return { type: "image_url", image_url: { url: normalizedUrl }, role: role || "reference_image" };
+    },
+    uploadUsageHint(asset) {
+      if (!asset) return "";
+      const ref = this.assetReferenceUrl(asset);
+      if (ref.startsWith("asset://")) return "生成时会使用 asset:// 引用，适合真人、人脸、角色或产品一致性参考。";
+      return "生成时会使用公开 URL 引用；如需真人白名单，请上传时打开白名单开关。";
+    },
+    contentBlockForUpload(asset, role) {
+      if (asset?.suggested_content_block && !role) return asset.suggested_content_block;
+      const url = this.assetReferenceUrl(asset);
+      if (!url) return null;
+      return this.contentBlockForUrl(url, role || this.assetRoleLabel(asset), asset?.purpose);
+    },
+    referenceFromUpload(asset, role) {
+      if (!asset) return null;
+      return {
+        key: `${role}:${asset.id}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+        upload_id: asset.id,
+        role,
+        purpose: asset.purpose,
+        url: this.assetReferenceUrl(asset),
+        label: asset.original_filename || asset.id,
+        manual: false,
+      };
+    },
+    referenceFromManual(value, role) {
+      const url = this.normalizeAssetRef(value);
+      if (!url) return null;
+      return {
+        key: `${role}:${url}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+        upload_id: "",
+        role,
+        purpose: this.purposeForRole(role),
+        url,
+        label: url,
+        manual: true,
+      };
+    },
+    referenceLabel(item, idx) {
+      const prefix = item.role === "reference_image" ? `Image ${this.referenceImageOrdinal(idx)}` : item.role;
+      return `${prefix} / ${item.label || item.url}`;
+    },
+    referenceImageOrdinal(idx) {
+      let count = 0;
+      for (let i = 0; i <= idx; i++) if (this.referenceItems[i]?.role === "reference_image") count += 1;
+      return count || 1;
+    },
+    copyAssetUrl(asset) {
+      const value = this.assetReferenceUrl(asset);
+      if (!value) { ElMessage.warning("这个素材还没有可复制的引用"); return; }
+      navigator.clipboard.writeText(value);
+      ElMessage.success(value.startsWith("asset://") ? "asset:// 引用已复制" : "素材 URL 已复制");
+    },
     openUrl(url) { if (url) window.open(url, "_blank", "noopener"); },
     initials(e) { return (e || "?").split("@")[0].slice(0,2).toUpperCase(); },
     statusType(s) { return ({queued:"info",running:"primary",succeeded:"success",failed:"danger",cancelled:"warning",expired:"warning"})[s] || "info"; },
@@ -1270,6 +1908,19 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       const r = await this.api("/v1/models");
       this.models = r.data;
       if (!this.models.find(m => m.id === this.form.model)) this.form.model = this.models[0]?.id;
+      this.normalizeModelParams();
+    },
+    normalizeModelParams() {
+      if (!this.supportedResolutions.includes(this.form.resolution)) {
+        this.form.resolution = this.supportedResolutions.includes("720p") ? "720p" : this.supportedResolutions[0];
+      }
+      if (!this.supportedRatios.includes(this.form.ratio)) {
+        this.form.ratio = this.supportedRatios.includes("16:9") ? "16:9" : this.supportedRatios[0];
+      }
+      const min = this.durationRange.min;
+      const max = this.durationRange.max;
+      const duration = Number(this.form.duration) || min;
+      this.form.duration = Math.max(min, Math.min(max, duration));
     },
     switchTab(name) {
       this.tab = name;
@@ -1278,13 +1929,141 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       if (name === "docs")    this.loadDocs();
       if (name === "generate") this.scheduleEstimate();
     },
+    selectCreationMode(modeId) {
+      this.form.creation_mode = modeId;
+      const defaults = {
+        first_frame: "first_frame",
+        first_last: "first_frame",
+        multi_reference: "reference_image",
+        video_reference: "reference_video",
+        mixed: "reference_image",
+      };
+      this.manualAsset.role = defaults[modeId] || "reference_image";
+      this.scheduleEstimate();
+    },
+    insertPromptTemplate(replace=false) {
+      const template = this.currentCreationMode?.template || "";
+      if (!template) return;
+      if (replace || !this.form.prompt.trim()) this.form.prompt = template;
+      else this.form.prompt = `${this.form.prompt.trim()}\n\n${template}`;
+      this.scheduleEstimate();
+    },
+    addPickedReference(role) {
+      const id = this.picker[role];
+      if (!id) return;
+      const asset = this.uploads.find(a => a.id === id);
+      const item = this.referenceFromUpload(asset, role);
+      this.picker[role] = "";
+      if (!item) return;
+      if (this.referenceLimitReached(role)) {
+        ElMessage.warning(this.referenceLimitMessage(role));
+        return;
+      }
+      this.form.references.push(item);
+      this.scheduleEstimate();
+    },
+    addManualAsset() {
+      const item = this.referenceFromManual(this.manualAsset.value, this.manualAsset.role);
+      if (!item) { ElMessage.warning("请输入 asset id 或 asset:// 引用"); return; }
+      if (["first_frame","last_frame"].includes(item.role)) {
+        if (item.role === "first_frame") this.form.first_frame_id = "";
+        if (item.role === "last_frame") this.form.last_frame_id = "";
+        this.form.references = this.referenceItems.filter(existing => existing.role !== item.role);
+      } else if (this.referenceLimitReached(item.role)) {
+        ElMessage.warning(this.referenceLimitMessage(item.role));
+        return;
+      }
+      this.form.references.push(item);
+      this.manualAsset.value = "";
+      this.scheduleEstimate();
+      ElMessage.success("Asset ID 已加入 content[]");
+    },
+    setFrameSelection(role, id) {
+      if (role === "first_frame") this.form.first_frame_id = id || "";
+      if (role === "last_frame") this.form.last_frame_id = id || "";
+      this.form.references = this.referenceItems.filter(item => item.role !== role);
+      this.scheduleEstimate();
+    },
+    roleCount(role) {
+      let count = this.referenceItems.filter(item => item.role === role).length;
+      if (role === "first_frame" && this.form.first_frame_id) count += 1;
+      if (role === "last_frame" && this.form.last_frame_id) count += 1;
+      return count;
+    },
+    hasVisualReference() {
+      return this.roleCount("first_frame") > 0 ||
+        this.roleCount("last_frame") > 0 ||
+        this.roleCount("reference_image") > 0 ||
+        this.roleCount("reference_video") > 0;
+    },
+    generationValidationError(requirePrompt=true) {
+      if (requirePrompt && !this.form.prompt.trim()) return "请输入提示词";
+      const mode = this.form.creation_mode;
+      if (mode === "first_frame" && this.roleCount("first_frame") < 1) return "首帧图生视频需要上传、选择或填写一个 first_frame 图片素材";
+      if (mode === "first_last" && this.roleCount("first_frame") < 1) return "首尾帧动画需要先提供 first_frame 首帧图片";
+      if (mode === "first_last" && this.roleCount("last_frame") < 1) return "首尾帧动画需要再提供 last_frame 尾帧图片";
+      if (mode === "multi_reference" && this.roleCount("reference_image") < 1) return "多参考图模式至少需要 1 张 reference_image";
+      if (mode === "video_reference" && this.roleCount("reference_video") < 1) return "参考视频模式至少需要 1 个 reference_video";
+      if (mode === "mixed" && !this.hasVisualReference()) return "混合参考/编辑至少需要 1 个图片或视频素材作为视觉目标";
+      if (this.roleCount("reference_audio") > 0 && !this.hasVisualReference()) return "reference_audio 不能单独使用，请同时加入参考图、首帧、尾帧或参考视频";
+      return "";
+    },
+    validateGenerationForm() {
+      const message = this.generationValidationError(true);
+      if (message) {
+        ElMessage.warning(message);
+        return false;
+      }
+      return true;
+    },
+    referenceLimitReached(role) {
+      const limits = { reference_image: 9, reference_video: 3, reference_audio: 3 };
+      const limit = limits[role];
+      if (!limit) return false;
+      return this.referenceItems.filter(item => item.role === role).length >= limit;
+    },
+    referenceLimitMessage(role) {
+      return ({ reference_image: "参考图最多 9 张", reference_video: "参考视频最多 3 个", reference_audio: "参考音频最多 3 个" })[role] || "参考素材数量已达上限";
+    },
+    removeReference(idx) {
+      this.form.references.splice(idx, 1);
+      this.scheduleEstimate();
+    },
+    moveReference(idx, delta) {
+      const next = idx + delta;
+      if (next < 0 || next >= this.form.references.length) return;
+      const items = this.form.references;
+      const [item] = items.splice(idx, 1);
+      items.splice(next, 0, item);
+      this.scheduleEstimate();
+    },
     buildContent() {
       const content = [];
       if (this.form.prompt.trim()) content.push({type: "text", text: this.form.prompt.trim()});
-      if (this.selectedUpload?.suggested_content_block) {
-        content.push(this.selectedUpload.suggested_content_block);
+      const firstFrame = this.uploads.find(a => a.id === this.form.first_frame_id);
+      const lastFrame = this.uploads.find(a => a.id === this.form.last_frame_id);
+      const firstBlock = this.contentBlockForUpload(firstFrame, "first_frame");
+      const lastBlock = this.contentBlockForUpload(lastFrame, "last_frame");
+      if (firstBlock) content.push(firstBlock);
+      if (lastBlock) content.push(lastBlock);
+      for (const item of this.referenceItems) {
+        const block = this.contentBlockForUrl(item.url, item.role, item.purpose);
+        if (block) content.push(block);
       }
       return content;
+    },
+    videoRequestBody() {
+      const body = {
+        model: this.form.model,
+        content: this.buildContent(),
+        resolution: this.form.resolution,
+        ratio: this.form.ratio,
+        duration: Number(this.form.duration) || 5,
+        watermark: !!this.form.watermark,
+      };
+      if (this.form.seed) body.seed = Number(this.form.seed);
+      if (this.form.generate_audio) body.generate_audio = true;
+      return body;
     },
     scheduleEstimate() {
       if (this.estimateTimer) clearTimeout(this.estimateTimer);
@@ -1292,15 +2071,12 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     },
     async loadEstimate() {
       if (this.view !== "app") return;
+      if (this.generationValidationError(false)) {
+        this.estimateInfo = null;
+        return;
+      }
       try {
-        const body = {
-          model: this.form.model,
-          content: this.buildContent(),
-          resolution: this.form.resolution,
-          ratio: this.form.ratio,
-          duration: Number(this.form.duration) || 5,
-          generate_audio: !!this.form.generate_audio,
-        };
+        const body = this.videoRequestBody();
         this.estimateInfo = await this.api("/v1/videos/estimate", { method: "POST", body: JSON.stringify(body) });
       } catch (e) {
         console.warn("estimate failed", e);
@@ -1314,6 +2090,32 @@ curl -X POST https://seedance3.eu/v1/uploads \\
     },
     handleAssetFile(e) {
       this.uploadForm.file = e.target.files?.[0] || null;
+    },
+    async uploadFileForRole(file, role) {
+      if (!file) { ElMessage.warning("请选择要上传的文件"); return; }
+      this.slotUploadRole = role;
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        const r = await fetch("/v1/uploads", { method: "POST", credentials: "include", body: fd });
+        let body; try { body = await r.json(); } catch { body = {}; }
+        if (!r.ok) throw { status: r.status, body };
+        this.uploads = [body, ...this.uploads.filter(a => a.id !== body.id)];
+        const added = this.useUploadInCurrentForm(body, true, role);
+        this.lastUploadedAsset = body;
+        this.scheduleEstimate();
+        if (added) ElMessage.success("上传成功，已加入当前生成请求");
+        else ElMessage.warning("上传成功，但文件类型不适合当前槽位，请从素材库选择正确用途");
+      } catch (e) {
+        ElMessage.error(this.errMsg(e));
+      } finally {
+        this.slotUploadRole = "";
+      }
+    },
+    handleSlotUploadFile(e, role) {
+      const file = e.target.files?.[0] || null;
+      if (e.target) e.target.value = "";
+      this.uploadFileForRole(file, role);
     },
     async uploadAsset() {
       if (!this.uploadForm.file) { ElMessage.warning("请选择要上传的文件"); return; }
@@ -1329,21 +2131,54 @@ curl -X POST https://seedance3.eu/v1/uploads \\
         let body; try { body = await r.json(); } catch { body = {}; }
         if (!r.ok) throw { status: r.status, body };
         this.uploads = [body, ...this.uploads.filter(a => a.id !== body.id)];
-        this.form.upload_id = body.id;
+        this.useUploadInCurrentForm(body, true);
+        this.lastUploadedAsset = body;
         this.uploadForm = { file: null, face_allowlist: false, face_asset_label: "" };
         if (this.$refs.assetFileInput) this.$refs.assetFileInput.value = "";
         this.scheduleEstimate();
-        ElMessage.success("素材已上传");
+        ElMessage.success("素材已上传，可直接用于生成视频");
       } catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.upload = false; }
     },
-    useUpload(asset) {
-      this.form.upload_id = asset.id;
+    useUpload(asset, role=null) {
+      this.useUploadInCurrentForm(asset, false, role);
       this.scheduleEstimate();
       this.switchTab("generate");
     },
+    useUploadInCurrentForm(asset, silent=false, forcedRole=null) {
+      if (!asset) return false;
+      const role = forcedRole || (asset.purpose === "image" ? "reference_image" : asset.purpose === "video" ? "reference_video" : "reference_audio");
+      const requiredPurpose = this.purposeForRole(role);
+      if (asset.purpose !== requiredPurpose) {
+        if (!silent) ElMessage.warning(`${role} 需要 ${requiredPurpose} 素材`);
+        return false;
+      }
+      if (role === "first_frame") {
+        this.form.first_frame_id = asset.id;
+      } else if (role === "last_frame") {
+        this.form.last_frame_id = asset.id;
+      } else {
+        if (this.referenceLimitReached(role)) {
+          if (!silent) ElMessage.warning(this.referenceLimitMessage(role));
+          return false;
+        }
+        if (!this.referenceItems.some(item => item.upload_id === asset.id && item.role === role)) {
+          const item = this.referenceFromUpload(asset, role);
+          if (item) this.form.references.push(item);
+        }
+      }
+      if (!silent) ElMessage.success(`${asset.original_filename || asset.id} 已加入 ${role}`);
+      return true;
+    },
+    assetInForm(asset) {
+      if (!asset) return false;
+      if (this.form.first_frame_id === asset.id || this.form.last_frame_id === asset.id) return true;
+      return this.referenceItems.some(item => item.upload_id === asset.id);
+    },
     copyContentBlock(asset) {
-      navigator.clipboard.writeText(JSON.stringify(asset.suggested_content_block, null, 2));
+      const block = this.contentBlockForUpload(asset);
+      if (!block) { ElMessage.warning("这个素材还没有可复制的 content 块"); return; }
+      navigator.clipboard.writeText(JSON.stringify(block, null, 2));
       ElMessage.success("引用块已复制");
     },
     async deleteUpload(asset) {
@@ -1351,10 +2186,10 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       try {
         const result = await this.api(`/v1/uploads/${asset.id}`, { method: "DELETE" });
         this.uploads = this.uploads.filter(a => a.id !== asset.id);
-        if (this.form.upload_id === asset.id) {
-          this.form.upload_id = "";
-          this.scheduleEstimate();
-        }
+        if (this.form.first_frame_id === asset.id) this.form.first_frame_id = "";
+        if (this.form.last_frame_id === asset.id) this.form.last_frame_id = "";
+        this.form.references = this.referenceItems.filter(item => item.upload_id !== asset.id);
+        this.scheduleEstimate();
         const request = result.asset_delete_request;
         if (request?.status === "pending_admin") {
           ElMessage.success("素材已删除，BytePlus asset 等待平台批量删除");
@@ -1419,18 +2254,9 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       finally { this.loading.password = false; }
     },
     async submitGen() {
-      if (!this.form.prompt.trim()) { ElMessage.warning("请输入提示词"); return; }
+      if (!this.validateGenerationForm()) return;
       this.loading.submit = true;
-      const body = {
-        model: this.form.model,
-        content: this.buildContent(),
-        resolution: this.form.resolution,
-        ratio: this.form.ratio,
-        duration: Number(this.form.duration) || 5,
-        watermark: this.form.watermark,
-      };
-      if (this.form.seed) body.seed = Number(this.form.seed);
-      if (this.form.generate_audio) body.generate_audio = true;
+      const body = this.videoRequestBody();
       try {
         const r = await this.api("/v1/videos", {method:"POST", body: JSON.stringify(body)});
         ElMessage.success(`任务已提交，预扣 $${this.fmt(r.held_usd)}`);
@@ -1446,9 +2272,10 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       try {
         const t = await this.api(`/v1/videos/${this.currentTask.id}`);
         this.currentTask = t;
-        if (["succeeded","failed","cancelled","expired"].includes(t.status)) {
+        if (this.terminalTask(t)) {
           this.refreshMe();
           if (t.status === "succeeded") ElMessage.success("视频已生成");
+          if (t.status === "failed") ElMessage.error(this.failureMessage(t));
           return;
         }
       } catch (e) { console.warn(e); }
@@ -1462,17 +2289,71 @@ curl -X POST https://seedance3.eu/v1/uploads \\
       catch (e) { ElMessage.error(this.errMsg(e)); }
       finally { this.loading.history = false; }
     },
-    async goToTask(vid) {
-      this.switchTab("generate");
+    updateHistoryTask(task) {
+      if (!task?.id) return;
+      this.history = this.history.map(item => item.id === task.id ? { ...item, ...task } : item);
+    },
+    async clearHistory() {
+      const terminalCount = this.history.filter(t => this.terminalTask(t)).length;
+      if (!terminalCount) {
+        ElMessage.info("没有可清空的已完成/失败记录，保留进行中的任务。");
+        return;
+      }
+      if (!confirm(`清空 ${terminalCount} 条历史记录？保留进行中的任务，后台账务记录不会删除。`)) return;
+      this.loading.clearHistory = true;
       try {
-        const t = await this.api(`/v1/videos/${vid}`);
-        this.currentTask = t;
-        if (!["succeeded","failed","cancelled","expired"].includes(t.status)) this.pollTask();
+        const result = await this.api("/v1/videos/history", { method: "DELETE" });
+        this.history = this.history.filter(t => !this.terminalTask(t));
+        ElMessage.success(`已清空 ${result.hidden || terminalCount} 条历史记录，保留进行中的任务。`);
+      } catch (e) {
+        ElMessage.error(this.errMsg(e));
+      } finally {
+        this.loading.clearHistory = false;
+      }
+    },
+    async openHistoryTask(task) {
+      if (!task?.id) return;
+      if (this.historyPollTimer) clearTimeout(this.historyPollTimer);
+      this.historyTask = task;
+      this.taskDetailDialog = true;
+      try {
+        const t = await this.api(`/v1/videos/${task.id}`);
+        this.historyTask = t;
+        this.updateHistoryTask(t);
+        if (!this.terminalTask(t)) this.pollHistoryTask();
       } catch (e) { ElMessage.error(this.errMsg(e)); }
+    },
+    async pollHistoryTask() {
+      if (this.historyPollTimer) clearTimeout(this.historyPollTimer);
+      if (!this.taskDetailDialog || !this.historyTask?.id) return;
+      try {
+        const t = await this.api(`/v1/videos/${this.historyTask.id}`);
+        this.historyTask = t;
+        this.updateHistoryTask(t);
+        if (this.terminalTask(t)) {
+          this.refreshMe();
+          if (t.status === "succeeded") ElMessage.success("视频已生成");
+          if (t.status === "failed") ElMessage.error(this.failureMessage(t));
+          return;
+        }
+      } catch (e) { console.warn(e); }
+      this.historyPollTimer = setTimeout(() => this.pollHistoryTask(), 8000);
+    },
+    closeHistoryTaskDetail() {
+      if (this.historyPollTimer) clearTimeout(this.historyPollTimer);
+      this.historyPollTimer = null;
     },
   },
   async mounted() {
+    this.countdownTimer = setInterval(() => {
+      this.countdownNow = Math.floor(Date.now() / 1000);
+    }, 1000);
     await this.checkAuth();
+  },
+  beforeUnmount() {
+    if (this.countdownTimer) clearInterval(this.countdownTimer);
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    if (this.historyPollTimer) clearTimeout(this.historyPollTimer);
   },
 };
 

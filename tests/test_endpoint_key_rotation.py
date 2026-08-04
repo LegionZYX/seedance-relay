@@ -41,7 +41,7 @@ class EndpointKeyRotationTests(unittest.TestCase):
         ):
             os.environ.pop(key, None)
 
-    def _insert_user(self, *, user_id="u_rotate", expires_in=3600, enabled=True):
+    def _insert_user(self, *, user_id="u_rotate", expires_in=3600, enabled=True, endpoint_map=None):
         now = int(time.time())
         note = {
             "upstream_mode": "auto_dedicated",
@@ -49,6 +49,8 @@ class EndpointKeyRotationTests(unittest.TestCase):
             "byteplus_endpoint_api_key_expires_at": now + expires_in,
             "byteplus_endpoint_key_rotation_enabled": enabled,
         }
+        if endpoint_map:
+            note["byteplus_endpoint_map"] = endpoint_map
         db = self.server.get_db()
         db.execute(
             """INSERT INTO users
@@ -98,6 +100,35 @@ class EndpointKeyRotationTests(unittest.TestCase):
         self.assertEqual(note["byteplus_endpoint_key_rotation_error"], "")
         self.assertGreater(note["byteplus_endpoint_key_next_rotate_at"], int(time.time()))
         self.assertEqual(audit["action"], "system_rotated_endpoint_api_key")
+
+    def test_rotation_uses_endpoint_map_resource_ids_when_present(self):
+        self._insert_user(
+            user_id="u_map_rotate",
+            endpoint_map={
+                "dreamina-seedance-2-0-260128": "ep-map-standard",
+                "dreamina-seedance-2-0-fast-260128": "ep-map-fast",
+            },
+        )
+        calls = []
+
+        def fake_get_endpoint_api_key(endpoint_ids, duration_seconds):
+            calls.append((endpoint_ids, duration_seconds))
+            return {
+                "api_key": "new-map-endpoint-key",
+                "expires_at": int(time.time()) + 2592000,
+            }
+
+        self.rotation.get_endpoint_api_key = fake_get_endpoint_api_key
+
+        result = self.rotation.rotate_due_endpoint_keys(now=int(time.time()))
+
+        self.assertEqual(result["rotated"], 1)
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(set(calls[0][0]), {"ep-map-standard", "ep-map-fast"})
+        db = self.server.get_db()
+        row = db.execute("SELECT byteplus_api_key FROM users WHERE id='u_map_rotate'").fetchone()
+        db.close()
+        self.assertEqual(row["byteplus_api_key"], "new-map-endpoint-key")
 
     def test_rotation_failure_preserves_old_key_and_records_sanitized_error(self):
         self._insert_user(user_id="u_fail")

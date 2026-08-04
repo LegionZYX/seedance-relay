@@ -9,25 +9,62 @@
 - 素材生命周期第一版：上传后可自动注册 asset、客户素材隔离、客户删除自己的素材、创建 BytePlus asset 删除请求、管理员批量/强制执行删除入口。
 - 客户素材库 UI：客户可以在素材库删除自己的素材。
 - 管理员协助客户重置密码：专用 `POST /admin/users/{user_id}/password/reset`，支持生成临时密码、手动重置、撤销 session、写审计。
-- 账单第一版：账单预览、保存、客户 CSV 导出、内部 CSV 导出、标记 paid。
+- 账单第一版：账单预览、保存、客户/内部 CSV 导出、XLSX 导出、客户 PDF 导出、账单筛选、客户账单视图、标记 paid。
 - 管理后台账单入口：客户详情里可以选账期、预览、保存、导出、标记 paid。
 - endpoint key 自动轮换脚本：`deploy/rotate_endpoint_keys.py`，支持 dry-run、到期前轮换、失败保留旧 key、写审计。
 - 公开配置文档：`.env.relay.example` / `README.md` / `API_DOCS.md` 已补充相关开关和客户侧接口。
+- IAM capability check：`GET /admin/upstream/iam-capabilities`。
+- 客户 upstream 配置读取/保存：`GET/PATCH /admin/users/{user_id}/upstream`。
+- 后台 dry-run / 创建独立客户 project、endpoint、asset group 的 provision job：`POST /admin/users/{user_id}/upstream/provision` 与 `upstream_provision_jobs`。
+- 单客户 endpoint API key 手动轮换：`POST /admin/users/{user_id}/upstream/endpoint-key/rotate`。
+- 管理后台客户详情页 Customer Endpoint 配置区：可保存配置、dry-run、创建独立 endpoint、开启自动轮换、手动轮换 endpoint key。
+- 已修复两个线上发现的问题：普通保存用户表单不再覆盖 upstream note 字段导致“自动轮换 endpoint key”对勾消失；新账号开通独立 endpoint 不再错误调用 ModelArk `CreateProject`，改为 IAM `GetProject/CreateProject`。
 - 测试：新增素材删除、密码重置、账单、endpoint key 自动轮换、静态 UI 回归测试。
+- Alpha3 已补齐：`deploy/cleanup_upload_files.py` 上传 retention 清理、`deploy/process_asset_delete_requests.py` 异步 asset delete worker、provision job `current_step/progress`、per-endpoint key map fallback、endpoint map health panel、Quota Center reminder、客户账单视图。
 
 部分完成：
 
-- 管理后台 UI 已覆盖素材删除、密码重置、账单第一版；endpoint 独立资源开通/切换 UI 仍未完成。
-- endpoint key 自动轮换脚本已完成；管理后台中单客户轮换开关和立即轮换专用 UI 仍未完成。
-- 账单导出已完成 CSV；XLSX / PDF 后置。
+- 账单导出已支持 CSV / XLSX / PDF；客户视图不暴露 `upstream_cost_usd` 或 `gross_profit_usd`。
+- 本地上传文件 retention 清理已由 `deploy/cleanup_upload_files.py` 支持，默认 dry-run，只有已注册 `asset://...` 且超过保留期的本地临时文件会被清理，DB 素材记录保留。
 
 未完成：
 
-- `GET/PATCH /admin/users/{user_id}/upstream`。
-- `POST /admin/users/{user_id}/upstream/provision` 和 `upstream_provision_jobs`。
-- IAM capability check。
-- 自动创建/复用 BytePlus project、endpoint、asset group 的完整控制面 job。
-- 手动轮换 endpoint API key 的管理员专用接口和 UI。
+- 暂无本轮 spec 内必须先完成的阻断项。
+
+## 0.1 本轮收敛变更：客户 Project + 全模型 Endpoint Map
+
+本轮产品和实现收敛结论如下，优先级高于本文后续旧版 `shared/manual_dedicated/auto_dedicated` 叙事：
+
+```text
+一个客户 = 一个 BytePlus Project
+一个客户 Project = 一组模型 Endpoint + 一个 AIGC AssetGroup
+默认客户模型 = DEFAULT_CUSTOMER_MODEL_IDS，默认等于全部 NATIVE_MODEL_IDS
+后台模型开关 = users.enabled_models
+生成路由 = users.note.byteplus_endpoint_map[client_model] -> BytePlus endpoint id
+```
+
+不再把客户分成“普通共享客户 / 重要独立客户 / 测试客户”三条主路径。当前商业前提是所有客户都是大 B 客户，因此所有正式客户都应拥有自己的 BytePlus Project。`Project` 是客户级资源容器和账单/权限边界；`Endpoint` 是单个模型的实际调用入口；`AssetGroup` 是客户素材长期归属位置。
+
+本轮新增或调整的关键规则：
+
+- 新客户开通上游资源时，Relay 通过 IAM `GetProject/CreateProject` 确保客户 Project 存在。
+- Relay 按客户当前可用模型列表创建 endpoint。若 `users.enabled_models` 为空或未设置，则使用 `DEFAULT_CUSTOMER_MODEL_IDS`；当前默认值是所有 native 模型。
+- 每个模型创建一个对应 ModelArk endpoint，并写入 `users.note.byteplus_endpoint_map`。
+- `users.note.byteplus_endpoint_id` 只保留为兼容主 endpoint 字段；生成路由必须优先使用 `byteplus_endpoint_map`。
+- 后台仍可通过 `enabled_models` 控制客户能看到和调用哪些模型，但“打开模型”不等于“自动补齐 endpoint”。如果模型已开放但没有 endpoint mapping，Relay 必须拒绝调用，不能 fallback 到错误 endpoint。
+- `GetApiKey` 使用 `ResourceType=endpoint` 和 `ResourceIds=[endpoint_id_1, endpoint_id_2, ...]`，为客户当前 endpoint 集合生成 endpoint-scoped key；如果 BytePlus 实际限制单 key 只能绑定单 endpoint，则实现要改成 per-endpoint key map。
+- 不再设计 test/prod 状态开关；测试应通过客户账号状态、余额、模型开关、域名或运营流程控制，而不是引入第二套上游环境状态。
+
+模型升级批量修改规则：
+
+1. 新 model id 先进入 `NATIVE_MODEL_IDS` / `MODEL_REGISTRY`。
+2. 如果旧 model id 需要继续兼容，使用 `MODEL_ID_ALIASES_JSON` 或保留旧 id 一段观察期。
+3. 批量遍历 active customers，按客户 `byteplus_project_name` 创建新模型 endpoint。
+4. 以 JSON merge 方式更新 `users.note.byteplus_endpoint_map`，不要覆盖 note 里的 asset group、key rotation、billing 等其他字段。
+5. 若新模型要成为默认开放模型，更新 `DEFAULT_CUSTOMER_MODEL_IDS`。
+6. 旧模型确认无调用后，再从 `enabled_models` / 默认模型列表中移除，并停用旧 endpoint。
+
+本节作为本轮变更内容，后续实现和验收应以本节为准。
 
 ## 1. 最终目标
 
@@ -78,7 +115,7 @@ Relay 管理后台
 - 客户自己看到 BytePlus 内部资源。
 - 把 endpoint API key 设置为永久不过期。
 - 把生成视频长期保存到本服务器。
-- 完整 PDF 账单第一版强制上线，PDF 可后置。
+- 账单导出第一版已支持 CSV / XLSX / PDF；客户视图必须隐藏内部成本和毛利。
 
 ## 3. 客户上游模式
 
@@ -595,6 +632,21 @@ class BytePlusControlClient:
 - 创建素材组时 `CreateAssetGroup` 请求必须显式带 `GroupType: "AIGC"`，并带当前客户的 `ProjectName`；否则可能落入真人素材库或 default 项目，导致后续素材注册/生成不可用。
 - 注册和查询素材时，`CreateAsset` / `GetAsset` 请求也必须带同一个 `ProjectName`；`CreateAsset` 还必须带 `GroupId`、`URL`、`AssetType` 和素材 `Name`。
 
+当前已验证的真实创建顺序：
+
+1. 用 IAM OpenAPI `GetProject` / `CreateProject` 确保客户 project。不要在 ModelArk/Ark 服务上调用 `CreateProject`。
+2. 用 ModelArk OpenAPI `CreateEndpoint` 创建客户独立 endpoint，请求体的 `ModelReference.FoundationModel` 默认跟 Relay 上游配置同步，读取 `BYTEPLUS_ENDPOINT_MODEL_NAME` / `BYTEPLUS_ENDPOINT_MODEL_VERSION`；当前已验证示例值是 `dreamina-seedance-2-0` / `260128`。请求体必须带 `Moderation.Strategy=Skip`。
+3. 用 `GetEndpoint` 等 endpoint 进入 `Running`。
+4. 用 ModelArk OpenAPI `CreateAssetGroup` 创建客户素材组，请求体必须带 `GroupType: "AIGC"` 和同一个 `ProjectName`。
+5. 如果该客户只开放一个模型，用 `GetApiKey` 生成 endpoint-scoped API key，请求体必须是 `ResourceType: "endpoint"` 和 `ResourceIds: [endpoint_id]`。
+6. 如果该客户开放多个底层 FoundationModel，必须为每个 FoundationModel 创建独立 endpoint，并用一次 `GetApiKey` 覆盖所有 endpoint：`ResourceType: "endpoint"`、`ResourceIds: [endpoint_id_1, endpoint_id_2, ...]`。
+7. 写回 `users.byteplus_api_key` 和 `users.note`，其中 note 至少包含 `upstream_mode=auto_dedicated`、`customer_slug`、`byteplus_project_name`、`byteplus_endpoint_id`、`modelark_asset_group_id`、`byteplus_endpoint_api_key_expires_at`。
+8. 多 endpoint 客户还必须写入 `users.note.byteplus_endpoint_map`，例如 `{"dreamina-seedance-2-0-260128":"ep-standard","seedance-1-5-pro-251215":"ep-seedance15"}`。生成时 Relay 按客户请求模型选择对应 endpoint；如果模型未映射，直接返回 `endpoint_not_configured_for_model`，不调用上游。
+9. 客户可见模型权限默认同步 `NATIVE_MODEL_IDS` 全量列表，包含 `dreamina-seedance-2-0-fast-260128`、1.5、1.0 pro、1.0 fast、lite t2v/i2v。客户可见模型权限和 BytePlus endpoint 是两层配置，不能只开本地模型列表而不创建对应 endpoint。
+10. 后台自动 provision job 当前默认创建主 endpoint；多模型批量 endpoint 创建可以先按应急 runbook 执行，后续再接入后台按钮。
+
+后台失效时，AI/运维按 `docs/ops/alpha2-byteplus-dedicated-endpoint-ai-runbook.md` 执行，不要临场猜 API 字段。
+
 ## 7. 独立资源开通 Job
 
 创建 endpoint 可能较慢，因此使用本地 job。
@@ -970,7 +1022,7 @@ POST /admin/invoices/{invoice_id}/mark-paid
 - 同一任务不能重复进入两张未作废账单。
 - 客户版导出不包含 BytePlus 成本、毛利、endpoint id、key。
 - 内部版导出包含 BytePlus 成本和毛利。
-- 第一版先做 CSV；XLSX 第二步；PDF 后置。
+- 第一版支持 CSV / XLSX / PDF；客户视图不得暴露 `upstream_cost_usd` 或 `gross_profit_usd`。
 
 文件命名：
 
@@ -1115,7 +1167,52 @@ admin_marked_customer_invoice_paid
 - BytePlus asset 删除默认走管理员批量执行，稳定后可切换为自动异步执行。
 - 管理员强删除 BytePlus asset 需要二次确认和审计。
 
-## 14. 实施顺序
+## 14. 新实施路径：每客户 Project + 全模型 Endpoint Map
+
+### 阶段一：冻结新资源模型
+
+1. 确认 `NATIVE_MODEL_IDS` 是平台当前支持的全量 native 模型列表。
+2. 确认 `DEFAULT_CUSTOMER_MODEL_IDS` 默认等于全部 `NATIVE_MODEL_IDS`。
+3. 确认后台 `enabled_models` 仍是客户级模型开关：空值表示默认全量，空数组表示关闭全部，显式数组表示只开放列表内模型。
+4. 更新管理后台文案：客户不是 shared/dedicated 切换，而是“客户 Project / 模型 Endpoint / AssetGroup / endpoint key”状态。
+5. 测试：`enabled_models=null` 返回默认全量模型；`enabled_models=[]` 阻止所有模型；显式列表只返回列表模型。
+
+### 阶段二：开通客户 Project 与 endpoint map
+
+1. `POST /admin/users/{id}/upstream/provision` 先通过 IAM `GetProject/CreateProject` 确保客户 Project。
+2. 读取客户 `enabled_models`，若未设置则读取 `DEFAULT_CUSTOMER_MODEL_IDS`。
+3. 为每个开放模型调用 ModelArk `CreateEndpoint`，请求必须带同一个 `ProjectName`、对应 `ModelReference`、`Moderation.Strategy=Skip`。
+4. 等待每个 endpoint `Running`。
+5. 创建或确认同一 `ProjectName` 下的 AIGC AssetGroup。
+6. 调用 `GetApiKey`，请求体使用 `ResourceType=endpoint` 和 `ResourceIds=[全部 endpoint id]`。
+7. 写回 `users.byteplus_api_key` 和 `users.note.byteplus_endpoint_map`。
+8. 测试：provision 会创建与默认模型数量一致的 endpoint，且 `GetApiKey.ResourceIds` 覆盖这些 endpoint。
+
+### 阶段三：生成路由与安全拒绝
+
+1. `POST /v1/videos` 先校验客户是否启用请求模型。
+2. 若客户 note 存在 `byteplus_endpoint_map`，必须按请求模型取 endpoint。
+3. 如果模型已启用但没有 endpoint mapping，返回 `endpoint_not_configured_for_model`，不调用上游。
+4. `byteplus_endpoint_id` 仅保留为兼容主 endpoint 字段；新客户和新开通逻辑必须写 map。
+5. 测试：标准模型、fast 模型、1.5/1.0/lite 模型分别路由到对应 endpoint；未映射模型不触发上游请求。
+
+### 阶段四：后台维护与批量模型升级
+
+1. 新增或整理运维脚本：遍历 active customers，读取 `byteplus_project_name` 和 `byteplus_endpoint_map`。
+2. 当新 model id 上线时，为每个客户 Project 创建新 endpoint。
+3. JSON merge 更新 `byteplus_endpoint_map`，不要覆盖 note 中的 key rotation、asset group、billing 字段。
+4. 若新模型默认开放，更新 `DEFAULT_CUSTOMER_MODEL_IDS`；若只对部分客户开放，更新对应客户 `enabled_models`。
+5. 旧模型保留观察期，确认无调用后再从默认模型列表和客户 `enabled_models` 中移除。
+6. 测试：批量脚本 dry-run 不写 DB；真实执行只追加或替换指定模型 mapping；旧 note 字段保持不变。
+
+### 阶段五：UI 与验收
+
+1. 客户详情页显示 Project、AssetGroup、endpoint map、endpoint key 过期时间、key 轮换状态。
+2. 模型开关区显示每个模型是否已启用、是否已有 endpoint mapping、endpoint 是否 Running。
+3. 开通按钮不再描述为“升级独立客户”，改为“开通客户 Project 资源”。
+4. 验收：新客户开通后拥有自己的 Project、全量默认模型 endpoint map、AIGC AssetGroup、endpoint-scoped key；客户仍只使用 Relay API Key。
+
+## 14.1 旧实施顺序（已被第 14 节取代，仅作历史参考）
 
 第一阶段：模式和后台基础
 
@@ -1163,9 +1260,28 @@ admin_marked_customer_invoice_paid
 4. 客户版 CSV 导出。
 5. 后台账单区块。
 6. 内部版 XLSX 导出。
-7. PDF 导出后置。
+7. 客户版 PDF 导出。
 
-## 15. 最终结论
+## 15. 最终结论（本轮收敛后）
+
+Alpha2 后台的资源开通主路径收敛为：
+
+```text
+客户管理
+ -> 每个大 B 客户创建或确认一个 BytePlus Project
+ -> 按 DEFAULT_CUSTOMER_MODEL_IDS / enabled_models 创建模型 endpoint map
+ -> 同 Project 下创建 AIGC AssetGroup
+ -> 生成覆盖 endpoint 集合的 endpoint API key
+ -> 上传素材注册到客户自己的 asset group
+ -> 生成时按请求模型路由到对应 endpoint
+ -> endpoint key 轮换、密码支持、账单保存导出、视频白标代理继续保留
+```
+
+客户侧仍然只看到 Relay 账号、Relay API Key、模型列表、余额、任务和素材；客户看不到 BytePlus Project、endpoint、asset group、endpoint API key、IAM AK/SK 或上游原始 URL。
+
+旧版 shared/manual/auto dedicated 叙事只保留为历史兼容背景，不再作为新客户开通设计。新实现的中心是 `byteplus_endpoint_map` 和后台 `enabled_models` 开关：模型能不能用由后台开关决定，模型请求打到哪里由 endpoint map 决定。
+
+## 15.1 旧最终结论（已被第 15 节取代，仅作历史参考）
 
 Alpha2 的后台要收敛成一个运营控制台：
 

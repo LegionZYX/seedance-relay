@@ -50,6 +50,105 @@ class StaticCustomerUiTests(unittest.TestCase):
         self.assertIn("this.me?.price_multiplier ?? 1.0", app_html)
         self.assertNotIn("this.me?.markup_pct", app_html)
 
+    def test_customer_ui_shows_video_retention_countdown(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        self.assertIn("服务器网关：保存 2 天", app_html)
+        self.assertIn("BytePlus 原始文件：官方保存 24 小时", app_html)
+        self.assertIn("服务器网关下载", app_html)
+        self.assertIn("BytePlus 原始下载", app_html)
+        self.assertIn("contentCountdown(task)", app_html)
+        self.assertIn("upstreamContentCountdown(task)", app_html)
+        self.assertIn("upstream_video_url", app_html)
+        self.assertIn("upstream_content_expires_at", app_html)
+        self.assertIn("content_expires_at", app_html)
+
+    def test_history_cards_open_task_detail_without_switching_to_generate_form(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        self.assertIn('@click="openHistoryTask(t)"', app_html)
+        self.assertIn("taskDetailDialog", app_html)
+        self.assertIn("async openHistoryTask(task)", app_html)
+        self.assertIn("任务详情", app_html)
+        self.assertNotIn('@click="goToTask(t.id)"', app_html)
+        self.assertNotIn('this.switchTab("generate");\n      try {\n        const t = await this.api(`/v1/videos/${vid}`);', app_html)
+
+    def test_customer_ui_can_clear_history_and_explains_failures_and_countdowns(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        self.assertIn('@click="clearHistory"', app_html)
+        self.assertIn("async clearHistory()", app_html)
+        self.assertIn('/v1/videos/history', app_html)
+        self.assertIn("failureMessage(task)", app_html)
+        self.assertIn("generationCountdown(task)", app_html)
+        self.assertIn("contentCountdown(historyTask)", app_html)
+        self.assertIn("保留进行中的任务", app_html)
+
+    def test_customer_ui_supports_multi_reference_and_direct_asset_id(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        for fragment in [
+            "创作模式",
+            "首帧 / 尾帧",
+            "多参考素材",
+            "直接粘贴 asset id",
+            "asset://asset-...",
+            "reference_image: 9",
+            "reference_video: 3",
+            "reference_audio: 3",
+            "apiJsonPreview",
+            "videoRequestBody()",
+            "addManualAsset()",
+            "normalizeAssetRef(value)",
+            "asset://${raw}",
+        ]:
+            self.assertIn(fragment, app_html)
+
+    def test_customer_ui_generation_form_is_model_capability_driven(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("el-radio-group v-model=\"form.resolution\"", app_html)
+        for fragment in [
+            "resolutionOptions",
+            "supportedResolutions()",
+            "supportedRatios()",
+            "durationRange()",
+            "normalizeModelParams()",
+            "supported_resolutions",
+            "supported_ratios",
+            "duration_seconds",
+            "480p 标清",
+            "720p 高清",
+            "1080p 全高清",
+            "16:9 横屏",
+            "9:16 竖屏",
+            "1:1 方形",
+        ]:
+            self.assertIn(fragment, app_html)
+
+    def test_customer_ui_creation_modes_drive_required_references_and_uploads(self):
+        app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
+
+        for fragment in [
+            'required_roles: ["first_frame"]',
+            'required_roles: ["first_frame", "last_frame"]',
+            'required_roles: ["reference_image"]',
+            'required_roles: ["reference_video"]',
+            'required_roles: ["visual_reference"]',
+            "generationValidationError(requirePrompt=true)",
+            "validateGenerationForm()",
+            "submitValidationMessage",
+            "上传首帧并加入",
+            "上传尾帧并加入",
+            "上传参考图并加入",
+            "上传视频并加入",
+            "上传音频并加入",
+            "handleSlotUploadFile($event, 'first_frame')",
+            "handleSlotUploadFile($event, 'reference_audio')",
+            "uploadFileForRole(file, role)",
+        ]:
+            self.assertIn(fragment, app_html)
+
     def test_customer_ui_template_has_no_obvious_broken_attributes_or_tags(self):
         app_html = (PROJECT_DIR / "static/app.html").read_text(encoding="utf-8")
 

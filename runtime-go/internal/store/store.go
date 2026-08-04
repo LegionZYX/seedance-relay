@@ -53,6 +53,23 @@ type Task struct {
 	UpdatedAt             int64
 }
 
+type RequestLog struct {
+	ID                string
+	UserID            sql.NullString
+	TaskID            sql.NullString
+	Route             sql.NullString
+	Action            sql.NullString
+	Model             sql.NullString
+	PromptText        sql.NullString
+	RequestPayload    sql.NullString
+	StatusCode        sql.NullInt64
+	ErrorCode         sql.NullString
+	UpstreamRequestID sql.NullString
+	IP                sql.NullString
+	UserAgent         sql.NullString
+	CreatedAt         int64
+}
+
 type RefreshTaskParams struct {
 	ID                    string
 	UserID                string
@@ -65,6 +82,23 @@ type RefreshTaskParams struct {
 	RefundUSD             float64
 	Settled               bool
 	Now                   int64
+}
+
+type RequestLogParams struct {
+	ID                string
+	UserID            string
+	TaskID            string
+	Route             string
+	Action            string
+	Model             string
+	PromptText        string
+	RequestPayload    string
+	StatusCode        int
+	ErrorCode         string
+	UpstreamRequestID string
+	IP                string
+	UserAgent         string
+	CreatedAt         int64
 }
 
 type CreateTaskParams struct {
@@ -165,13 +199,54 @@ CREATE TABLE IF NOT EXISTS sessions (
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS request_logs (
+    id                  TEXT PRIMARY KEY,
+    user_id             TEXT,
+    task_id             TEXT,
+    route               TEXT,
+    action              TEXT,
+    model               TEXT,
+    prompt_text         TEXT,
+    request_payload     TEXT,
+    status_code         INTEGER,
+    error_code          TEXT,
+    upstream_request_id TEXT,
+    ip                  TEXT,
+    user_agent          TEXT,
+    created_at          INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_request_logs_task ON request_logs(task_id);
+CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_request_logs_action ON request_logs(action);
 `
 
 var migrations = []string{
 	"ALTER TABLE users ADD COLUMN price_multiplier REAL NOT NULL DEFAULT 1.0",
 	"ALTER TABLE users ADD COLUMN enabled_models TEXT",
 	"ALTER TABLE tasks ADD COLUMN price_multiplier REAL",
+	`CREATE TABLE IF NOT EXISTS request_logs (
+		id                  TEXT PRIMARY KEY,
+		user_id             TEXT,
+		task_id             TEXT,
+		route               TEXT,
+		action              TEXT,
+		model               TEXT,
+		prompt_text         TEXT,
+		request_payload     TEXT,
+		status_code         INTEGER,
+		error_code          TEXT,
+		upstream_request_id TEXT,
+		ip                  TEXT,
+		user_agent          TEXT,
+		created_at          INTEGER NOT NULL
+	)`,
+	"CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id)",
+	"CREATE INDEX IF NOT EXISTS idx_request_logs_task ON request_logs(task_id)",
+	"CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at)",
+	"CREATE INDEX IF NOT EXISTS idx_request_logs_action ON request_logs(action)",
 }
 
 func (db *DB) Close() error {
@@ -475,6 +550,21 @@ func (db *DB) CreateTaskWithReservedBalance(params CreateTaskParams) error {
 	return err
 }
 
+func (db *DB) InsertRequestLog(params RequestLogParams) error {
+	_, err := db.sql.Exec(`
+		INSERT INTO request_logs
+			(id, user_id, task_id, route, action, model, prompt_text,
+			 request_payload, status_code, error_code, upstream_request_id,
+			 ip, user_agent, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, params.ID, nullString(params.UserID), nullString(params.TaskID),
+		nullString(params.Route), nullString(params.Action), nullString(params.Model),
+		nullString(params.PromptText), nullString(params.RequestPayload), params.StatusCode,
+		nullString(params.ErrorCode), nullString(params.UpstreamRequestID), nullString(params.IP),
+		nullString(params.UserAgent), params.CreatedAt)
+	return err
+}
+
 func (db *DB) InsertTestUser(apiKey, userID, enabledModels string) error {
 	return db.InsertTestUserWithBalance(apiKey, userID, enabledModels, 100, 1.0)
 }
@@ -566,6 +656,27 @@ func (db *DB) InsertTestTaskSummary(taskID, userID, status string, createdAt int
 	`, taskID, userID, "upstream-"+taskID, status, actualCost, settled,
 		cachedURL, cachedUntil, createdAt, createdAt)
 	return err
+}
+
+func (db *DB) TestLatestRequestLog(userID, action string) (*RequestLog, error) {
+	row := db.sql.QueryRow(`
+		SELECT id, user_id, task_id, route, action, model, prompt_text,
+		       request_payload, status_code, error_code, upstream_request_id,
+		       ip, user_agent, created_at
+		  FROM request_logs
+		 WHERE user_id = ? AND action = ?
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1
+	`, userID, action)
+	var log RequestLog
+	if err := row.Scan(
+		&log.ID, &log.UserID, &log.TaskID, &log.Route, &log.Action, &log.Model,
+		&log.PromptText, &log.RequestPayload, &log.StatusCode, &log.ErrorCode,
+		&log.UpstreamRequestID, &log.IP, &log.UserAgent, &log.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return &log, nil
 }
 
 func nullString(value string) any {

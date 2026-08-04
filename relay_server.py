@@ -16,7 +16,7 @@ Example Video Relay API — BytePlus Seedance 视频生成反代（含管理员/
     DB_PATH             default: /data/relay.sqlite
     VIDEO_DIR           default: /data/videos    (落地视频文件)
     UPLOAD_DIR          default: /data/uploads   (上传中转站)
-    ASSET_AUTO_REGISTER_UPLOADS  default: false  (服务端自动注册 asset://)
+    ASSET_AUTO_REGISTER_UPLOADS  default: true   (服务端自动注册 asset://)
     FACE_ASSET_ENFORCE default: false  (reference 人脸素材必须走白名单 asset://)
     FACE_ASSET_SELF_SERVICE default: false  (客户上传时自助注册并加入人脸白名单)
     BRAND_NAME          default: Example Video Relay
@@ -38,11 +38,15 @@ import asyncio
 import json
 import csv
 import io
+import zipfile
+import inspect
 import bcrypt
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Optional, AsyncIterator, List, Tuple
-from urllib.parse import urlparse, unquote, quote
+from typing import Any, Optional, AsyncIterator, List, Tuple, Callable
+from urllib.parse import urlparse, unquote, quote, parse_qs
+from xml.sax.saxutils import escape as xml_escape
 
 import httpx
 from fastapi import (
@@ -50,14 +54,14 @@ from fastapi import (
     File, Form, UploadFile, status,
 )
 from fastapi.responses import (
-    StreamingResponse, JSONResponse, FileResponse, RedirectResponse,
+    StreamingResponse, JSONResponse, FileResponse, RedirectResponse, PlainTextResponse,
 )
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, EmailStr
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent))
-from modelark import estimate_video_cost, actual_video_cost
+from modelark import estimate_video_cost, actual_video_cost, get_price
 from create_asset_white_label import (
     build_create_asset_body,
     build_create_asset_group_body,
@@ -65,6 +69,7 @@ from create_asset_white_label import (
     extract_asset_id,
     extract_nested_value,
     request_api as request_asset_api,
+    request_signed_api,
 )
 
 # ─── Config ──────────────────────────────────────────────────────
@@ -77,6 +82,9 @@ UPSTREAM_BASE_URL = os.getenv("UPSTREAM_BASE_URL",
 UPSTREAM_AUTH_MODE = os.getenv("UPSTREAM_AUTH_MODE", "api_key").strip().lower() or "api_key"
 UPSTREAM_ENDPOINT_ID = os.getenv("UPSTREAM_ENDPOINT_ID", "").strip()
 UPSTREAM_ENDPOINT_API_KEY = os.getenv("UPSTREAM_ENDPOINT_API_KEY", "").strip()
+ENDPOINT_KEY_RESOURCE_MODE = os.getenv("ENDPOINT_KEY_RESOURCE_MODE", "multi").strip().lower() or "multi"
+if ENDPOINT_KEY_RESOURCE_MODE not in {"multi", "per_endpoint", "auto"}:
+    ENDPOINT_KEY_RESOURCE_MODE = "multi"
 BYTEPLUS_ACCESSKEY = os.getenv(
     "BYTEPLUS_ACCESSKEY",
     os.getenv("BYTEPLUS_ACCESS_KEY", os.getenv("BYTEPLUS_ACCESS_KEY_ID", "")),
@@ -95,6 +103,8 @@ DB_PATH        = os.getenv("DB_PATH", "/data/relay.sqlite")
 VIDEO_DIR      = Path(os.getenv("VIDEO_DIR", "/data/videos"))
 UPLOAD_DIR     = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
 VIDEO_PERSIST_MODE = os.getenv("VIDEO_PERSIST_MODE", "proxy_only").strip().lower() or "proxy_only"
+VIDEO_RETENTION_SECONDS = int(os.getenv("VIDEO_RETENTION_SECONDS", "172800"))
+BYTEPLUS_VIDEO_RETENTION_SECONDS = 24 * 3600
 UPLOAD_PUBLIC_BASE_URL = os.getenv("UPLOAD_PUBLIC_BASE_URL", "").strip().rstrip("/")
 PRICE_MULTIPLIER_BACKFILL_SETTING = "migration.price_multiplier_backfill.v1"
 ADMIN_KEY      = os.getenv("ADMIN_KEY", "").strip()
@@ -106,7 +116,7 @@ MARKUP_PCT     = float(os.getenv("MARKUP_PCT", "0.3"))
 UPLOAD_MAX_IMAGE_MB = float(os.getenv("UPLOAD_MAX_IMAGE_MB", os.getenv("WEB_MAX_IMAGE_MB", "10")))
 UPLOAD_MAX_VIDEO_MB = float(os.getenv("UPLOAD_MAX_VIDEO_MB", "50"))
 UPLOAD_MAX_AUDIO_MB = float(os.getenv("UPLOAD_MAX_AUDIO_MB", "15"))
-ASSET_AUTO_REGISTER_UPLOADS = os.getenv("ASSET_AUTO_REGISTER_UPLOADS", "false").strip().lower() in (
+ASSET_AUTO_REGISTER_UPLOADS = os.getenv("ASSET_AUTO_REGISTER_UPLOADS", "true").strip().lower() in (
     "1", "true", "yes", "on"
 )
 ASSET_AUTO_REGISTER_PURPOSES = {
@@ -116,8 +126,13 @@ ASSET_AUTO_REGISTER_PURPOSES = {
 }
 ASSET_AUTO_REGISTER_WAIT_SECONDS = float(os.getenv("ASSET_AUTO_REGISTER_WAIT_SECONDS", "0"))
 ASSET_AUTO_REGISTER_WAIT_INTERVAL = float(os.getenv("ASSET_AUTO_REGISTER_WAIT_INTERVAL", "3"))
+ASSET_CREATE_RETRY_DELAYS = [
+    float(item.strip())
+    for item in os.getenv("ASSET_CREATE_RETRY_DELAYS", "10,30").split(",")
+    if item.strip()
+]
 ASSET_AUTO_REGISTER_SKIP_MODERATION = os.getenv(
-    "ASSET_AUTO_REGISTER_SKIP_MODERATION", "false"
+    "ASSET_AUTO_REGISTER_SKIP_MODERATION", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
 ASSET_DELETE_EXECUTION_MODE = (
     os.getenv("ASSET_DELETE_EXECUTION_MODE", "admin_batch").strip().lower()
@@ -135,6 +150,20 @@ MODELARK_ASSET_GROUP_DESCRIPTION = os.getenv(
     "MODELARK_ASSET_GROUP_DESCRIPTION", "Relay self-service face asset whitelist"
 ).strip()
 MODELARK_PROJECT_NAME = os.getenv("MODELARK_PROJECT_NAME", "").strip()
+BYTEPLUS_REGION = (
+    os.getenv("BYTEPLUS_REGION", os.getenv("MODELARK_OPENAPI_REGION", "ap-southeast-1"))
+    .strip()
+    or "ap-southeast-1"
+)
+BYTEPLUS_IAM_SERVICE = os.getenv("BYTEPLUS_IAM_SERVICE", "iam").strip() or "iam"
+BYTEPLUS_IAM_VERSION = os.getenv("BYTEPLUS_IAM_VERSION", "2018-01-01").strip() or "2018-01-01"
+BYTEPLUS_IAM_HOST = os.getenv("BYTEPLUS_IAM_HOST", "iam.byteplusapi.com").strip() or "iam.byteplusapi.com"
+BYTEPLUS_ENDPOINT_MODEL_NAME = os.getenv("BYTEPLUS_ENDPOINT_MODEL_NAME", "dreamina-seedance-2-0").strip() or "dreamina-seedance-2-0"
+BYTEPLUS_ENDPOINT_MODEL_VERSION = os.getenv("BYTEPLUS_ENDPOINT_MODEL_VERSION", "260128").strip() or "260128"
+BYTEPLUS_ENDPOINT_MODERATION_STRATEGY = os.getenv("BYTEPLUS_ENDPOINT_MODERATION_STRATEGY", "Skip").strip() or "Skip"
+BYTEPLUS_ENDPOINT_WAIT_SECONDS = float(os.getenv("BYTEPLUS_ENDPOINT_WAIT_SECONDS", "600"))
+BYTEPLUS_ENDPOINT_WAIT_INTERVAL = float(os.getenv("BYTEPLUS_ENDPOINT_WAIT_INTERVAL", "5"))
+BYTEPLUS_ENDPOINT_KEY_ROTATE_WINDOW_SECONDS = int(os.getenv("BYTEPLUS_ENDPOINT_KEY_ROTATE_WINDOW_SECONDS", "86400"))
 FACE_ASSET_ENFORCE = os.getenv("FACE_ASSET_ENFORCE", "false").strip().lower() in (
     "1", "true", "yes", "on"
 )
@@ -180,6 +209,17 @@ NATIVE_MODEL_IDS = [
     "seedance-1-0-lite-t2v-250428",
     "seedance-1-0-lite-i2v-250428",
 ]
+
+DEFAULT_CUSTOMER_MODEL_IDS = [
+    item.strip()
+    for item in os.getenv(
+        "DEFAULT_CUSTOMER_MODEL_IDS",
+        ",".join(NATIVE_MODEL_IDS),
+    ).split(",")
+    if item.strip() in NATIVE_MODEL_IDS
+]
+if not DEFAULT_CUSTOMER_MODEL_IDS:
+    DEFAULT_CUSTOMER_MODEL_IDS = list(NATIVE_MODEL_IDS)
 
 
 def _load_model_aliases() -> dict[str, str]:
@@ -376,6 +416,21 @@ def _sanitize_audit_metadata(value, key: str = ""):
     return value
 
 
+def _sanitize_request_payload_for_log(value, key: str = ""):
+    if _audit_key_has_secret_name(key, value):
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _sanitize_request_payload_for_log(item_value, str(item_key))
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_request_payload_for_log(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_log_text(value)
+    return value
+
+
 def _upstream_request_id(headers) -> Optional[str]:
     for key in ("x-request-id", "x-tt-logid", "x-tt-trace-id", "request-id"):
         try:
@@ -385,6 +440,48 @@ def _upstream_request_id(headers) -> Optional[str]:
         if value:
             return sanitize(str(value))[:128]
     return None
+
+
+def _upstream_error_info(response) -> dict:
+    info: dict = {}
+    status_code = getattr(response, "status_code", None)
+    if status_code:
+        info["status_code"] = int(status_code)
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return info
+
+    error_obj = body.get("error") or body.get("Error") or body
+    if isinstance(error_obj, dict):
+        upstream_code = (
+            error_obj.get("code")
+            or error_obj.get("Code")
+            or error_obj.get("error_code")
+            or error_obj.get("ErrorCode")
+        )
+        upstream_message = (
+            error_obj.get("message")
+            or error_obj.get("Message")
+            or error_obj.get("reason")
+            or error_obj.get("ErrorMessage")
+        )
+    else:
+        upstream_code = body.get("code") or body.get("Code")
+        upstream_message = body.get("message") or body.get("Message")
+    if upstream_code:
+        info["upstream_code"] = sanitize(str(upstream_code))[:128]
+    if upstream_message:
+        info["upstream_message"] = sanitize(str(upstream_message))[:500]
+    request_id = body.get("request_id") or body.get("RequestId") or body.get("requestId")
+    metadata = body.get("ResponseMetadata")
+    if not request_id and isinstance(metadata, dict):
+        request_id = metadata.get("RequestId")
+    if request_id:
+        info["request_id"] = sanitize(str(request_id))[:128]
+    return info
 
 
 def _record_get(record, key: str, default=None):
@@ -457,7 +554,7 @@ def _customer_key_metadata(user: dict) -> dict:
 def _enabled_models_for_user(user: Optional[dict]) -> list[str]:
     raw = _record_get(user, "enabled_models")
     if raw is None or (isinstance(raw, str) and raw.strip() == ""):
-        return list(NATIVE_MODEL_IDS)
+        return list(DEFAULT_CUSTOMER_MODEL_IDS)
     if isinstance(raw, list):
         items = raw
     else:
@@ -602,6 +699,64 @@ def _audit_event(action: str, *, actor_user_id: Optional[str], actor_type: str,
     )
 
 
+def _request_log(*, user_id: Optional[str], task_id: Optional[str], route: str,
+                 action: str, model: Optional[str] = None, prompt_text: Optional[str] = None,
+                 request_payload: Optional[Any] = None, status_code: Optional[int] = None,
+                 error_code: Optional[str] = None, upstream_request_id: Optional[str] = None,
+                 request: Optional[Request] = None) -> None:
+    try:
+        if isinstance(request_payload, str):
+            try:
+                payload_text = json.dumps(
+                    _sanitize_request_payload_for_log(json.loads(request_payload)),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            except Exception:
+                payload_text = _sanitize_log_text(request_payload)
+        elif request_payload is None:
+            payload_text = ""
+        else:
+            payload_text = json.dumps(
+                _sanitize_request_payload_for_log(request_payload),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        payload_text = payload_text[:20000]
+        ip = ""
+        user_agent = ""
+        if request is not None:
+            xff = (request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+            ip = xff or (request.client.host if request.client else "")
+            user_agent = (request.headers.get("user-agent") or "")[:500]
+        db = get_db()
+        db.execute(
+            """INSERT INTO request_logs
+               (id, user_id, task_id, route, action, model, prompt_text,
+                request_payload, status_code, error_code, upstream_request_id,
+                ip, user_agent, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "log_" + secrets.token_hex(12),
+                user_id,
+                task_id,
+                route,
+                action,
+                model,
+                _sanitize_log_text(prompt_text or "")[:500],
+                payload_text,
+                status_code,
+                error_code,
+                upstream_request_id,
+                ip[:128],
+                user_agent,
+                int(time.time()),
+            ),
+        )
+    except Exception:
+        pass
+
+
 def _reserve_balance_if_available(user_id: str, amount: float) -> bool:
     db = get_db()
     try:
@@ -725,6 +880,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     cached_video_url         TEXT,
     cached_video_url_until   INTEGER,
     local_video_path         TEXT,
+    local_video_expires_at   INTEGER,
+    customer_hidden_at       INTEGER,
+    error_message            TEXT,
     prompt_text              TEXT,
     request_payload          TEXT,
     created_at               INTEGER NOT NULL,
@@ -831,6 +989,8 @@ CREATE TABLE IF NOT EXISTS upstream_provision_jobs (
     id                       TEXT PRIMARY KEY,
     user_id                  TEXT NOT NULL,
     status                   TEXT NOT NULL,
+    current_step             TEXT,
+    progress                 INTEGER NOT NULL DEFAULT 0,
     customer_slug            TEXT,
     request_json             TEXT NOT NULL,
     result_json              TEXT,
@@ -857,6 +1017,23 @@ CREATE TABLE IF NOT EXISTS audit_events (
     created_at     INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS request_logs (
+    id                  TEXT PRIMARY KEY,
+    user_id             TEXT,
+    task_id             TEXT,
+    route               TEXT,
+    action              TEXT,
+    model               TEXT,
+    prompt_text         TEXT,
+    request_payload     TEXT,
+    status_code         INTEGER,
+    error_code          TEXT,
+    upstream_request_id TEXT,
+    ip                  TEXT,
+    user_agent          TEXT,
+    created_at          INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_user      ON tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_upstream  ON tasks(upstream_task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status    ON tasks(status);
@@ -871,6 +1048,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_delete_requests_upload_active
 CREATE INDEX IF NOT EXISTS idx_invoices_user_period ON invoices(user_id, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_invoice_items_task ON invoice_items(task_id);
 CREATE INDEX IF NOT EXISTS idx_upstream_provision_jobs_user ON upstream_provision_jobs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_request_logs_task ON request_logs(task_id);
+CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_request_logs_action ON request_logs(action);
 """
 
 # 现有 DB 升级到新 schema (添加新字段, 已存在则跳过)
@@ -892,6 +1073,9 @@ MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN price_multiplier REAL",
     "ALTER TABLE tasks ADD COLUMN completion_tokens INTEGER",
     "ALTER TABLE tasks ADD COLUMN local_video_path TEXT",
+    "ALTER TABLE tasks ADD COLUMN local_video_expires_at INTEGER",
+    "ALTER TABLE tasks ADD COLUMN customer_hidden_at INTEGER",
+    "ALTER TABLE tasks ADD COLUMN error_message TEXT",
     "ALTER TABLE tasks ADD COLUMN prompt_text TEXT",
     "ALTER TABLE tasks ADD COLUMN request_payload TEXT",
     "ALTER TABLE uploads ADD COLUMN deleted_at INTEGER",
@@ -899,13 +1083,36 @@ MIGRATIONS = [
     "ALTER TABLE uploads ADD COLUMN asset_group_id TEXT",
     "ALTER TABLE uploads ADD COLUMN asset_project_name TEXT",
     "ALTER TABLE uploads ADD COLUMN asset_group_type TEXT",
+    "ALTER TABLE upstream_provision_jobs ADD COLUMN current_step TEXT",
+    "ALTER TABLE upstream_provision_jobs ADD COLUMN progress INTEGER NOT NULL DEFAULT 0",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+    """CREATE TABLE IF NOT EXISTS request_logs (
+        id                  TEXT PRIMARY KEY,
+        user_id             TEXT,
+        task_id             TEXT,
+        route               TEXT,
+        action              TEXT,
+        model               TEXT,
+        prompt_text         TEXT,
+        request_payload     TEXT,
+        status_code         INTEGER,
+        error_code          TEXT,
+        upstream_request_id TEXT,
+        ip                  TEXT,
+        user_agent          TEXT,
+        created_at          INTEGER NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_request_logs_user ON request_logs(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_request_logs_task ON request_logs(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_request_logs_created ON request_logs(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_request_logs_action ON request_logs(action)",
 ]
 
 
 def get_db() -> sqlite3.Connection:
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, isolation_level=None, check_same_thread=False)
+    conn.text_factory = lambda value: value.decode("utf-8", errors="replace")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -1340,6 +1547,8 @@ class RuntimePrepareVideoContentRequest(BaseModel):
     user_id: str
     content: List[ContentBlock]
     extra_body: Optional[dict[str, Any]] = None
+    client_model: Optional[str] = None
+    upstream_model: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -1441,6 +1650,17 @@ class UploadFromUrlRequest(BaseModel):
 
 
 # ─── 内部工具 ────────────────────────────────────────────────────
+def _effective_face_allowlist(requested: bool, purpose: str) -> bool:
+    return bool(
+        requested
+        or (
+            FACE_ASSET_ENFORCE
+            and FACE_ASSET_SELF_SERVICE
+            and purpose in ("image", "video")
+        )
+    )
+
+
 def _normalize_asset_url(asset_url: str) -> str:
     value = (asset_url or "").strip()
     if not value.startswith("asset://"):
@@ -1536,6 +1756,48 @@ def _merge_user_note_json(raw_note: Optional[str], updates: dict[str, Any]) -> s
     return json.dumps(note, ensure_ascii=True, sort_keys=True)
 
 
+_UPSTREAM_NOTE_KEYS = {
+    "upstream_mode",
+    "customer_slug",
+    "byteplus_project_name",
+    "byteplus_project_id",
+    "byteplus_endpoint_id",
+    "byteplus_endpoint_map",
+    "byteplus_endpoint_map_updated_at",
+    "byteplus_endpoint_key_map",
+    "byteplus_endpoint_key_mode",
+    "modelark_asset_group_id",
+    "byteplus_endpoint_key_rotation_enabled",
+    "byteplus_endpoint_api_key_expires_at",
+    "byteplus_endpoint_key_last_rotated_at",
+    "byteplus_endpoint_key_next_rotate_at",
+    "byteplus_endpoint_key_rotation_error",
+    "byteplus_upstream_updated_at",
+}
+
+
+def _merge_note_preserving_upstream_fields(
+    current_note_raw: Optional[str],
+    incoming_note_raw: Optional[str],
+) -> str:
+    current = _user_note_json({"note": current_note_raw or ""})
+    protected = {key: current[key] for key in _UPSTREAM_NOTE_KEYS if key in current}
+    if not protected:
+        return incoming_note_raw or ""
+
+    raw = (incoming_note_raw or "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            incoming = parsed if isinstance(parsed, dict) else {"legacy_note": raw}
+        except Exception:
+            incoming = {"legacy_note": raw}
+    else:
+        incoming = {}
+    incoming.update(protected)
+    return json.dumps(incoming, ensure_ascii=True, sort_keys=True)
+
+
 def _user_modelark_asset_group_id(user: Optional[dict]) -> str:
     return str(_user_note_json(user).get("modelark_asset_group_id") or "").strip()
 
@@ -1548,12 +1810,281 @@ def _user_byteplus_endpoint_id(user: Optional[dict]) -> str:
     return str(_user_note_json(user).get("byteplus_endpoint_id") or "").strip()
 
 
+def _user_byteplus_endpoint_map(user: Optional[dict]) -> dict[str, str]:
+    raw = _user_note_json(user).get("byteplus_endpoint_map")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for model_id, endpoint_id in raw.items():
+        key = str(model_id or "").strip()
+        value = str(endpoint_id or "").strip()
+        if key and value:
+            out[key] = value
+    return out
+
+
+def _user_byteplus_endpoint_key_map(user: Optional[dict]) -> dict[str, dict[str, Any]]:
+    raw = _user_note_json(user).get("byteplus_endpoint_key_map")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for model_id, entry in raw.items():
+        model = str(model_id or "").strip()
+        if not model:
+            continue
+        if isinstance(entry, dict):
+            api_key = str(entry.get("api_key") or "").strip()
+            endpoint_id = str(entry.get("endpoint_id") or "").strip()
+            if api_key:
+                out[model] = {
+                    "endpoint_id": endpoint_id,
+                    "api_key": api_key,
+                    "expires_at": entry.get("expires_at"),
+                }
+        else:
+            api_key = str(entry or "").strip()
+            if api_key:
+                out[model] = {"endpoint_id": "", "api_key": api_key, "expires_at": None}
+    return out
+
+
+def _masked_endpoint_key_map(user: Optional[dict]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for model_id, entry in _user_byteplus_endpoint_key_map(user).items():
+        out[model_id] = {
+            "endpoint_id": entry.get("endpoint_id") or "",
+            "api_key_masked": _masked_secret(entry.get("api_key"), prefix=6, suffix=5),
+            "expires_at": entry.get("expires_at"),
+        }
+    return out
+
+
+def _scrub_user_note_for_response(raw_note: Optional[str]) -> Optional[str]:
+    raw = (raw_note or "").strip()
+    if not raw:
+        return raw_note
+    note = _user_note_json({"note": raw})
+    if not note:
+        return raw_note
+    raw_key_map = note.get("byteplus_endpoint_key_map")
+    if isinstance(raw_key_map, dict):
+        redacted = {}
+        for model_id, entry in raw_key_map.items():
+            if isinstance(entry, dict):
+                redacted[model_id] = {
+                    key: value
+                    for key, value in entry.items()
+                    if key != "api_key"
+                }
+                if entry.get("api_key"):
+                    redacted[model_id]["api_key_masked"] = _masked_secret(
+                        entry.get("api_key"), prefix=6, suffix=5
+                    )
+            elif entry:
+                redacted[model_id] = {"api_key_masked": _masked_secret(entry, prefix=6, suffix=5)}
+        note["byteplus_endpoint_key_map"] = redacted
+    return json.dumps(note, ensure_ascii=True, sort_keys=True)
+
+
+def _endpoint_api_key_for_selected_model(
+    user: Optional[dict],
+    client_model: str,
+    real_model: str,
+    endpoint_id: str,
+) -> str:
+    key_map = _user_byteplus_endpoint_key_map(user)
+    if not key_map:
+        return ""
+    for candidate in (client_model, real_model, endpoint_id):
+        entry = key_map.get(candidate)
+        if entry and entry.get("api_key"):
+            return str(entry["api_key"]).strip()
+    for entry in key_map.values():
+        if endpoint_id and str(entry.get("endpoint_id") or "").strip() == endpoint_id:
+            api_key = str(entry.get("api_key") or "").strip()
+            if api_key:
+                return api_key
+    return ""
+
+
+def _user_byteplus_endpoint_id_for_model(user: Optional[dict], client_model: str, real_model: str) -> str:
+    endpoint_map = _user_byteplus_endpoint_map(user)
+    if endpoint_map:
+        endpoint_id = endpoint_map.get(client_model) or endpoint_map.get(real_model)
+        if endpoint_id:
+            return endpoint_id
+        raise HTTPException(400, {"error": {
+            "code": "endpoint_not_configured_for_model",
+            "message": "This dedicated customer endpoint is not configured for the selected model",
+            "model": client_model,
+        }})
+    return _user_byteplus_endpoint_id(user)
+
+
 def _truthy_note_value(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _endpoint_key_rotation_enabled(note: dict[str, Any]) -> bool:
+    value = note.get("byteplus_endpoint_key_rotation_enabled")
+    if value is None:
+        return True
+    return _truthy_note_value(value)
+
+
+def _selected_endpoint_key_expires_at(
+    user: dict,
+    client_model: str,
+    real_model: str,
+    endpoint_id: str,
+) -> Optional[int]:
+    key_map = _user_byteplus_endpoint_key_map(user)
+    for candidate in (client_model, real_model, endpoint_id):
+        entry = key_map.get(candidate)
+        if entry and entry.get("api_key"):
+            return _int_or_none(entry.get("expires_at"))
+    for entry in key_map.values():
+        if endpoint_id and str(entry.get("endpoint_id") or "").strip() == endpoint_id:
+            expires_at = _int_or_none(entry.get("expires_at"))
+            if expires_at is not None:
+                return expires_at
+    return _int_or_none(_user_note_json(user).get("byteplus_endpoint_api_key_expires_at"))
+
+
+def _runtime_upstream_for_user(
+    user: dict,
+    client_model: str,
+    real_model: str,
+) -> dict[str, Any]:
+    endpoint_id = _user_byteplus_endpoint_id_for_model(user, client_model, real_model)
+    endpoint_key = _endpoint_api_key_for_selected_model(user, client_model, real_model, endpoint_id)
+    user_bp_key = endpoint_key or str(user.get("byteplus_api_key") or "").strip()
+    bp_key = user_bp_key or UPSTREAM_API_KEY
+    if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
+        if endpoint_id and user_bp_key:
+            bp_key = user_bp_key
+        else:
+            bp_key = UPSTREAM_ENDPOINT_API_KEY or ""
+    upstream_model = endpoint_id or _upstream_model_for_request(real_model, bp_key)
+    return {
+        "upstream_model": upstream_model,
+        "upstream_api_key": bp_key,
+        "endpoint_id": endpoint_id,
+        "endpoint_api_key_expires_at": _selected_endpoint_key_expires_at(
+            user, client_model, real_model, endpoint_id
+        ),
+    }
+
+
+def _refresh_user_endpoint_key_if_needed(
+    user: dict,
+    client_model: str,
+    real_model: str,
+) -> dict:
+    note = _user_note_json(user)
+    endpoint_map = _user_byteplus_endpoint_map(user)
+    endpoint_id = _user_byteplus_endpoint_id_for_model(user, client_model, real_model)
+    if not endpoint_id or not _endpoint_key_rotation_enabled(note):
+        return user
+
+    expires_at = _selected_endpoint_key_expires_at(user, client_model, real_model, endpoint_id)
+    has_key = bool(
+        _endpoint_api_key_for_selected_model(user, client_model, real_model, endpoint_id)
+        or str(user.get("byteplus_api_key") or "").strip()
+    )
+    now = int(time.time())
+    if has_key and expires_at is None:
+        return user
+    if has_key and expires_at and expires_at > now + BYTEPLUS_ENDPOINT_KEY_ROTATE_WINDOW_SECONDS:
+        return user
+
+    endpoint_ids = list(dict.fromkeys(endpoint_map.values())) if endpoint_map else [endpoint_id]
+    endpoint_target: str | list[str] = endpoint_ids if len(endpoint_ids) > 1 else endpoint_ids[0]
+    try:
+        issued = _get_endpoint_api_key(endpoint_target, 2592000)
+    except Exception as exc:
+        message = sanitize(str(exc))[:1000]
+        failed_note = _merge_user_note_json(
+            user.get("note"),
+            {
+                "byteplus_endpoint_key_rotation_error": message,
+                "byteplus_endpoint_key_next_rotate_at": now + 300,
+            },
+        )
+        db = get_db()
+        try:
+            db.execute("UPDATE users SET note=? WHERE id=?", (failed_note, user["id"]))
+        finally:
+            db.close()
+        _audit_event(
+            "runtime_endpoint_api_key_rotation_failed",
+            actor_user_id=None,
+            actor_type="runtime",
+            target_type="user",
+            target_id=user["id"],
+            metadata={
+                "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+                "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+                "error": message,
+            },
+        )
+        raise HTTPException(502, {"error": {
+            "code": "endpoint_key_rotation_failed",
+            "message": "Endpoint API key refresh failed; contact administrator",
+        }}) from exc
+
+    note_updates: dict[str, Any] = {
+        "upstream_mode": note.get("upstream_mode") or "auto_dedicated",
+        "byteplus_endpoint_api_key_expires_at": int(issued["expires_at"]),
+        "byteplus_endpoint_key_last_rotated_at": now,
+        "byteplus_endpoint_key_next_rotate_at": max(
+            now,
+            int(issued["expires_at"]) - BYTEPLUS_ENDPOINT_KEY_ROTATE_WINDOW_SECONDS,
+        ),
+        "byteplus_endpoint_key_rotation_error": "",
+        "byteplus_endpoint_key_rotation_enabled": True,
+        "byteplus_endpoint_key_mode": issued.get("key_mode") or "multi",
+    }
+    endpoint_key_map = _model_endpoint_key_map_from_issued(issued, endpoint_map)
+    if endpoint_key_map:
+        note_updates["byteplus_endpoint_key_map"] = endpoint_key_map
+    updated_note = _merge_user_note_json(user.get("note"), note_updates)
+    db = get_db()
+    try:
+        db.execute(
+            "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+            (issued["api_key"], updated_note, user["id"]),
+        )
+        updated = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+    finally:
+        db.close()
+    _audit_event(
+        "runtime_rotated_endpoint_api_key",
+        actor_user_id=None,
+        actor_type="runtime",
+        target_type="user",
+        target_id=user["id"],
+        metadata={
+            "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+            "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+            "expires_at": int(issued["expires_at"]),
+            "secret_changed": True,
+        },
+    )
+    return dict(updated) if updated else user
 
 
 def _user_upstream_response(user: dict | sqlite3.Row) -> dict:
@@ -1563,11 +2094,18 @@ def _user_upstream_response(user: dict | sqlite3.Row) -> dict:
     return {
         "user_id": user_dict["id"],
         "email": user_dict.get("email"),
+        "enabled_models_default": _enabled_models_uses_default(user_dict),
+        "enabled_models": _enabled_models_for_user(user_dict),
         "upstream_mode": note.get("upstream_mode") or ("manual_dedicated" if endpoint_key else "shared"),
         "customer_slug": note.get("customer_slug") or "",
         "byteplus_project_name": note.get("byteplus_project_name") or "",
         "byteplus_endpoint_id": note.get("byteplus_endpoint_id") or "",
+        "byteplus_endpoint_map": _user_byteplus_endpoint_map(user_dict),
+        "byteplus_endpoint_skipped_models": note.get("byteplus_endpoint_skipped_models") or {},
         "modelark_asset_group_id": note.get("modelark_asset_group_id") or "",
+        "endpoint_key_mode": note.get("byteplus_endpoint_key_mode") or "multi",
+        "endpoint_key_map_configured": bool(_user_byteplus_endpoint_key_map(user_dict)),
+        "endpoint_key_map": _masked_endpoint_key_map(user_dict),
         "endpoint_key_rotation_enabled": _truthy_note_value(note.get("byteplus_endpoint_key_rotation_enabled")),
         "byteplus_endpoint_api_key_expires_at": note.get("byteplus_endpoint_api_key_expires_at"),
         "byteplus_endpoint_key_last_rotated_at": note.get("byteplus_endpoint_key_last_rotated_at"),
@@ -1590,6 +2128,133 @@ def _upstream_capabilities() -> dict:
         "can_create_asset_group": iam_configured,
         "can_rotate_endpoint_key": iam_configured,
     }
+
+
+def _endpoint_map_health_for_user(user: sqlite3.Row | dict) -> dict[str, Any]:
+    user_dict = dict(user)
+    enabled_models = _enabled_models_for_user(user_dict)
+    endpoint_map = _user_byteplus_endpoint_map(user_dict)
+    enabled_set = set(enabled_models)
+    mapped_models = [model for model in enabled_models if endpoint_map.get(model)]
+    missing_models = [model for model in enabled_models if not endpoint_map.get(model)]
+    extra_models = sorted(model for model in endpoint_map if model not in enabled_set)
+    endpoint_counts: dict[str, int] = {}
+    for endpoint_id in endpoint_map.values():
+        endpoint_counts[endpoint_id] = endpoint_counts.get(endpoint_id, 0) + 1
+    duplicate_endpoint_ids = sorted(
+        endpoint_id for endpoint_id, count in endpoint_counts.items() if count > 1
+    )
+    note = _user_note_json(user_dict)
+    skipped_models = note.get("byteplus_endpoint_skipped_models") or {}
+    warnings = []
+    if not note.get("byteplus_project_name"):
+        warnings.append("missing_project")
+    if not note.get("modelark_asset_group_id"):
+        warnings.append("missing_asset_group")
+    if missing_models:
+        warnings.append("missing_model_endpoint_mapping")
+    if extra_models:
+        warnings.append("extra_model_endpoint_mapping")
+    if duplicate_endpoint_ids:
+        warnings.append("duplicate_endpoint_ids")
+    if not (user_dict.get("byteplus_api_key") or _user_byteplus_endpoint_key_map(user_dict)):
+        warnings.append("missing_endpoint_key")
+    return {
+        "user_id": user_dict["id"],
+        "email": user_dict.get("email"),
+        "status": "ok" if not warnings else "warning",
+        "warnings": warnings,
+        "enabled_models": enabled_models,
+        "mapped_models": mapped_models,
+        "missing_models": missing_models,
+        "skipped_models": skipped_models,
+        "extra_models": extra_models,
+        "duplicate_endpoint_ids": duplicate_endpoint_ids,
+        "endpoint_map_size": len(endpoint_map),
+        "project_configured": bool(note.get("byteplus_project_name")),
+        "asset_group_configured": bool(note.get("modelark_asset_group_id")),
+        "endpoint_key_configured": bool(user_dict.get("byteplus_api_key")),
+        "endpoint_key_mode": note.get("byteplus_endpoint_key_mode") or "multi",
+        "endpoint_key_map_configured": bool(_user_byteplus_endpoint_key_map(user_dict)),
+        "endpoint_key_map": _masked_endpoint_key_map(user_dict),
+        "key_rotation_error": note.get("byteplus_endpoint_key_rotation_error") or "",
+    }
+
+
+def _user_upstream_response_with_health(user: dict | sqlite3.Row) -> dict:
+    response = _user_upstream_response(user)
+    response["endpoint_map_health"] = _endpoint_map_health_for_user(user)
+    return response
+
+
+def _env_int_value(name: str, default: int = 0) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _quota_reminder_item(resource: str, used: int, warn_at: int) -> dict[str, Any]:
+    status_value = "warning" if warn_at > 0 and used >= warn_at else "ok"
+    return {
+        "resource": resource,
+        "used": used,
+        "warn_at": warn_at,
+        "status": status_value,
+        "reminder": (
+            "Check BytePlus Quota Center before provisioning more customer resources"
+            if status_value == "warning"
+            else "Below configured warning threshold"
+        ),
+    }
+
+
+def _upstream_quota_reminders() -> dict[str, Any]:
+    db = get_db()
+    try:
+        rows = db.execute(
+            "SELECT id, note FROM users WHERE is_active=1"
+        ).fetchall()
+    finally:
+        db.close()
+    projects: set[str] = set()
+    endpoints: set[str] = set()
+    asset_groups: set[str] = set()
+    for row in rows:
+        note = _user_note_json(dict(row))
+        project_name = str(note.get("byteplus_project_name") or "").strip()
+        if project_name:
+            projects.add(project_name)
+        asset_group_id = str(note.get("modelark_asset_group_id") or "").strip()
+        if asset_group_id:
+            asset_groups.add(asset_group_id)
+        endpoint_id = str(note.get("byteplus_endpoint_id") or "").strip()
+        if endpoint_id:
+            endpoints.add(endpoint_id)
+        endpoint_map = note.get("byteplus_endpoint_map")
+        if isinstance(endpoint_map, dict):
+            for value in endpoint_map.values():
+                endpoint = str(value or "").strip()
+                if endpoint:
+                    endpoints.add(endpoint)
+    data = [
+        _quota_reminder_item(
+            "projects",
+            len(projects),
+            _env_int_value("BYTEPLUS_PROJECT_QUOTA_WARN_AT", 0),
+        ),
+        _quota_reminder_item(
+            "endpoints",
+            len(endpoints),
+            _env_int_value("BYTEPLUS_ENDPOINT_QUOTA_WARN_AT", 0),
+        ),
+        _quota_reminder_item(
+            "asset_groups",
+            len(asset_groups),
+            _env_int_value("BYTEPLUS_ASSET_GROUP_QUOTA_WARN_AT", 0),
+        ),
+    ]
+    return {"data": data, "checked_customers": len(rows)}
 
 
 def _normalize_customer_slug(value: str) -> str:
@@ -1618,15 +2283,224 @@ def _planned_upstream_provision(user: dict, req: ProvisionUpstreamRequest) -> di
     }
 
 
-def _get_endpoint_api_key(endpoint_id: str, duration_seconds: int) -> dict[str, Any]:
-    if not BYTEPLUS_ACCESSKEY or not BYTEPLUS_SECRETKEY:
-        raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_SECRET_ACCESS_KEY are required")
-    result = _call_asset_api(
-        "GetApiKey",
-        {"EndpointId": endpoint_id, "DurationSeconds": duration_seconds},
+def _call_iam_api(action: str, params: dict[str, Any], ak: str, sk: str) -> dict:
+    try:
+        return request_signed_api(
+            action,
+            None,
+            ak,
+            sk,
+            service=BYTEPLUS_IAM_SERVICE,
+            region=BYTEPLUS_REGION,
+            host=BYTEPLUS_IAM_HOST,
+            version=BYTEPLUS_IAM_VERSION,
+            query_params=params,
+        )
+    except SystemExit as exc:
+        raise HTTPException(502, {"error": {
+            "code": "iam_project_error",
+            "message": str(exc),
+        }}) from exc
+
+
+def _upstream_http_exception_message(exc: HTTPException) -> str:
+    detail = getattr(exc, "detail", "")
+    if isinstance(detail, dict):
+        error = detail.get("error")
+        if isinstance(error, dict):
+            return str(error.get("message") or error)
+    return str(detail)
+
+
+def _get_byteplus_project(project_name: str) -> Optional[dict[str, Any]]:
+    response = _call_iam_api(
+        "GetProject",
+        {"ProjectName": project_name},
         BYTEPLUS_ACCESSKEY,
         BYTEPLUS_SECRETKEY,
     )
+    result = response.get("Result") if isinstance(response, dict) else None
+    project = result.get("Project") if isinstance(result, dict) else response.get("Project")
+    if isinstance(project, dict):
+        return project
+    return {"ProjectName": project_name}
+
+
+def _ensure_byteplus_project(project_name: str, display_name: str, description: str) -> dict[str, Any]:
+    try:
+        existing = _get_byteplus_project(project_name)
+        if existing:
+            return existing
+    except HTTPException as exc:
+        message = _upstream_http_exception_message(exc)
+        if (
+            "EntityNotFound" not in message
+            and "NotFound" not in message
+            and "not found" not in message.lower()
+        ):
+            raise
+
+    result = _call_iam_api(
+        "CreateProject",
+        {"ProjectName": project_name, "Description": description or display_name or project_name},
+        BYTEPLUS_ACCESSKEY,
+        BYTEPLUS_SECRETKEY,
+    )
+    result_body = result.get("Result") if isinstance(result, dict) else None
+    project = result_body.get("Project") if isinstance(result_body, dict) else result.get("Project")
+    if isinstance(project, dict):
+        return project
+    try:
+        return _get_byteplus_project(project_name) or {"ProjectName": project_name}
+    except HTTPException as exc:
+        message = _upstream_http_exception_message(exc)
+        if "AlreadyExists" in message or "already" in message.lower():
+            existing = _get_byteplus_project(project_name)
+            return existing or {"ProjectName": project_name}
+        raise
+
+
+def _foundation_model_reference_for_client_model(client_model: str) -> dict[str, str]:
+    upstream_model = MODEL_MAP.get(client_model, client_model)
+    model_name, sep, model_version = upstream_model.rpartition("-")
+    if not sep or not model_name or not model_version:
+        return {"Name": BYTEPLUS_ENDPOINT_MODEL_NAME, "ModelVersion": BYTEPLUS_ENDPOINT_MODEL_VERSION}
+    return {"Name": model_name, "ModelVersion": model_version}
+
+
+def _endpoint_name_for_model(slug: str, client_model: str) -> str:
+    upstream_model = MODEL_MAP.get(client_model, client_model)
+    suffix = re.sub(r"[^a-z0-9]+", "-", upstream_model.lower()).strip("-")
+    suffix = suffix.replace("dreamina-", "").replace("seedance-", "sd-")
+    return f"relay-{slug}-{suffix}"[:120]
+
+
+def _endpoint_create_body(slug: str, project_name: str, email: str = "", client_model: str = "") -> dict[str, Any]:
+    tags = [
+        {"Key": "app", "Value": "seedance-relay"},
+        {"Key": "customer", "Value": slug},
+        {"Key": "createdBy", "Value": "seedance-relay"},
+    ]
+    if client_model:
+        tags.append({"Key": "clientModel", "Value": client_model[:120]})
+    if email:
+        tags.append({"Key": "email", "Value": email})
+    foundation_model = (
+        _foundation_model_reference_for_client_model(client_model)
+        if client_model
+        else {"Name": BYTEPLUS_ENDPOINT_MODEL_NAME, "ModelVersion": BYTEPLUS_ENDPOINT_MODEL_VERSION}
+    )
+    return {
+        "ProjectName": project_name,
+        "Name": _endpoint_name_for_model(slug, client_model) if client_model else f"relay-{slug}-seedance2",
+        "Description": f"Relay customer endpoint {slug}",
+        "ModelReference": {
+            "FoundationModel": foundation_model,
+            "CustomModelId": "",
+        },
+        "Moderation": {"Strategy": BYTEPLUS_ENDPOINT_MODERATION_STRATEGY},
+        "Tags": tags,
+    }
+
+
+def _client_model_from_endpoint_item(item: dict[str, Any]) -> str:
+    tags = item.get("Tags")
+    if isinstance(tags, list):
+        for tag in tags:
+            if not isinstance(tag, dict):
+                continue
+            key = str(tag.get("Key") or "")
+            value = str(tag.get("Value") or "").strip()
+            if key in {"clientModel", "model"} and value in MODEL_MAP:
+                return value
+
+    model_reference = item.get("ModelReference") if isinstance(item.get("ModelReference"), dict) else {}
+    foundation = model_reference.get("FoundationModel") if isinstance(model_reference, dict) else {}
+    if isinstance(foundation, dict):
+        name = str(foundation.get("Name") or "").strip()
+        version = str(foundation.get("ModelVersion") or "").strip()
+        model_id = f"{name}-{version}" if name and version else ""
+        if model_id in MODEL_MAP:
+            return model_id
+    return ""
+
+
+def _existing_project_endpoint_map(project_name: str) -> dict[str, str]:
+    if not project_name:
+        return {}
+    try:
+        response = _call_asset_api(
+            "ListEndpoints",
+            {"ProjectName": project_name, "PageNumber": 1, "PageSize": 100},
+            BYTEPLUS_ACCESSKEY,
+            BYTEPLUS_SECRETKEY,
+        )
+    except Exception:
+        return {}
+
+    result = response.get("Result") if isinstance(response.get("Result"), dict) else {}
+    items = result.get("Items") if isinstance(result, dict) else None
+    if items is None:
+        items = response.get("Items")
+    if not isinstance(items, list):
+        return {}
+
+    endpoint_map: dict[str, str] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("Status") or "")
+        if status in {"Deleting", "Failed"}:
+            continue
+        model_id = _client_model_from_endpoint_item(item)
+        endpoint_id = str(item.get("Id") or item.get("EndpointId") or "").strip()
+        if model_id and endpoint_id and model_id not in endpoint_map:
+            endpoint_map[model_id] = endpoint_id
+    return endpoint_map
+
+
+def _endpoint_create_skip_reason(exc: HTTPException) -> str:
+    message = _upstream_http_exception_message(exc)
+    lower = message.lower()
+    if (
+        "servicenotopen" in message
+        or "service not open" in lower
+        or "no available resource packs" in lower
+        or "modelversionstatus" in message
+        or "model version is invalid" in lower
+        or "status=retiring" in lower
+    ):
+        return sanitize(message)[:500]
+    return ""
+
+
+def _wait_endpoint_ready(endpoint_id: str, project_name: str) -> None:
+    if not endpoint_id or BYTEPLUS_ENDPOINT_WAIT_SECONDS <= 0:
+        return
+    deadline = time.time() + BYTEPLUS_ENDPOINT_WAIT_SECONDS
+    last_status = ""
+    while time.time() < deadline:
+        result = _call_asset_api(
+            "GetEndpoint",
+            {"Id": endpoint_id, "ProjectName": project_name},
+            BYTEPLUS_ACCESSKEY,
+            BYTEPLUS_SECRETKEY,
+        )
+        status = str(
+            extract_nested_value(result, "Result", "Status")
+            or extract_nested_value(result, "Status")
+            or ""
+        )
+        last_status = status
+        if status == "Running":
+            return
+        if status in {"Failed", "Deleting"}:
+            raise RuntimeError(f"Endpoint {endpoint_id} is {status}")
+        time.sleep(BYTEPLUS_ENDPOINT_WAIT_INTERVAL)
+    raise RuntimeError(f"Endpoint {endpoint_id} did not become Running; last_status={last_status}")
+
+
+def _extract_endpoint_api_key_payload(result: dict[str, Any], duration_seconds: int) -> dict[str, Any]:
     api_key = (
         extract_nested_value(result, "Result", "ApiKey")
         or extract_nested_value(result, "ApiKey")
@@ -1634,7 +2508,9 @@ def _get_endpoint_api_key(endpoint_id: str, duration_seconds: int) -> dict[str, 
     )
     expires_at = (
         extract_nested_value(result, "Result", "ExpiresAt")
+        or extract_nested_value(result, "Result", "ExpiredTime")
         or extract_nested_value(result, "ExpiresAt")
+        or extract_nested_value(result, "ExpiredTime")
         or extract_nested_value(result, "expires_at")
     )
     if not api_key:
@@ -1645,7 +2521,88 @@ def _get_endpoint_api_key(endpoint_id: str, duration_seconds: int) -> dict[str, 
     }
 
 
-def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamRequest) -> dict:
+def _request_endpoint_api_key(endpoint_ids: list[str], duration_seconds: int) -> dict[str, Any]:
+    result = _call_asset_api(
+        "GetApiKey",
+        {
+            "DurationSeconds": duration_seconds,
+            "ResourceType": "endpoint",
+            "ResourceIds": endpoint_ids,
+        },
+        BYTEPLUS_ACCESSKEY,
+        BYTEPLUS_SECRETKEY,
+    )
+    return _extract_endpoint_api_key_payload(result, duration_seconds)
+
+
+def _get_per_endpoint_api_key_map(endpoint_ids: list[str], duration_seconds: int) -> dict[str, Any]:
+    endpoint_key_map: dict[str, dict[str, Any]] = {}
+    first: Optional[dict[str, Any]] = None
+    for endpoint_id in endpoint_ids:
+        issued = _request_endpoint_api_key([endpoint_id], duration_seconds)
+        endpoint_key_map[endpoint_id] = {
+            "endpoint_id": endpoint_id,
+            "api_key": issued["api_key"],
+            "expires_at": issued["expires_at"],
+        }
+        if first is None:
+            first = issued
+    if first is None:
+        raise RuntimeError("endpoint id is required before rotating endpoint API key")
+    return {
+        "api_key": first["api_key"],
+        "expires_at": min(int(item["expires_at"]) for item in endpoint_key_map.values()),
+        "endpoint_key_map_by_endpoint": endpoint_key_map,
+        "key_mode": "per_endpoint",
+    }
+
+
+def _get_endpoint_api_key(endpoint_id: str | list[str], duration_seconds: int) -> dict[str, Any]:
+    if not BYTEPLUS_ACCESSKEY or not BYTEPLUS_SECRETKEY:
+        raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_SECRET_ACCESS_KEY are required")
+    endpoint_ids = endpoint_id if isinstance(endpoint_id, list) else [endpoint_id]
+    endpoint_ids = [str(item).strip() for item in endpoint_ids if str(item).strip()]
+    if not endpoint_ids:
+        raise RuntimeError("endpoint id is required before rotating endpoint API key")
+    if ENDPOINT_KEY_RESOURCE_MODE == "per_endpoint" and len(endpoint_ids) > 1:
+        return _get_per_endpoint_api_key_map(endpoint_ids, duration_seconds)
+    try:
+        issued = _request_endpoint_api_key(endpoint_ids, duration_seconds)
+        return issued
+    except Exception:
+        if ENDPOINT_KEY_RESOURCE_MODE == "auto" and len(endpoint_ids) > 1:
+            return _get_per_endpoint_api_key_map(endpoint_ids, duration_seconds)
+        raise
+
+
+def _model_endpoint_key_map_from_issued(
+    issued: dict[str, Any],
+    endpoint_map: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    raw = issued.get("endpoint_key_map_by_endpoint")
+    if not isinstance(raw, dict) or not endpoint_map:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for model_id, endpoint_id in endpoint_map.items():
+        entry = raw.get(endpoint_id)
+        if isinstance(entry, dict) and entry.get("api_key"):
+            out[model_id] = {
+                "endpoint_id": endpoint_id,
+                "api_key": str(entry["api_key"]),
+                "expires_at": entry.get("expires_at"),
+            }
+    return out
+
+
+def _provision_customer_upstream_resources(
+    user: dict,
+    req: ProvisionUpstreamRequest,
+    on_step: Optional[Callable[[str, int], None]] = None,
+) -> dict:
+    def step(name: str, progress: int) -> None:
+        if on_step:
+            on_step(name, progress)
+
     if not BYTEPLUS_ACCESSKEY or not BYTEPLUS_SECRETKEY:
         raise RuntimeError("BYTEPLUS_ACCESS_KEY_ID/BYTEPLUS_SECRET_ACCESS_KEY are required")
     planned = _planned_upstream_provision(user, req)
@@ -1653,41 +2610,65 @@ def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamReq
     project_name = planned["byteplus_project_name"]
     project_id = ""
     endpoint_id = _user_byteplus_endpoint_id(user)
+    endpoint_map = _user_byteplus_endpoint_map(user)
+    skipped_endpoint_models: dict[str, str] = {}
     asset_group_id = _user_modelark_asset_group_id(user)
 
     if req.create_project:
-        project_result = _call_asset_api(
-            "CreateProject",
-            {"Name": project_name, "Description": f"Relay customer {slug}"},
-            BYTEPLUS_ACCESSKEY,
-            BYTEPLUS_SECRETKEY,
+        step("ensure_project", 15)
+        project_result = _ensure_byteplus_project(
+            project_name,
+            display_name=project_name,
+            description=f"Relay customer {slug}",
         )
         project_id = str(
-            extract_nested_value(project_result, "Result", "ProjectId")
-            or extract_nested_value(project_result, "ProjectId")
-            or extract_nested_value(project_result, "Id")
+            project_result.get("ProjectId")
+            or project_result.get("Id")
+            or project_result.get("ProjectName")
             or ""
         )
     if req.create_endpoint:
-        endpoint_result = _call_asset_api(
-            "CreateEndpoint",
-            {
-                "ProjectId": project_id,
-                "ProjectName": project_name,
-                "Name": slug,
-                "Description": f"Relay customer endpoint {slug}",
-            },
-            BYTEPLUS_ACCESSKEY,
-            BYTEPLUS_SECRETKEY,
-        )
-        endpoint_id = str(
-            extract_nested_value(endpoint_result, "Result", "EndpointId")
-            or extract_nested_value(endpoint_result, "EndpointId")
-            or extract_nested_value(endpoint_result, "Id")
-            or endpoint_id
-            or ""
-        )
+        step("create_endpoints", 35)
+        existing_project_map = _existing_project_endpoint_map(project_name)
+        enabled_model_set = set(_enabled_models_for_user(user))
+        for client_model, existing_endpoint_id in existing_project_map.items():
+            if client_model in enabled_model_set and not endpoint_map.get(client_model):
+                endpoint_map[client_model] = existing_endpoint_id
+                if not endpoint_id:
+                    endpoint_id = existing_endpoint_id
+        for client_model in _enabled_models_for_user(user):
+            existing_endpoint_id = endpoint_map.get(client_model)
+            if existing_endpoint_id:
+                if not endpoint_id:
+                    endpoint_id = existing_endpoint_id
+                continue
+            try:
+                endpoint_result = _call_asset_api(
+                    "CreateEndpoint",
+                    _endpoint_create_body(slug, project_name, str(user.get("email") or ""), client_model),
+                    BYTEPLUS_ACCESSKEY,
+                    BYTEPLUS_SECRETKEY,
+                )
+            except HTTPException as exc:
+                skip_reason = _endpoint_create_skip_reason(exc)
+                if not skip_reason:
+                    raise
+                skipped_endpoint_models[client_model] = skip_reason
+                continue
+            created_endpoint_id = str(
+                extract_nested_value(endpoint_result, "Result", "EndpointId")
+                or extract_nested_value(endpoint_result, "EndpointId")
+                or extract_nested_value(endpoint_result, "Id")
+                or ""
+            )
+            if created_endpoint_id:
+                endpoint_map[client_model] = created_endpoint_id
+                if not endpoint_id:
+                    endpoint_id = created_endpoint_id
+                step("wait_endpoints", 55)
+                _wait_endpoint_ready(created_endpoint_id, project_name)
     if req.create_asset_group:
+        step("ensure_asset_group", 75)
         group_result = _call_asset_api(
             "CreateAssetGroup",
             build_create_asset_group_body(
@@ -1705,14 +2686,22 @@ def _provision_customer_upstream_resources(user: dict, req: ProvisionUpstreamReq
         "byteplus_project_name": project_name,
         "byteplus_project_id": project_id,
         "byteplus_endpoint_id": endpoint_id,
+        "byteplus_endpoint_map": endpoint_map,
+        "byteplus_endpoint_skipped_models": skipped_endpoint_models,
         "modelark_asset_group_id": asset_group_id,
     }
     if req.rotate_endpoint_key:
-        if not endpoint_id:
+        step("generate_key", 90)
+        endpoint_ids = list(endpoint_map.values()) or ([endpoint_id] if endpoint_id else [])
+        if not endpoint_ids:
             raise RuntimeError("endpoint id is required before rotating endpoint API key")
-        issued = _get_endpoint_api_key(endpoint_id, req.endpoint_key_duration_seconds)
+        issued = _get_endpoint_api_key(endpoint_ids, req.endpoint_key_duration_seconds)
         result["endpoint_api_key"] = issued["api_key"]
         result["byteplus_endpoint_api_key_expires_at"] = issued["expires_at"]
+        result["byteplus_endpoint_key_mode"] = issued.get("key_mode") or "multi"
+        endpoint_key_map = _model_endpoint_key_map_from_issued(issued, endpoint_map)
+        if endpoint_key_map:
+            result["byteplus_endpoint_key_map"] = endpoint_key_map
     return result
 
 
@@ -1730,10 +2719,16 @@ def _apply_upstream_result_to_user(
         "byteplus_project_name": updates.get("byteplus_project_name") or "",
         "byteplus_project_id": updates.get("byteplus_project_id") or "",
         "byteplus_endpoint_id": updates.get("byteplus_endpoint_id") or "",
+        "byteplus_endpoint_map": updates.get("byteplus_endpoint_map") or {},
+        "byteplus_endpoint_skipped_models": updates.get("byteplus_endpoint_skipped_models") or {},
+        "byteplus_endpoint_skipped_models_updated_at": now,
+        "byteplus_endpoint_key_mode": updates.get("byteplus_endpoint_key_mode") or "multi",
         "modelark_asset_group_id": updates.get("modelark_asset_group_id") or "",
         "byteplus_endpoint_key_rotation_enabled": bool(rotation_enabled),
         "byteplus_upstream_updated_at": now,
     }
+    if updates.get("byteplus_endpoint_key_map"):
+        note_updates["byteplus_endpoint_key_map"] = updates["byteplus_endpoint_key_map"]
     if updates.get("byteplus_endpoint_api_key_expires_at") is not None:
         note_updates["byteplus_endpoint_api_key_expires_at"] = int(
             updates["byteplus_endpoint_api_key_expires_at"]
@@ -1742,6 +2737,14 @@ def _apply_upstream_result_to_user(
         note_updates["byteplus_endpoint_key_last_rotated_at"] = now
         note_updates["byteplus_endpoint_key_rotation_error"] = ""
     note = _merge_user_note_json(user.get("note"), note_updates)
+    skipped_models = set((updates.get("byteplus_endpoint_skipped_models") or {}).keys())
+    enabled_models_after_skip = None
+    if skipped_models:
+        enabled_models_after_skip = [
+            model_id
+            for model_id in _enabled_models_for_user(user)
+            if model_id not in skipped_models
+        ]
     db = get_db()
     try:
         if updates.get("endpoint_api_key"):
@@ -1751,6 +2754,11 @@ def _apply_upstream_result_to_user(
             )
         else:
             db.execute("UPDATE users SET note=? WHERE id=?", (note, user["id"]))
+        if enabled_models_after_skip is not None:
+            db.execute(
+                "UPDATE users SET enabled_models=? WHERE id=?",
+                (json.dumps(enabled_models_after_skip), user["id"]),
+            )
         row = db.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
         return dict(row)
     finally:
@@ -1769,6 +2777,35 @@ def _upstream_job_response(row: sqlite3.Row | dict, upstream: Optional[dict] = N
     if upstream is not None:
         item["upstream"] = upstream
     return item
+
+
+def _update_upstream_provision_job_step(job_id: str, current_step: str, progress: int) -> None:
+    progress = max(0, min(100, int(progress)))
+    db = get_db()
+    try:
+        db.execute(
+            """UPDATE upstream_provision_jobs
+               SET current_step=?, progress=?, updated_at=?
+               WHERE id=?""",
+            (current_step, progress, int(time.time()), job_id),
+        )
+    finally:
+        db.close()
+
+
+def _call_customer_upstream_provisioner(
+    user: dict,
+    req: ProvisionUpstreamRequest,
+    on_step: Callable[[str, int], None],
+) -> dict:
+    provisioner = _provision_customer_upstream_resources
+    try:
+        signature = inspect.signature(provisioner)
+        if "on_step" in signature.parameters:
+            return provisioner(user, req, on_step=on_step)
+    except (TypeError, ValueError):
+        pass
+    return provisioner(user, req)
 
 
 def _content_url_for_block(block: ContentBlock) -> str:
@@ -1826,7 +2863,6 @@ def _validate_customer_asset_access(content: list[ContentBlock], user_id: str) -
     if not asset_urls:
         return
 
-    global_allowlist = _active_face_asset_allowlist()
     db = get_db()
     try:
         for asset_url in asset_urls:
@@ -1837,7 +2873,7 @@ def _validate_customer_asset_access(content: list[ContentBlock], user_id: str) -
             if not rows:
                 continue
             owners = {row["user_id"] for row in rows}
-            if user_id not in owners and asset_url not in global_allowlist:
+            if user_id not in owners:
                 raise HTTPException(403, {"error": {
                     "code": "asset_not_owned",
                     "message": "This asset:// material belongs to another account",
@@ -1848,6 +2884,7 @@ def _validate_customer_asset_access(content: list[ContentBlock], user_id: str) -
 
 
 def _format_task(t: dict, error: Optional[str] = None) -> dict:
+    now = int(time.time())
     out = {
         "id": t["id"],
         "model": t["client_model"],
@@ -1863,9 +2900,134 @@ def _format_task(t: dict, error: Optional[str] = None) -> dict:
     }
     if t.get("status") == "succeeded":
         out["video_url"] = f"{PUBLIC_BASE_URL}/v1/videos/{t['id']}/content"
-    if error:
-        out["error"] = {"message": sanitize(error)}
+        content_expires_at = _task_content_expires_at(t)
+        if content_expires_at:
+            out["content_expires_at"] = content_expires_at
+            out["content_retention_seconds"] = VIDEO_RETENTION_SECONDS
+            out["content_seconds_remaining"] = max(0, content_expires_at - now)
+            out["content_expired"] = content_expires_at <= now
+        upstream_video_url = str(t.get("cached_video_url") or "").strip()
+        upstream_expires_at = _upstream_content_expires_at(t)
+        if upstream_video_url and (not upstream_expires_at or upstream_expires_at > now):
+            out["upstream_video_url"] = upstream_video_url
+        if upstream_expires_at:
+            out["upstream_content_expires_at"] = upstream_expires_at
+            out["upstream_content_retention_seconds"] = BYTEPLUS_VIDEO_RETENTION_SECONDS
+            out["upstream_content_seconds_remaining"] = max(0, upstream_expires_at - now)
+            out["upstream_content_expired"] = upstream_expires_at <= now
+    error_message = error or t.get("error_message")
+    if error_message and t.get("status") in {"failed", "cancelled", "expired"}:
+        out["error"] = {"message": sanitize(str(error_message))}
     return out
+
+
+def _task_error_message_from_upstream(info: dict) -> Optional[str]:
+    for key in ("error", "last_error"):
+        value = info.get(key)
+        if isinstance(value, dict):
+            message = value.get("message") or value.get("reason") or value.get("code")
+            if message:
+                return sanitize(str(message))[:1000]
+        elif value:
+            return sanitize(str(value))[:1000]
+    for key in ("error_message", "failure_reason", "message"):
+        value = info.get(key)
+        if value:
+            return sanitize(str(value))[:1000]
+    return None
+
+
+def _task_content_expires_at(t: dict) -> Optional[int]:
+    if t.get("status") != "succeeded":
+        return None
+    policy_expires = None
+    if VIDEO_PERSIST_MODE != "proxy_only":
+        succeeded_at = int(t.get("updated_at") or t.get("created_at") or time.time())
+        policy_expires = succeeded_at + VIDEO_RETENTION_SECONDS
+    local_expires = t.get("local_video_expires_at")
+    if local_expires:
+        return min(int(local_expires), policy_expires) if policy_expires else int(local_expires)
+    if policy_expires:
+        return policy_expires
+    signed_expires = _signed_video_url_expires_at(t.get("cached_video_url") or "")
+    if signed_expires:
+        return signed_expires
+    cached_until = t.get("cached_video_url_until")
+    return int(cached_until) if cached_until else None
+
+
+def _upstream_content_expires_at(t: dict) -> Optional[int]:
+    signed_expires = _signed_video_url_expires_at(t.get("cached_video_url") or "")
+    if signed_expires:
+        return signed_expires
+    cached_until = t.get("cached_video_url_until")
+    return int(cached_until) if cached_until else None
+
+
+def _signed_video_url_expires_at(url: str) -> Optional[int]:
+    """Return the real expiry for signed Byte/TOS URLs when encoded in query params."""
+    if not url:
+        return None
+    try:
+        query = parse_qs(urlparse(url).query)
+        date_value = (query.get("X-Tos-Date") or query.get("x-tos-date") or [""])[0]
+        expires_value = (query.get("X-Tos-Expires") or query.get("x-tos-expires") or [""])[0]
+        if not date_value or not expires_value:
+            return None
+        issued = datetime.strptime(date_value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        return int(issued.timestamp()) + int(expires_value)
+    except Exception:
+        return None
+
+
+def _cache_until_for_video_url(url: str, now: Optional[int] = None) -> int:
+    signed_until = _signed_video_url_expires_at(url)
+    fallback_until = int(now or time.time()) + 23 * 3600
+    if signed_until:
+        return min(signed_until, fallback_until)
+    return fallback_until
+
+
+def _cached_video_url_stale(t: dict, *, now: Optional[int] = None) -> bool:
+    now = int(now or time.time())
+    signed_until = _signed_video_url_expires_at(t.get("cached_video_url") or "")
+    cached_until = int(t.get("cached_video_url_until") or 0)
+    effective_until = signed_until if signed_until else cached_until
+    return not t.get("cached_video_url") or effective_until <= now + 60
+
+
+def _schedule_video_persist_if_needed(task: dict) -> None:
+    if VIDEO_PERSIST_MODE == "proxy_only":
+        return
+    if task.get("status") != "succeeded" or task.get("local_video_path"):
+        return
+    cached_url = task.get("cached_video_url")
+    if not cached_url:
+        return
+    expires_at = _signed_video_url_expires_at(cached_url) or int(task.get("cached_video_url_until") or 0)
+    if expires_at and expires_at <= int(time.time()):
+        return
+    asyncio.create_task(_persist_video(str(task["id"]), cached_url))
+
+
+def _content_expired_response() -> HTTPException:
+    return HTTPException(410, {"error": {
+        "code": "video_expired",
+        "message": f"video content has expired; relay copies are kept for {VIDEO_RETENTION_SECONDS} seconds",
+    }})
+
+
+def _clear_expired_local_video(db: sqlite3.Connection, task: dict) -> None:
+    local = task.get("local_video_path")
+    if local:
+        try:
+            Path(local).unlink(missing_ok=True)
+        except OSError:
+            pass
+    db.execute(
+        "UPDATE tasks SET local_video_path=NULL WHERE id=?",
+        (task["id"],),
+    )
 
 
 def _apply_terminal_task_refresh_once(
@@ -1881,6 +3043,7 @@ def _apply_terminal_task_refresh_once(
     cached_video_url_until: int,
     updated_at: int,
     refund_usd: float,
+    error_message: Optional[str] = None,
 ) -> dict:
     try:
         db.execute("BEGIN IMMEDIATE")
@@ -1889,7 +3052,9 @@ def _apply_terminal_task_refresh_once(
               SET status=?, actual_cost_usd=?,
                   upstream_actual_cost_usd=?, completion_tokens=?,
                   settled=1,
-                  cached_video_url=?, cached_video_url_until=?, updated_at=?
+                  cached_video_url=?, cached_video_url_until=?,
+                  error_message=COALESCE(?, error_message),
+                  updated_at=?
               WHERE id=? AND user_id=? AND settled=0""",
             (
                 status,
@@ -1898,6 +3063,7 @@ def _apply_terminal_task_refresh_once(
                 completion_tokens,
                 cached_video_url,
                 cached_video_url_until,
+                error_message,
                 updated_at,
                 task_id,
                 user_id,
@@ -1942,7 +3108,20 @@ def _cancel_task_once(
         raise
 
 
-async def _refresh_task(task_id: str, user_id: str) -> dict:
+def _task_pricing_model(task: dict[str, Any]) -> str:
+    client_model = str(task.get("client_model") or "").strip()
+    candidates = (
+        client_model,
+        MODEL_MAP.get(client_model, ""),
+        str(task.get("upstream_model") or "").strip(),
+    )
+    for candidate in candidates:
+        if candidate and get_price(candidate):
+            return candidate
+    return next((candidate for candidate in candidates if candidate), "")
+
+
+async def _refresh_task(task_id: str, user_id: str, *, refresh_settled_video_url: bool = False) -> dict:
     db = get_db()
     t = db.execute("SELECT * FROM tasks WHERE id=? AND user_id=?",
                    (task_id, user_id)).fetchone()
@@ -1950,17 +3129,28 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
         raise HTTPException(404, {"error": {"code": "not_found",
                                             "message": "video not found"}})
     t = dict(t)
-    if t["settled"]:
+    if t["settled"] and not refresh_settled_video_url:
         return t
 
     # 用提交时使用的 BytePlus key 来查询(因为 task 是用那把 key 创建的)
-    user_row = db.execute("SELECT byteplus_api_key, markup_pct, price_multiplier FROM users WHERE id=?",
+    user_row = db.execute("SELECT byteplus_api_key, markup_pct, price_multiplier, note FROM users WHERE id=?",
                           (user_id,)).fetchone()
     user_endpoint_id = ""
+    user_dict = dict(user_row) if user_row else {}
     if user_row:
-        user_for_note = db.execute("SELECT note FROM users WHERE id=?", (user_id,)).fetchone()
-        user_endpoint_id = _user_byteplus_endpoint_id(dict(user_for_note)) if user_for_note else ""
-    user_bp_key = user_row["byteplus_api_key"] if user_row else None
+        client_model = str(t.get("client_model") or "")
+        real_model = MODEL_MAP.get(client_model, str(t.get("upstream_model") or ""))
+        try:
+            user_endpoint_id = _user_byteplus_endpoint_id_for_model(user_dict, client_model, real_model)
+        except HTTPException:
+            user_endpoint_id = _user_byteplus_endpoint_id(user_dict)
+    user_endpoint_key = _endpoint_api_key_for_selected_model(
+        user_dict,
+        str(t.get("client_model") or ""),
+        MODEL_MAP.get(str(t.get("client_model") or ""), str(t.get("upstream_model") or "")),
+        user_endpoint_id,
+    )
+    user_bp_key = user_endpoint_key or (user_row["byteplus_api_key"] if user_row else None)
     bp_key = user_bp_key
     if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
         if user_endpoint_id and user_bp_key:
@@ -1981,16 +3171,23 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
         url = (info.get("content") or {}).get("video_url")
         if url:
             cached_url = url
-            cached_until = now + 23 * 3600
+            cached_until = _cache_until_for_video_url(url, now)
 
     completion_tokens = (info.get("usage") or {}).get("completion_tokens")
     actual_cost_usd = t.get("actual_cost_usd")
     upstream_cost = t.get("upstream_actual_cost_usd")
+    error_message = _task_error_message_from_upstream(info) if new_status in {"failed", "cancelled", "expired"} else None
     if new_status in ("succeeded", "failed", "cancelled", "expired") \
             and not t["settled"]:
         if new_status == "succeeded":
+            pricing_model = _task_pricing_model(t)
+            pricing_resolution = str(t.get("resolution") or info.get("resolution") or "")
             upstream_cost = actual_video_cost(
-                info, has_video_ref=bool(t["has_video_ref"]))
+                info,
+                has_video_ref=bool(t["has_video_ref"]),
+                model=pricing_model,
+                resolution=pricing_resolution,
+            )
             price_multiplier = _effective_price_multiplier(
                 t if t.get("price_multiplier") is not None else user_row
             )
@@ -2011,16 +3208,19 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
             completion_tokens=completion_tokens,
             cached_video_url=cached_url,
             cached_video_url_until=cached_until,
+            error_message=error_message,
             updated_at=now,
             refund_usd=refund,
         )
         # 任务成功后异步把视频拉到本地
-        if new_status == "succeeded" and cached_url and VIDEO_PERSIST_MODE != "proxy_only":
-            asyncio.create_task(_persist_video(task_id, cached_url))
+        if new_status == "succeeded" and cached_url:
+            _schedule_video_persist_if_needed(t)
     else:
         db.execute("""UPDATE tasks SET status=?, cached_video_url=?,
-                      cached_video_url_until=?, updated_at=? WHERE id=?""",
-                   (new_status, cached_url, cached_until, now, task_id))
+                      cached_video_url_until=?,
+                      error_message=COALESCE(?, error_message),
+                      updated_at=? WHERE id=?""",
+                   (new_status, cached_url, cached_until, error_message, now, task_id))
 
     t["status"] = new_status
     t["cached_video_url"] = cached_url
@@ -2028,6 +3228,8 @@ async def _refresh_task(task_id: str, user_id: str) -> dict:
     t["actual_cost_usd"] = actual_cost_usd
     t["upstream_actual_cost_usd"] = upstream_cost
     t["completion_tokens"] = completion_tokens
+    if error_message:
+        t["error_message"] = error_message
     return t
 
 
@@ -2039,23 +3241,30 @@ async def _persist_video(task_id: str, url: str) -> None:
     try:
         tmp = out.with_suffix(".mp4.partial")
         async with http.stream("GET", url, timeout=300) as r:
+            if r.status_code < 200 or r.status_code >= 300:
+                raise RuntimeError(f"download returned HTTP {r.status_code}")
             with open(tmp, "wb") as f:
                 async for chunk in r.aiter_bytes(64 * 1024):
                     f.write(chunk)
         tmp.rename(out)
+        expires_at = int(time.time()) + VIDEO_RETENTION_SECONDS
         db = get_db()
-        db.execute("UPDATE tasks SET local_video_path=? WHERE id=?",
-                   (str(out), task_id))
+        db.execute("UPDATE tasks SET local_video_path=?, local_video_expires_at=? WHERE id=?",
+                   (str(out), expires_at, task_id))
         print(f"Persisted video {task_id} -> {out} ({out.stat().st_size} bytes)")
     except Exception as e:
         print(f"Failed to persist video {task_id}: {_sanitize_log_text(str(e))}")
 
 
 def _public_url_for_object_key(object_key: str) -> str:
+    clean_key = (object_key or "").strip().lstrip("/")
     if UPLOAD_PUBLIC_BASE_URL:
-        return f"{UPLOAD_PUBLIC_BASE_URL}/{object_key}"
+        base = UPLOAD_PUBLIC_BASE_URL
+        if urlparse(base).path.rstrip("/").endswith("/uploads") and clean_key.startswith("uploads/"):
+            clean_key = clean_key.removeprefix("uploads/")
+        return f"{base}/{clean_key}"
     base = PUBLIC_DOMAIN if PUBLIC_DOMAIN.startswith(("http://", "https://")) else f"https://{PUBLIC_DOMAIN}"
-    return f"{base.rstrip('/')}/{object_key}"
+    return f"{base.rstrip('/')}/{clean_key}"
 
 
 EXTENSION_CONTENT_TYPES = {
@@ -2178,17 +3387,121 @@ def _create_and_cache_asset_group(ak: str, sk: str, project_name: str) -> str:
     return group_id
 
 
+def _asset_customer_slug(user: dict) -> str:
+    note = _user_note_json(user)
+    raw = (
+        note.get("customer_slug")
+        or note.get("byteplus_project_name")
+        or str(user.get("email") or "").split("@", 1)[0]
+        or user.get("id")
+        or secrets.token_hex(4)
+    )
+    try:
+        return _normalize_customer_slug(str(raw))
+    except HTTPException:
+        return _normalize_customer_slug(str(user.get("id") or secrets.token_hex(4)))
+
+
+def _persist_user_asset_registry_config(user_id: str, updates: dict[str, Any]) -> dict:
+    db = get_db()
+    try:
+        row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, {"error": {
+                "code": "user_not_found",
+                "message": "User not found while saving asset registry config",
+            }})
+        note = _merge_user_note_json(row["note"], updates)
+        db.execute("UPDATE users SET note=? WHERE id=?", (note, user_id))
+        updated = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        return dict(updated)
+    finally:
+        db.close()
+
+
+def _ensure_user_asset_registry_config(
+    user: Optional[dict],
+    ak: str,
+    sk: str,
+    group_id: str,
+    project_name: str,
+) -> tuple[str, str]:
+    if group_id and project_name:
+        return group_id, project_name
+    if not user or not user.get("id") or not ak or not sk or not MODELARK_ASSET_AUTO_CREATE_GROUP:
+        return group_id, project_name
+
+    slug = _asset_customer_slug(user)
+    project_name = project_name or slug
+    _ensure_byteplus_project(
+        project_name,
+        display_name=project_name,
+        description=f"Relay customer {slug}",
+    )
+    if not group_id:
+        result = _call_asset_api(
+            "CreateAssetGroup",
+            build_create_asset_group_body(
+                name=f"{slug}-assets",
+                description=f"Relay customer asset group {slug}",
+                project_name=project_name,
+            ),
+            ak,
+            sk,
+        )
+        group_id = extract_asset_group_id(result)
+        if not group_id:
+            raise HTTPException(502, {"error": {
+                "code": "asset_group_registry_error",
+                "message": "Asset group registry did not return a group id",
+            }})
+
+    updates: dict[str, Any] = {
+        "customer_slug": slug,
+        "byteplus_project_name": project_name,
+        "modelark_asset_group_id": group_id,
+        "byteplus_upstream_updated_at": int(time.time()),
+    }
+    refreshed = _persist_user_asset_registry_config(str(user["id"]), updates)
+    user.clear()
+    user.update(refreshed)
+    return group_id, project_name
+
+
 def _server_asset_config(user: Optional[dict] = None) -> tuple[str, str, str, str]:
     ak = os.getenv("BYTEPLUS_ACCESS_KEY_ID", "").strip()
     sk = os.getenv("BYTEPLUS_ACCESS_KEY_SECRET", "").strip()
-    project_name = _user_byteplus_project_name(user) or MODELARK_PROJECT_NAME
     group_id = (
         _user_modelark_asset_group_id(user)
         or os.getenv("MODELARK_ASSET_GROUP_ID", "").strip()
         or _get_setting(_ASSET_GROUP_SETTING_KEY)
     )
+    user_project_name = _user_byteplus_project_name(user)
+    should_create_user_asset_group = (
+        bool(user and user.get("id"))
+        and MODELARK_ASSET_AUTO_CREATE_GROUP
+        and not group_id
+    )
+    project_name = user_project_name or ("" if should_create_user_asset_group else MODELARK_PROJECT_NAME)
     if ak and sk and not group_id and MODELARK_ASSET_AUTO_CREATE_GROUP:
-        group_id = _create_and_cache_asset_group(ak, sk, project_name)
+        if user and user.get("id"):
+            group_id, project_name = _ensure_user_asset_registry_config(
+                user,
+                ak,
+                sk,
+                group_id,
+                project_name,
+            )
+        elif project_name:
+            group_id = _create_and_cache_asset_group(ak, sk, project_name)
+    if ak and sk and user and user.get("id") and MODELARK_ASSET_AUTO_CREATE_GROUP:
+        group_id, project_name = _ensure_user_asset_registry_config(
+            user,
+            ak,
+            sk,
+            group_id,
+            project_name,
+        )
     missing = [
         name for name, value in (
             ("BYTEPLUS_ACCESS_KEY_ID", ak),
@@ -2211,6 +3524,21 @@ def _asset_type_for_purpose(purpose: str) -> str:
     return {"image": "Image", "video": "Video", "audio": "Audio"}[purpose]
 
 
+def _is_retryable_asset_create_error(exc: HTTPException) -> bool:
+    detail = getattr(exc, "detail", "")
+    text = json.dumps(detail, ensure_ascii=False) if not isinstance(detail, str) else detail
+    text = text.lower()
+    return (
+        getattr(exc, "status_code", None) == 502
+        and (
+            "internalservicetimeout" in text
+            or "http 504" in text
+            or '"coden": 100016' in text
+            or '"coden":100016' in text
+        )
+    )
+
+
 def _register_upload_asset(url: str, purpose: str, user: Optional[dict] = None) -> dict:
     ak, sk, group_id, project_name = _server_asset_config(user)
     body = build_create_asset_body(
@@ -2221,7 +3549,23 @@ def _register_upload_asset(url: str, purpose: str, user: Optional[dict] = None) 
         name=Path(urlparse(url).path).name,
         project_name=project_name,
     )
-    result = _call_asset_api("CreateAsset", body, ak, sk)
+    result: Optional[dict] = None
+    retry_delays = [0.0] + ASSET_CREATE_RETRY_DELAYS
+    for attempt_index, delay in enumerate(retry_delays):
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            result = _call_asset_api("CreateAsset", body, ak, sk)
+            break
+        except HTTPException as exc:
+            is_last_attempt = attempt_index == len(retry_delays) - 1
+            if is_last_attempt or not _is_retryable_asset_create_error(exc):
+                raise
+    if result is None:
+        raise HTTPException(502, {"error": {
+            "code": "asset_registry_error",
+            "message": "Asset registry did not return a response",
+        }})
     asset_id = extract_asset_id(result)
     if not asset_id:
         raise HTTPException(502, {"error": {
@@ -2572,7 +3916,23 @@ async def internal_prepare_video_content(
     content = _validate_content_blocks(content, required=True)
     _validate_customer_asset_access(content, req.user_id)
     _validate_face_asset_allowlist(content)
-    return {"content": [block.model_dump(exclude_none=True) for block in content]}
+    response: dict[str, Any] = {
+        "content": [block.model_dump(exclude_none=True) for block in content],
+    }
+    client_model = (req.client_model or "").strip()
+    real_model = (req.upstream_model or MODEL_MAP.get(client_model, client_model)).strip()
+    if client_model and real_model:
+        user_dict = _refresh_user_endpoint_key_if_needed(dict(user), client_model, real_model)
+        upstream = _runtime_upstream_for_user(user_dict, client_model, real_model)
+        if upstream.get("upstream_model"):
+            response["upstream_model"] = upstream["upstream_model"]
+        if upstream.get("upstream_api_key"):
+            response["upstream_api_key"] = upstream["upstream_api_key"]
+        if upstream.get("endpoint_id"):
+            response["endpoint_id"] = upstream["endpoint_id"]
+        if upstream.get("endpoint_api_key_expires_at"):
+            response["endpoint_api_key_expires_at"] = upstream["endpoint_api_key_expires_at"]
+    return response
 
 
 def _asset_delete_request_response(row: sqlite3.Row | dict) -> dict:
@@ -2868,6 +4228,40 @@ def _invoice_response(row: sqlite3.Row | dict) -> dict:
     }
 
 
+def _customer_invoice_response(row: sqlite3.Row | dict) -> dict:
+    return {
+        "id": row["id"],
+        "invoice_no": row["invoice_no"],
+        "status": row["status"],
+        "period_start": row["period_start"],
+        "period_end": row["period_end"],
+        "currency": row["currency"],
+        "subtotal_usd": row["subtotal_usd"],
+        "discount_usd": row["discount_usd"],
+        "total_usd": row["total_usd"],
+        "task_count": row["task_count"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "paid_at": row["paid_at"],
+    }
+
+
+def _customer_invoice_item_response(row: sqlite3.Row | dict) -> dict:
+    return {
+        "id": row["id"],
+        "task_id": row["task_id"],
+        "item_type": row["item_type"],
+        "description": row["description"],
+        "client_model": row["client_model"],
+        "resolution": row["resolution"],
+        "duration": row["duration"],
+        "quantity": row["quantity"],
+        "unit_price_usd": row["unit_price_usd"],
+        "amount_usd": row["amount_usd"],
+        "created_at": row["created_at"],
+    }
+
+
 def _csv_response(filename: str, rows: list[dict], headers: list[str]) -> Response:
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=headers, extrasaction="ignore")
@@ -2877,6 +4271,124 @@ def _csv_response(filename: str, rows: list[dict], headers: list[str]) -> Respon
     return Response(
         output.getvalue(),
         media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _excel_column_name(index: int) -> str:
+    name = ""
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
+
+
+def _xlsx_response(filename: str, rows: list[dict], headers: list[str]) -> Response:
+    sheet_rows = [headers] + [[row.get(header, "") for header in headers] for row in rows]
+    xml_rows = []
+    for row_index, values in enumerate(sheet_rows, start=1):
+        cells = []
+        for column_index, value in enumerate(values, start=1):
+            ref = f"{_excel_column_name(column_index)}{row_index}"
+            text = xml_escape("" if value is None else str(value))
+            cells.append(f'<c r="{ref}" t="inlineStr"><is><t>{text}</t></is></c>')
+        xml_rows.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+    worksheet = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<sheetData>{"".join(xml_rows)}</sheetData>'
+        "</worksheet>"
+    )
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Invoice" sheetId="1" r:id="rId1"/></sheets>'
+        "</workbook>"
+    )
+    workbook_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
+        'Target="worksheets/sheet1.xml"/>'
+        "</Relationships>"
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="xl/workbook.xml"/>'
+        "</Relationships>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("xl/workbook.xml", workbook)
+        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        zf.writestr("xl/worksheets/sheet1.xml", worksheet)
+    return Response(
+        buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _pdf_escape(text: str) -> str:
+    return str(text).replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _pdf_response(filename: str, title: str, rows: list[dict], headers: list[str]) -> Response:
+    lines = [title, " | ".join(headers)]
+    lines.extend(" | ".join(str(row.get(header, "")) for header in headers) for row in rows)
+    drawing = ["BT", "/F1 9 Tf", "72 760 Td"]
+    for line in lines[:58]:
+        safe = _pdf_escape(line[:120]).encode("latin-1", "replace").decode("latin-1")
+        drawing.append(f"({safe}) Tj")
+        drawing.append("0 -12 Td")
+    drawing.append("ET")
+    stream = "\n".join(drawing).encode("latin-1", "replace")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    output = io.BytesIO()
+    output.write(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(output.tell())
+        output.write(f"{index} 0 obj\n".encode("ascii"))
+        output.write(obj)
+        output.write(b"\nendobj\n")
+    xref_at = output.tell()
+    output.write(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    output.write(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.write(f"{offset:010d} 00000 n \n".encode("ascii"))
+    output.write(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_at}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return Response(
+        output.getvalue(),
+        media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -3080,6 +4592,69 @@ async def get_pricing(user=Depends(optional_auth_user)):
     }
 
 
+@app.get("/v1/invoices")
+async def customer_list_invoices(
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    user=Depends(auth_user),
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    clauses = ["user_id=?"]
+    args: list[Any] = [user["id"]]
+    if status:
+        clauses.append("status=?")
+        args.append(status.strip().lower())
+    where = " AND ".join(clauses)
+    db = get_db()
+    try:
+        rows = db.execute(
+            f"""SELECT *
+                FROM invoices
+                WHERE {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?""",
+            args + [limit, offset],
+        ).fetchall()
+        total = db.execute(f"SELECT COUNT(*) AS total FROM invoices WHERE {where}", args).fetchone()["total"]
+    finally:
+        db.close()
+    return {
+        "data": [_customer_invoice_response(row) for row in rows],
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+    }
+
+
+@app.get("/v1/invoices/{invoice_id}")
+async def customer_get_invoice(invoice_id: str, user=Depends(auth_user)):
+    db = get_db()
+    try:
+        invoice = db.execute(
+            "SELECT * FROM invoices WHERE id=? AND user_id=?",
+            (invoice_id, user["id"]),
+        ).fetchone()
+        if not invoice:
+            raise HTTPException(404, {"error": {
+                "code": "invoice_not_found",
+                "message": "Invoice was not found",
+            }})
+        items = db.execute(
+            """SELECT *
+               FROM invoice_items
+               WHERE invoice_id=?
+               ORDER BY created_at ASC, id ASC""",
+            (invoice_id,),
+        ).fetchall()
+    finally:
+        db.close()
+    response = _customer_invoice_response(invoice)
+    response["items"] = [_customer_invoice_item_response(item) for item in items]
+    return response
+
+
 @app.post("/v1/uploads")
 async def upload_media(
     file: UploadFile = File(...),
@@ -3104,6 +4679,7 @@ async def upload_media(
         }})
 
     inferred_purpose = spec["purpose"]
+    face_allowlist = _effective_face_allowlist(face_allowlist, inferred_purpose)
     if purpose and purpose.strip().lower() != inferred_purpose:
         raise HTTPException(400, {"error": {
             "code": "invalid_upload_purpose",
@@ -3128,7 +4704,7 @@ async def upload_media(
         or (ASSET_AUTO_REGISTER_UPLOADS and inferred_purpose in ASSET_AUTO_REGISTER_PURPOSES)
     )
     if should_register_asset:
-        asset_info = _register_upload_asset(url, inferred_purpose, dict(user))
+        asset_info = await asyncio.to_thread(_register_upload_asset, url, inferred_purpose, dict(user))
     face_asset_note_to_store: Optional[str] = None
     if face_allowlist:
         face_asset_note_to_store = face_asset_note or f"self-service upload by {user['id']}"
@@ -3233,12 +4809,13 @@ async def upload_media_from_url(req: UploadFromUrlRequest, user=Depends(auth_use
         req.purpose,
         req.size_bytes,
     )
-    if req.face_allowlist and not FACE_ASSET_SELF_SERVICE:
+    face_allowlist = _effective_face_allowlist(req.face_allowlist, inferred_purpose)
+    if face_allowlist and not FACE_ASSET_SELF_SERVICE:
         raise HTTPException(403, {"error": {
             "code": "face_asset_self_service_disabled",
             "message": "Self-service face asset whitelisting is disabled",
         }})
-    if req.face_allowlist and inferred_purpose not in ("image", "video"):
+    if face_allowlist and inferred_purpose not in ("image", "video"):
         raise HTTPException(400, {"error": {
             "code": "invalid_face_asset_type",
             "message": "Only image and video uploads can be added to the face asset whitelist",
@@ -3247,14 +4824,14 @@ async def upload_media_from_url(req: UploadFromUrlRequest, user=Depends(auth_use
     upload_id = "upl_" + secrets.token_hex(8)
     asset_info: dict = {}
     should_register_asset = (
-        req.face_allowlist
+        face_allowlist
         or (ASSET_AUTO_REGISTER_UPLOADS and inferred_purpose in ASSET_AUTO_REGISTER_PURPOSES)
     )
     if should_register_asset:
-        asset_info = _register_upload_asset(req.url, inferred_purpose, dict(user))
+        asset_info = await asyncio.to_thread(_register_upload_asset, req.url, inferred_purpose, dict(user))
 
     face_asset_note_to_store: Optional[str] = None
-    if req.face_allowlist:
+    if face_allowlist:
         face_asset_note_to_store = req.face_asset_note or f"self-service URL upload by {user['id']}"
         row = _upsert_face_asset_record(
             asset_info["asset_url"],
@@ -3275,7 +4852,7 @@ async def upload_media_from_url(req: UploadFromUrlRequest, user=Depends(auth_use
         purpose=inferred_purpose,
         original_filename=req.original_filename or _filename_from_url(req.url),
         asset_info=asset_info,
-        face_asset_whitelisted=req.face_allowlist,
+        face_asset_whitelisted=face_allowlist,
         face_asset_label=req.face_asset_label,
         face_asset_note=face_asset_note_to_store,
     )
@@ -3372,7 +4949,7 @@ async def delete_upload(upload_id: str, user=Depends(auth_user)):
 
 
 @app.post("/v1/videos")
-async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
+async def create_video(req: CreateVideoRequest, request: Request, user=Depends(auth_user)):
     client_model = req.model
     if client_model not in MODEL_MAP:
         raise HTTPException(400, {"error": {
@@ -3404,6 +4981,18 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
     your_max_cost = _with_multiplier(est.max_cost_usd, price_multiplier)
 
     if user["balance_usd"] < your_max_cost:
+        _request_log(
+            user_id=user["id"],
+            task_id=None,
+            route="/v1/videos",
+            action="video_create_rejected",
+            model=client_model,
+            prompt_text=next((b.text for b in content if b.type == "text" and b.text), ""),
+            request_payload=req.model_dump(exclude_none=True),
+            status_code=402,
+            error_code="insufficient_balance",
+            request=request,
+        )
         raise HTTPException(402, {"error": {
             "code": "insufficient_balance",
             "message": f"This request needs ${your_max_cost:.4f} reserved, "
@@ -3411,8 +5000,9 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
             "needed_usd": your_max_cost, "balance_usd": user["balance_usd"],
         }})
 
-    user_endpoint_id = _user_byteplus_endpoint_id(user)
-    user_bp_key = (user.get("byteplus_api_key") or "").strip()
+    user_endpoint_id = _user_byteplus_endpoint_id_for_model(user, client_model, real_model)
+    user_endpoint_key = _endpoint_api_key_for_selected_model(user, client_model, real_model, user_endpoint_id)
+    user_bp_key = user_endpoint_key or (user.get("byteplus_api_key") or "").strip()
     bp_key = user_bp_key or UPSTREAM_API_KEY
     if UPSTREAM_AUTH_MODE in {"iam", "aksk", "access_key", "endpoint", "endpoint_api_key"}:
         if user_endpoint_id and user_bp_key:
@@ -3462,19 +5052,59 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
         r = await _create_upstream_task(payload, bp_key)
     except Exception:
         _refund_reserved_balance(user["id"], your_max_cost)
+        _request_log(
+            user_id=user["id"],
+            task_id=None,
+            route="/v1/videos",
+            action="video_create_failed",
+            model=client_model,
+            prompt_text=next((b.text for b in content if b.type == "text" and b.text), ""),
+            request_payload=payload,
+            status_code=502,
+            error_code="upstream_error",
+            request=request,
+        )
         raise HTTPException(502, {"error": {
             "code": "upstream_error",
             "message": "upstream request failed",
         }})
     if r.status_code != 200:
         _refund_reserved_balance(user["id"], your_max_cost)
+        upstream_info = _upstream_error_info(r)
         error = {
             "code": "upstream_error",
             "message": "upstream returned an error",
         }
-        request_id = _upstream_request_id(getattr(r, "headers", {}))
+        if upstream_info.get("upstream_message"):
+            error["message"] = upstream_info["upstream_message"]
+        if upstream_info.get("upstream_code"):
+            error["upstream_code"] = upstream_info["upstream_code"]
+        if upstream_info.get("status_code"):
+            error["upstream_status"] = upstream_info["status_code"]
+        request_id = _upstream_request_id(getattr(r, "headers", {})) or upstream_info.get("request_id")
         if request_id:
             error["request_id"] = request_id
+            upstream_info["request_id"] = request_id
+        log_payload = {
+            **payload,
+            "_upstream_error": upstream_info,
+        }
+        log_error_code = "upstream_error"
+        if upstream_info.get("upstream_code"):
+            log_error_code = f"upstream_error:{upstream_info['upstream_code']}"
+        _request_log(
+            user_id=user["id"],
+            task_id=None,
+            route="/v1/videos",
+            action="video_create_failed",
+            model=client_model,
+            prompt_text=next((b.text for b in content if b.type == "text" and b.text), ""),
+            request_payload=log_payload,
+            status_code=502,
+            error_code=log_error_code,
+            upstream_request_id=request_id,
+            request=request,
+        )
         raise HTTPException(502, {"error": error})
     upstream_id = (r.json() or {}).get("id")
     if not upstream_id:
@@ -3509,6 +5139,17 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
     finally:
         db.close()
 
+    _request_log(
+        user_id=user["id"],
+        task_id=our_id,
+        route="/v1/videos",
+        action="video_create_success",
+        model=client_model,
+        prompt_text=prompt_text,
+        request_payload=payload,
+        status_code=200,
+        request=request,
+    )
     return {
         "id": our_id, "model": client_model, "status": "queued",
         "estimated_cost_usd": estimated_to_user,
@@ -3524,6 +5165,9 @@ async def create_video(req: CreateVideoRequest, user=Depends(auth_user)):
 @app.get("/v1/videos/{vid}")
 async def get_video(vid: str, user=Depends(auth_user)):
     t = await _refresh_task(vid, user["id"])
+    if t.get("status") == "succeeded" and _cached_video_url_stale(t):
+        t = await _refresh_task(vid, user["id"], refresh_settled_video_url=True)
+    _schedule_video_persist_if_needed(t)
     return _format_task(t)
 
 
@@ -3540,13 +5184,19 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
     # 优先本地文件
     local = t.get("local_video_path")
     if local and Path(local).exists():
+        expires_at = _task_content_expires_at(t)
+        if expires_at and expires_at <= int(time.time()):
+            _clear_expired_local_video(db, t)
+            raise _content_expired_response()
         return FileResponse(
             local, media_type="video/mp4",
             headers={"Content-Disposition": f'inline; filename="{vid}.mp4"',
                      "Cache-Control": "private, max-age=86400"})
 
     # 没本地: 走 BytePlus 流
-    t = await _refresh_task(vid, user["id"])
+    now = int(time.time())
+    refresh_url = _cached_video_url_stale(t, now=now)
+    t = await _refresh_task(vid, user["id"], refresh_settled_video_url=refresh_url)
     if t["status"] != "succeeded":
         raise HTTPException(409, {"error": {"code": "not_ready",
                                             "message": f"video status: {t['status']}"}})
@@ -3554,6 +5204,9 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
     if not cached_url:
         raise HTTPException(404, {"error": {"code": "video_unavailable",
                                             "message": "video URL no longer available"}})
+    expires_at = _task_content_expires_at(t)
+    if expires_at and expires_at <= int(time.time()):
+        raise _content_expired_response()
 
     range_header = request.headers.get("range")
     upstream_headers_for_content = {"Range": range_header} if range_header else None
@@ -3566,12 +5219,31 @@ async def stream_video(request: Request, vid: str, user=Depends(auth_user)):
     upstream = await upstream_cm.__aenter__()
     if upstream.status_code < 200 or upstream.status_code >= 300:
         await upstream_cm.__aexit__(None, None, None)
-        raise HTTPException(502, {"error": {"code": "proxy_error",
-                                            "message": "upstream video unavailable"}})
+        refreshed = await _refresh_task(vid, user["id"], refresh_settled_video_url=True)
+        refreshed_url = refreshed.get("cached_video_url")
+        if refreshed_url and refreshed_url != cached_url:
+            upstream_cm = http.stream(
+                "GET",
+                refreshed_url,
+                headers=upstream_headers_for_content,
+                timeout=300,
+            )
+            upstream = await upstream_cm.__aenter__()
+            if 200 <= upstream.status_code < 300:
+                cached_url = refreshed_url
+            else:
+                await upstream_cm.__aexit__(None, None, None)
+                raise HTTPException(502, {"error": {"code": "proxy_error",
+                                                    "message": "upstream video unavailable"}})
+        else:
+            raise HTTPException(502, {"error": {"code": "proxy_error",
+                                                "message": "upstream video unavailable"}})
     if range_header and upstream.status_code != 206:
         await upstream_cm.__aexit__(None, None, None)
         raise HTTPException(502, {"error": {"code": "proxy_range_unsupported",
                                             "message": "upstream video did not return partial content"}})
+    if VIDEO_PERSIST_MODE != "proxy_only" and cached_url:
+        _schedule_video_persist_if_needed({**t, "cached_video_url": cached_url})
     status_code = 206 if upstream.status_code == 206 else 200
     response_headers = {
         "Content-Disposition": f'inline; filename="{vid}.mp4"',
@@ -3603,7 +5275,7 @@ async def head_video_content(request: Request, vid: str, user=Depends(auth_user)
         raise HTTPException(404, {"error": {"code": "not_found",
                                             "message": "video not found"}})
     t = dict(t)
-    t = await _refresh_task(vid, user["id"])
+    t = await _refresh_task(vid, user["id"], refresh_settled_video_url=_cached_video_url_stale(t))
     if t["status"] != "succeeded":
         raise HTTPException(409, {"error": {"code": "not_ready",
                                             "message": f"video status: {t['status']}"}})
@@ -3611,6 +5283,9 @@ async def head_video_content(request: Request, vid: str, user=Depends(auth_user)
     if not cached_url:
         raise HTTPException(404, {"error": {"code": "video_unavailable",
                                             "message": "video URL no longer available"}})
+    expires_at = _task_content_expires_at(t)
+    if expires_at and expires_at <= int(time.time()):
+        raise _content_expired_response()
 
     range_header = request.headers.get("range") or "bytes=0-0"
     upstream_headers_for_content = {"Range": range_header}
@@ -3637,6 +5312,34 @@ async def head_video_content(request: Request, vid: str, user=Depends(auth_user)
                 response_headers[header.title()] = upstream.headers[header]
         media_type = upstream.headers.get("content-type", "video/mp4").split(";", 1)[0]
         return Response(status_code=status_code, headers=response_headers, media_type=media_type)
+
+
+@app.delete("/v1/videos/history")
+async def clear_video_history(user=Depends(auth_user)):
+    db = get_db()
+    now = int(time.time())
+    try:
+        active = db.execute(
+            """SELECT COUNT(*) c FROM tasks
+               WHERE user_id=? AND customer_hidden_at IS NULL
+                 AND status NOT IN ('succeeded','failed','cancelled','expired')""",
+            (user["id"],),
+        ).fetchone()["c"]
+        cursor = db.execute(
+            """UPDATE tasks
+               SET customer_hidden_at=?, updated_at=?
+               WHERE user_id=? AND customer_hidden_at IS NULL
+                 AND status IN ('succeeded','failed','cancelled','expired')""",
+            (now, now, user["id"]),
+        )
+        hidden = max(0, cursor.rowcount or 0)
+    finally:
+        db.close()
+    return {
+        "hidden": hidden,
+        "kept_active": active,
+        "message": "History cleared. Active tasks are kept visible.",
+    }
 
 
 @app.delete("/v1/videos/{vid}")
@@ -3686,14 +5389,14 @@ async def list_videos(user=Depends(auth_user),
                       limit: int = 20, offset: int = 0,
                       status: Optional[str] = None):
     db = get_db()
-    sql = "SELECT * FROM tasks WHERE user_id=?"
+    sql = "SELECT * FROM tasks WHERE user_id=? AND customer_hidden_at IS NULL"
     args: list = [user["id"]]
     if status:
         sql += " AND status=?"; args.append(status)
     sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
     args.extend([limit, offset])
     rows = db.execute(sql, args).fetchall()
-    total = db.execute("SELECT COUNT(*) c FROM tasks WHERE user_id=?",
+    total = db.execute("SELECT COUNT(*) c FROM tasks WHERE user_id=? AND customer_hidden_at IS NULL",
                        (user["id"],)).fetchone()["c"]
     return {"data": [_format_task(dict(r)) for r in rows],
             "total": total, "limit": limit, "offset": offset}
@@ -4117,6 +5820,7 @@ async def admin_list_users():
         item["enabled_models"] = _enabled_models_for_user(item)
         item["api_key"] = _masked_secret(item.get("api_key"), prefix=6, suffix=6)
         item["byteplus_api_key"] = _masked_secret(item.get("byteplus_api_key"))
+        item["note"] = _scrub_user_note_for_response(item.get("note"))
         data.append(item)
     return {"data": data}
 
@@ -4138,6 +5842,7 @@ async def admin_get_user(user_id: str):
     # 脱敏 BytePlus key, 只显示前 8 后 4
     if u.get("byteplus_api_key"):
         u["byteplus_api_key"] = _masked_secret(u["byteplus_api_key"])
+    u["note"] = _scrub_user_note_for_response(u.get("note"))
     u.pop("password_hash", None)
 
     # 该用户最近 20 个任务
@@ -4175,6 +5880,42 @@ async def admin_get_upstream_iam_capabilities():
     return _upstream_capabilities()
 
 
+@app.get("/admin/upstream/endpoint-map-health", dependencies=[Depends(auth_admin)])
+async def admin_get_endpoint_map_health(
+    user_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    clauses = ["is_active=1"]
+    args: list[Any] = []
+    if user_id:
+        clauses.append("id=?")
+        args.append(user_id)
+    where = " AND ".join(clauses)
+    db = get_db()
+    try:
+        rows = db.execute(
+            f"""SELECT id, email, enabled_models, byteplus_api_key, note
+                FROM users
+                WHERE {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?""",
+            args + [limit, offset],
+        ).fetchall()
+        total = db.execute(f"SELECT COUNT(*) AS total FROM users WHERE {where}", args).fetchone()["total"]
+    finally:
+        db.close()
+    data = [_endpoint_map_health_for_user(row) for row in rows]
+    return {"data": data, "limit": limit, "offset": offset, "total": total}
+
+
+@app.get("/admin/upstream/quota-reminders", dependencies=[Depends(auth_admin)])
+async def admin_get_upstream_quota_reminders():
+    return _upstream_quota_reminders()
+
+
 @app.get("/admin/upstream/provision-jobs/{job_id}", dependencies=[Depends(auth_admin)])
 async def admin_get_upstream_provision_job(job_id: str):
     db = get_db()
@@ -4206,7 +5947,7 @@ async def admin_get_user_upstream(user_id: str):
                 "code": "user_not_found",
                 "message": "User was not found",
             }})
-        return _user_upstream_response(user)
+        return _user_upstream_response_with_health(user)
     finally:
         db.close()
 
@@ -4245,6 +5986,7 @@ async def admin_patch_user_upstream(user_id: str, req: UpdateUpstreamConfigReque
         updated = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     finally:
         db.close()
+    response = _user_upstream_response_with_health(updated)
     _audit_event(
         "admin_updated_customer_upstream_config",
         actor_user_id=None,
@@ -4254,9 +5996,12 @@ async def admin_patch_user_upstream(user_id: str, req: UpdateUpstreamConfigReque
         metadata={
             "fields": sorted(req.model_fields_set),
             "secret_changed": bool(req.endpoint_api_key),
+            "requires_endpoint_smoke": bool(req.endpoint_api_key),
+            "endpoint_map_health_status": response["endpoint_map_health"]["status"],
+            "endpoint_map_health_warnings": response["endpoint_map_health"]["warnings"],
         },
     )
-    return _user_upstream_response(updated)
+    return response
 
 
 @app.post("/admin/users/{user_id}/upstream/endpoint-key/rotate", dependencies=[Depends(auth_admin)])
@@ -4269,8 +6014,10 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
                 "code": "user_not_found",
                 "message": "User was not found",
             }})
-        endpoint_id = _user_byteplus_endpoint_id(dict(user))
-        if not endpoint_id:
+        user_dict = dict(user)
+        endpoint_ids = list(_user_byteplus_endpoint_map(user_dict).values())
+        endpoint_target: str | list[str] = endpoint_ids or _user_byteplus_endpoint_id(user_dict)
+        if not endpoint_target:
             raise HTTPException(400, {"error": {
                 "code": "endpoint_not_configured",
                 "message": "This user does not have a BytePlus endpoint id configured",
@@ -4279,7 +6026,7 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
         db.close()
 
     try:
-        issued = _get_endpoint_api_key(endpoint_id, req.duration_seconds)
+        issued = _get_endpoint_api_key(endpoint_target, req.duration_seconds)
     except Exception as exc:
         message = sanitize(str(exc))[:1000]
         _audit_event(
@@ -4288,7 +6035,11 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
             actor_type="admin",
             target_type="user",
             target_id=user_id,
-            metadata={"endpoint_id": endpoint_id, "error": message},
+            metadata={
+                "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+                "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+                "error": message,
+            },
         )
         raise HTTPException(502, {"error": {
             "code": "endpoint_key_rotation_failed",
@@ -4298,14 +6049,20 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
     db = get_db()
     try:
         user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        user_endpoint_map = _user_byteplus_endpoint_map(dict(user))
+        note_updates: dict[str, Any] = {
+            "upstream_mode": _user_note_json(dict(user)).get("upstream_mode") or "auto_dedicated",
+            "byteplus_endpoint_api_key_expires_at": int(issued["expires_at"]),
+            "byteplus_endpoint_key_last_rotated_at": int(time.time()),
+            "byteplus_endpoint_key_rotation_error": "",
+            "byteplus_endpoint_key_mode": issued.get("key_mode") or "multi",
+        }
+        endpoint_key_map = _model_endpoint_key_map_from_issued(issued, user_endpoint_map)
+        if endpoint_key_map:
+            note_updates["byteplus_endpoint_key_map"] = endpoint_key_map
         note = _merge_user_note_json(
             user["note"],
-            {
-                "upstream_mode": _user_note_json(dict(user)).get("upstream_mode") or "auto_dedicated",
-                "byteplus_endpoint_api_key_expires_at": int(issued["expires_at"]),
-                "byteplus_endpoint_key_last_rotated_at": int(time.time()),
-                "byteplus_endpoint_key_rotation_error": "",
-            },
+            note_updates,
         )
         db.execute(
             "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
@@ -4314,15 +6071,24 @@ async def admin_rotate_user_endpoint_key(user_id: str, req: EndpointKeyRotateReq
         updated = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     finally:
         db.close()
+    response = _user_upstream_response_with_health(updated)
     _audit_event(
         "admin_rotated_endpoint_api_key",
         actor_user_id=None,
         actor_type="admin",
         target_type="user",
         target_id=user_id,
-        metadata={"endpoint_id": endpoint_id, "expires_at": int(issued["expires_at"]), "secret_changed": True},
+        metadata={
+            "endpoint_id": endpoint_target if isinstance(endpoint_target, str) else "",
+            "endpoint_ids": endpoint_target if isinstance(endpoint_target, list) else [],
+            "expires_at": int(issued["expires_at"]),
+            "secret_changed": True,
+            "requires_endpoint_smoke": True,
+            "endpoint_map_health_status": response["endpoint_map_health"]["status"],
+            "endpoint_map_health_warnings": response["endpoint_map_health"]["warnings"],
+        },
     )
-    return _user_upstream_response(updated)
+    return response
 
 
 @app.post("/admin/users/{user_id}/upstream/provision", dependencies=[Depends(auth_admin)])
@@ -4341,13 +6107,15 @@ async def admin_provision_user_upstream(user_id: str, req: ProvisionUpstreamRequ
         planned = _planned_upstream_provision(user_dict, req)
         db.execute(
             """INSERT INTO upstream_provision_jobs
-               (id, user_id, status, customer_slug, request_json,
+               (id, user_id, status, current_step, progress, customer_slug, request_json,
                 result_json, error_message, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 job_id,
                 user_id,
                 "dry_run" if req.dry_run else "running",
+                "dry_run" if req.dry_run else "validate_customer",
+                100 if req.dry_run else 5,
                 planned["customer_slug"],
                 json.dumps(req.model_dump(), ensure_ascii=True, sort_keys=True),
                 json.dumps({"planned": planned}, ensure_ascii=True, sort_keys=True) if req.dry_run else None,
@@ -4363,19 +6131,25 @@ async def admin_provision_user_upstream(user_id: str, req: ProvisionUpstreamRequ
         db.close()
 
     try:
-        result = _provision_customer_upstream_resources(user_dict, req)
+        result = _call_customer_upstream_provisioner(
+            user_dict,
+            req,
+            on_step=lambda step, progress: _update_upstream_provision_job_step(job_id, step, progress),
+        )
         updated_user = _apply_upstream_result_to_user(
             user_dict,
             result,
             upstream_mode="auto_dedicated",
             rotation_enabled=req.rotate_endpoint_key,
         )
+        _update_upstream_provision_job_step(job_id, "persist_customer_config", 95)
         upstream_response = _user_upstream_response(updated_user)
         db = get_db()
         try:
             db.execute(
                 """UPDATE upstream_provision_jobs
-                   SET status='succeeded', result_json=?, updated_at=?, finished_at=?
+                   SET status='succeeded', current_step='persist_customer_config',
+                       progress=100, result_json=?, updated_at=?, finished_at=?
                    WHERE id=?""",
                 (
                     json.dumps(upstream_response, ensure_ascii=True, sort_keys=True),
@@ -4407,7 +6181,8 @@ async def admin_provision_user_upstream(user_id: str, req: ProvisionUpstreamRequ
         try:
             db.execute(
                 """UPDATE upstream_provision_jobs
-                   SET status='failed', error_message=?, updated_at=?, finished_at=?
+                   SET status='failed', current_step=COALESCE(current_step, 'failed'),
+                       error_message=?, updated_at=?, finished_at=?
                    WHERE id=?""",
                 (message, int(time.time()), int(time.time()), job_id),
             )
@@ -4627,7 +6402,7 @@ async def admin_update_user(user_id: str, req: UpdateUserReq):
         if not req.is_active:
             db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
     if req.note is not None:
-        fields.append("note=?"); args.append(req.note)
+        fields.append("note=?"); args.append(_merge_note_preserving_upstream_fields(u["note"], req.note))
     if req.new_password:
         fields.append("password_hash=?"); args.append(hash_password(req.new_password))
         fields.append("password_changed_at=?"); args.append(int(time.time()))
@@ -4736,7 +6511,10 @@ async def admin_reset_user_password(user_id: str, req: AdminPasswordResetRequest
         {"must_change_password": bool(req.force_change_on_next_login)},
     )
     db.execute(
-        "UPDATE users SET password_hash=?, password_changed_at=?, note=? WHERE id=?",
+        """UPDATE users
+           SET password_hash=?, password_changed_at=?, note=?,
+               failed_login_count=0, locked_until=NULL
+           WHERE id=?""",
         (hash_password(new_password), now, note, user_id),
     )
     db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
@@ -4799,12 +6577,67 @@ async def admin_disable_user(user_id: str):
     return {"ok": True, "id": user_id, "is_active": False}
 
 
+@app.get("/admin/invoices", dependencies=[Depends(auth_admin)])
+async def admin_list_invoices(
+    user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    period_start: Optional[int] = None,
+    period_end: Optional[int] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    clauses = ["1=1"]
+    args: list[Any] = []
+    if user_id:
+        clauses.append("inv.user_id=?")
+        args.append(user_id)
+    if status:
+        clauses.append("inv.status=?")
+        args.append(status.strip().lower())
+    if period_start is not None:
+        clauses.append("inv.period_end>=?")
+        args.append(period_start)
+    if period_end is not None:
+        clauses.append("inv.period_start<=?")
+        args.append(period_end)
+    where = " AND ".join(clauses)
+    db = get_db()
+    try:
+        rows = db.execute(
+            f"""SELECT inv.*, u.email AS user_email
+                FROM invoices inv
+                LEFT JOIN users u ON inv.user_id=u.id
+                WHERE {where}
+                ORDER BY inv.created_at DESC, inv.id DESC
+                LIMIT ? OFFSET ?""",
+            args + [limit, offset],
+        ).fetchall()
+        total = db.execute(
+            f"""SELECT COUNT(*) AS total
+                FROM invoices inv
+                LEFT JOIN users u ON inv.user_id=u.id
+                WHERE {where}""",
+            args,
+        ).fetchone()["total"]
+    finally:
+        db.close()
+    data = []
+    for row in rows:
+        item = _invoice_response(row)
+        item["user_email"] = row["user_email"]
+        data.append(item)
+    return {"data": data, "limit": limit, "offset": offset, "total": total}
+
+
 @app.get("/admin/invoices/{invoice_id}/export", dependencies=[Depends(auth_admin)])
 async def admin_export_invoice(invoice_id: str, format: str = "csv", view: str = "customer"):
-    if format != "csv":
+    format = (format or "csv").strip().lower()
+    if format not in {"csv", "xlsx", "pdf"}:
         raise HTTPException(400, {"error": {
             "code": "unsupported_invoice_export_format",
-            "message": "Only CSV export is available in this release",
+            "message": "format must be csv, xlsx, or pdf",
         }})
     if view not in {"customer", "internal"}:
         raise HTTPException(400, {"error": {
@@ -4855,8 +6688,13 @@ async def admin_export_invoice(invoice_id: str, format: str = "csv", view: str =
         target_id=invoice_id,
         metadata={"invoice_id": invoice_id, "view": view, "format": format},
     )
-    filename = f"invoice-{invoice['invoice_no']}-{view}.csv"
-    return _csv_response(filename, rows, headers)
+    base_filename = f"invoice-{invoice['invoice_no']}-{view}"
+    if format == "xlsx":
+        return _xlsx_response(f"{base_filename}.xlsx", rows, headers)
+    if format == "pdf":
+        title = f"Invoice {invoice['invoice_no']} ({view})"
+        return _pdf_response(f"{base_filename}.pdf", title, rows, headers)
+    return _csv_response(f"{base_filename}.csv", rows, headers)
 
 
 @app.post("/admin/invoices/{invoice_id}/mark-paid", dependencies=[Depends(auth_admin)])
@@ -4943,6 +6781,48 @@ async def admin_audit_events(limit: int = 50, offset: int = 0,
     }
 
 
+@app.get("/admin/request-logs", dependencies=[Depends(auth_admin)])
+async def admin_request_logs(limit: int = 100, offset: int = 0,
+                             user_id: Optional[str] = None,
+                             task_id: Optional[str] = None,
+                             action: Optional[str] = None,
+                             model: Optional[str] = None):
+    limit = max(1, min(int(limit or 100), 200))
+    offset = max(0, int(offset or 0))
+    where = []
+    args: list[Any] = []
+    if user_id:
+        where.append("l.user_id=?"); args.append(user_id)
+    if task_id:
+        where.append("l.task_id=?"); args.append(task_id)
+    if action:
+        where.append("l.action=?"); args.append(action)
+    if model:
+        where.append("l.model=?"); args.append(model)
+    where_sql = " WHERE " + " AND ".join(where) if where else ""
+    db = get_db()
+    rows = db.execute(
+        f"""SELECT l.*, u.email user_email
+              FROM request_logs l LEFT JOIN users u ON l.user_id=u.id
+              {where_sql}
+             ORDER BY l.created_at DESC, l.id DESC
+             LIMIT ? OFFSET ?""",
+        [*args, limit, offset],
+    ).fetchall()
+    total = db.execute(
+        f"""SELECT COUNT(*) c
+              FROM request_logs l
+              {where_sql}""",
+        args,
+    ).fetchone()["c"]
+    return {
+        "data": [dict(row) for row in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @app.get("/admin/stats", dependencies=[Depends(auth_admin)])
 async def admin_stats():
     db = get_db()
@@ -5013,6 +6893,128 @@ async def admin_list_tasks(limit: int = 50, offset: int = 0,
     return {"data": [dict(r) for r in rows]}
 
 
+@app.get("/admin/tasks/{task_id}", dependencies=[Depends(auth_admin)])
+async def admin_task_detail(task_id: str):
+    db = get_db()
+    row = db.execute(
+        """SELECT t.*, u.email user_email
+             FROM tasks t LEFT JOIN users u ON t.user_id=u.id
+            WHERE t.id=?""",
+        (task_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(404, {"error": {"code": "not_found", "message": "task not found"}})
+    out = dict(row)
+    out["admin_content_url"] = f"/admin/tasks/{task_id}/content"
+    _schedule_video_persist_if_needed(out)
+    return out
+
+
+@app.get("/admin/tasks/{task_id}/content", dependencies=[Depends(auth_admin)])
+async def admin_task_content(request: Request, task_id: str):
+    db = get_db()
+    row = db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, {"error": {"code": "not_found", "message": "task not found"}})
+    task = dict(row)
+
+    local = task.get("local_video_path")
+    if local and Path(local).exists():
+        expires_at = _task_content_expires_at(task)
+        if expires_at and expires_at <= int(time.time()):
+            _clear_expired_local_video(db, task)
+            raise _content_expired_response()
+        return FileResponse(
+            local,
+            media_type="video/mp4",
+            headers={
+                "Content-Disposition": f'inline; filename="{task_id}.mp4"',
+                "Cache-Control": "private, max-age=86400",
+            },
+        )
+
+    if task.get("status") != "succeeded":
+        raise HTTPException(409, {"error": {
+            "code": "not_ready",
+            "message": f"video status: {task.get('status')}",
+        }})
+    now = int(time.time())
+    if _cached_video_url_stale(task, now=now):
+        task = await _refresh_task(task_id, task["user_id"], refresh_settled_video_url=True)
+    cached_url = task.get("cached_video_url")
+    if not cached_url:
+        raise HTTPException(404, {"error": {
+            "code": "video_unavailable",
+            "message": "video URL no longer available",
+        }})
+    expires_at = _task_content_expires_at(task)
+    if expires_at and expires_at <= int(time.time()):
+        raise _content_expired_response()
+
+    range_header = request.headers.get("range")
+    upstream_headers_for_content = {"Range": range_header} if range_header else None
+    upstream_cm = http.stream(
+        "GET",
+        cached_url,
+        headers=upstream_headers_for_content,
+        timeout=300,
+    )
+    upstream = await upstream_cm.__aenter__()
+    if upstream.status_code < 200 or upstream.status_code >= 300:
+        await upstream_cm.__aexit__(None, None, None)
+        refreshed = await _refresh_task(task_id, task["user_id"], refresh_settled_video_url=True)
+        refreshed_url = refreshed.get("cached_video_url")
+        if refreshed_url and refreshed_url != cached_url:
+            upstream_cm = http.stream(
+                "GET",
+                refreshed_url,
+                headers=upstream_headers_for_content,
+                timeout=300,
+            )
+            upstream = await upstream_cm.__aenter__()
+            if 200 <= upstream.status_code < 300:
+                cached_url = refreshed_url
+            else:
+                await upstream_cm.__aexit__(None, None, None)
+                raise HTTPException(502, {"error": {
+                    "code": "proxy_error",
+                    "message": "upstream video unavailable",
+                }})
+        else:
+            raise HTTPException(502, {"error": {
+                "code": "proxy_error",
+                "message": "upstream video unavailable",
+            }})
+    if range_header and upstream.status_code != 206:
+        await upstream_cm.__aexit__(None, None, None)
+        raise HTTPException(502, {"error": {
+            "code": "proxy_range_unsupported",
+            "message": "upstream video did not return partial content",
+        }})
+    if VIDEO_PERSIST_MODE != "proxy_only" and cached_url:
+        _schedule_video_persist_if_needed({**task, "cached_video_url": cached_url})
+    status_code = 206 if upstream.status_code == 206 else 200
+    response_headers = {
+        "Content-Disposition": f'inline; filename="{task_id}.mp4"',
+        "Cache-Control": "private, max-age=3600",
+        "Accept-Ranges": upstream.headers.get("accept-ranges", "bytes"),
+    }
+    for header in ("content-length", "content-range"):
+        if upstream.headers.get(header):
+            response_headers[header.title()] = upstream.headers[header]
+    media_type = upstream.headers.get("content-type", "video/mp4").split(";", 1)[0]
+
+    async def gen() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
+                yield chunk
+        finally:
+            await upstream_cm.__aexit__(None, None, None)
+
+    return StreamingResponse(
+        gen(), media_type=media_type, status_code=status_code, headers=response_headers)
+
+
 # ─── 静态 HTML 页面 ──────────────────────────────────────────────
 @app.get("/")
 async def root_redirect():
@@ -5041,4 +7043,5 @@ async def serve_api_docs():
     docs = Path(__file__).parent / "API_DOCS.md"
     if not docs.exists():
         return JSONResponse({"error": "docs not deployed"}, status_code=404)
-    return FileResponse(docs, media_type="text/markdown; charset=utf-8")
+    text = docs.read_text(encoding="utf-8").replace("https://seedance3.eu", PUBLIC_BASE_URL)
+    return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")

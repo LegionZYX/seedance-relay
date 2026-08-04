@@ -277,6 +277,21 @@ class CustomerPricingTests(unittest.TestCase):
                 now,
             ),
         )
+        db.execute(
+            """INSERT INTO face_assets
+               (asset_url, asset_id, asset_type, label, note, is_active, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                "asset://asset-owned-by-other",
+                "asset-owned-by-other",
+                "image",
+                "owner face",
+                "",
+                1,
+                now,
+                now,
+            ),
+        )
         db.close()
 
         response = self.client.post(
@@ -338,6 +353,33 @@ class CustomerPricingTests(unittest.TestCase):
         self.assertEqual(standard_estimate.json()["markup_pct"], 0.3)
         self.assertEqual(vip_estimate.json()["markup_pct"], 0.8)
         self.assertGreater(vip_estimate.json()["max_cost_usd"], standard_estimate.json()["max_cost_usd"])
+
+    def test_seedance2_byteplus_rate_is_exposed_with_customer_price_multiplier(self):
+        created = self.client.post(
+            "/admin/users",
+            headers=self.admin_headers(),
+            json={
+                "email": "current-price@example.test",
+                "balance_usd": 100.0,
+                "password": "test-password",
+                "price_multiplier": 1.2,
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        user = created.json()
+
+        pricing = self.client.get(
+            "/v1/pricing",
+            headers={"Authorization": f"Bearer {user['api_key']}"},
+        )
+
+        self.assertEqual(pricing.status_code, 200, pricing.text)
+        model = pricing.json()["pricing"]["dreamina-seedance-2-0-260128"]["480p"]
+        self.assertEqual(model["upstream_price_no_video_ref_usd_per_1k"], 0.007)
+        self.assertEqual(model["price_no_video_ref_usd_per_1k"], 0.0084)
+        self.assertEqual(model["upstream_price_with_video_ref_usd_per_1k"], 0.0043)
+        self.assertEqual(model["price_with_video_ref_usd_per_1k"], 0.00516)
+        self.assertEqual(pricing.json()["price_multiplier"], 1.2)
 
     def test_video_task_snapshots_customer_markup_at_create_time(self):
         user = self.create_user("snapshot@example.test", markup_pct=0.8)

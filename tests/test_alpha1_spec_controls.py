@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -253,8 +254,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["held_usd"], 0.561497)
-        self.assertEqual(observed["balance"], 9.438503)
+        self.assertEqual(response.json()["held_usd"], 0.467914)
+        self.assertEqual(observed["balance"], 9.532086)
 
     def test_price_multiplier_backfill_does_not_rewrite_new_explicit_one(self):
         user = self.create_user("explicit-one@example.test", price_multiplier=1.0)
@@ -288,8 +289,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
                 5,
                 0,
                 "queued",
-                0.5,
-                0.561497,
+                0.425376,
+                0.467914,
                 0.2,
                 1.2,
                 0,
@@ -299,7 +300,7 @@ class Alpha1SpecControlTests(unittest.TestCase):
         )
         db.execute(
             "UPDATE users SET balance_usd=?, price_multiplier=? WHERE id=?",
-            (9.438503, 1.8, user["id"]),
+            (9.532086, 1.8, user["id"]),
         )
         db.close()
         self.fake_http.get_payload = {
@@ -317,8 +318,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertEqual(body["actual_cost_usd"], 0.01008)
-        self.assertNotEqual(body["actual_cost_usd"], 0.01512)
+        self.assertEqual(body["actual_cost_usd"], 0.0084)
+        self.assertNotEqual(body["actual_cost_usd"], 0.0126)
 
         db = self.server.get_db()
         row = db.execute(
@@ -330,10 +331,129 @@ class Alpha1SpecControlTests(unittest.TestCase):
             ("vid_settle_snapshot",),
         ).fetchone()
         db.close()
-        self.assertEqual(round(row["balance_usd"], 6), 9.98992)
-        self.assertEqual(task["actual_cost_usd"], 0.01008)
+        self.assertEqual(round(row["balance_usd"], 6), 9.9916)
+        self.assertEqual(task["actual_cost_usd"], 0.0084)
         self.assertEqual(task["price_multiplier"], 1.2)
         self.assertEqual(task["settled"], 1)
+
+    def test_settlement_prices_with_task_model_snapshot_not_upstream_echo_model(self):
+        user = self.create_user("settle-model-snapshot@example.test", price_multiplier=1.0)
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, has_video_ref, status,
+                estimated_cost_usd, held_usd, price_multiplier,
+                settled, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_settle_model_snapshot",
+                user["id"],
+                "upstream-settle-model-snapshot",
+                "dreamina-seedance-2-0-260128",
+                "dreamina-seedance-2-0-260128",
+                "720p",
+                10,
+                0,
+                "queued",
+                1.447446,
+                1.592191,
+                1.0,
+                0,
+                1,
+                1,
+            ),
+        )
+        db.close()
+        self.fake_http.get_payload = {
+            "status": "succeeded",
+            "model": "seedance-1-0-pro-fast-251015",
+            "resolution": "720p",
+            "usage": {"completion_tokens": 206778},
+            "content": {"video_url": "https://byteplus.example.test/private-video.mp4"},
+        }
+
+        response = self.client.get(
+            "/v1/videos/vid_settle_model_snapshot",
+            headers=self.auth_headers(user["api_key"]),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["actual_cost_usd"], 1.447446)
+
+        db = self.server.get_db()
+        task = db.execute(
+            "SELECT upstream_actual_cost_usd, actual_cost_usd, settled FROM tasks WHERE id=?",
+            ("vid_settle_model_snapshot",),
+        ).fetchone()
+        db.close()
+        self.assertEqual(task["upstream_actual_cost_usd"], 1.447446)
+        self.assertEqual(task["actual_cost_usd"], 1.447446)
+        self.assertEqual(task["settled"], 1)
+
+    def test_settlement_prices_dedicated_endpoint_from_client_model_snapshot(self):
+        user = self.create_user("settle-endpoint-model@example.test", price_multiplier=1.2)
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, has_video_ref, status,
+                estimated_cost_usd, held_usd, price_multiplier,
+                settled, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_settle_endpoint_model",
+                user["id"],
+                "upstream-settle-endpoint-model",
+                "ep-dedicated-seedance-2",
+                "dreamina-seedance-2-0-260128",
+                "720p",
+                5,
+                0,
+                "queued",
+                0.0084,
+                0.01,
+                1.2,
+                0,
+                1,
+                1,
+            ),
+        )
+        db.execute(
+            "UPDATE users SET balance_usd=? WHERE id=?",
+            (9.99, user["id"]),
+        )
+        db.close()
+        self.fake_http.get_payload = {
+            "status": "succeeded",
+            "model": "dreamina-seedance-2-0-260128",
+            "resolution": "720p",
+            "usage": {"completion_tokens": 1000},
+            "content": {"video_url": "https://byteplus.example.test/private-video.mp4"},
+        }
+
+        response = self.client.get(
+            "/v1/videos/vid_settle_endpoint_model",
+            headers=self.auth_headers(user["api_key"]),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["actual_cost_usd"], 0.0084)
+
+        db = self.server.get_db()
+        task = db.execute(
+            "SELECT upstream_actual_cost_usd, actual_cost_usd, settled FROM tasks WHERE id=?",
+            ("vid_settle_endpoint_model",),
+        ).fetchone()
+        balance = db.execute(
+            "SELECT balance_usd FROM users WHERE id=?",
+            (user["id"],),
+        ).fetchone()["balance_usd"]
+        db.close()
+        self.assertEqual(task["upstream_actual_cost_usd"], 0.007)
+        self.assertEqual(task["actual_cost_usd"], 0.0084)
+        self.assertEqual(task["settled"], 1)
+        self.assertEqual(round(balance, 6), 9.9916)
 
     def test_fastapi_terminal_refresh_refunds_only_once_at_db_boundary(self):
         user = self.create_user("fastapi-settle-once@example.test")
@@ -724,8 +844,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
                 5,
                 0,
                 "queued",
+                0.425376,
                 0.467914,
-                0.561497,
                 0.2,
                 1.2,
                 0,
@@ -1229,8 +1349,8 @@ class Alpha1SpecControlTests(unittest.TestCase):
                 5,
                 0,
                 "queued",
-                0.5,
-                0.561497,
+                0.425376,
+                0.467914,
                 0.2,
                 1.2,
                 0,
@@ -1362,6 +1482,213 @@ class Alpha1SpecControlTests(unittest.TestCase):
         self.assertNotIn("location", response.headers)
         self.assertNotIn("byteplus", response.text.lower())
         self.assertNotIn("private.mp4", response.text)
+
+    def test_video_content_refreshes_expired_cached_url_before_proxying(self):
+        user = self.create_user("expired-content-url@example.test")
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, status, settled, cached_video_url,
+                cached_video_url_until, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_expired_content_url",
+                user["id"],
+                "upstream-expired-content-url",
+                "dreamina-seedance-2-0-260128",
+                "dreamina-seedance-2-0-260128",
+                "480p",
+                5,
+                "succeeded",
+                1,
+                "https://byteplus.example.test/expired.mp4",
+                1,
+                1,
+                1,
+            ),
+        )
+        db.close()
+        self.fake_http.get_payload = {
+            "id": "upstream-expired-content-url",
+            "status": "succeeded",
+            "content": {"video_url": "https://byteplus.example.test/fresh.mp4"},
+        }
+
+        response = self.client.get(
+            "/v1/videos/vid_expired_content_url/content",
+            headers={**self.auth_headers(user["api_key"]), "Range": "bytes=3-5"},
+        )
+
+        self.assertEqual(response.status_code, 206, response.text)
+        self.assertEqual(response.content, b"345")
+        self.assertEqual(self.fake_http.streams[-1]["url"], "https://byteplus.example.test/fresh.mp4")
+        db = self.server.get_db()
+        row = db.execute(
+            "SELECT cached_video_url, cached_video_url_until FROM tasks WHERE id=?",
+            ("vid_expired_content_url",),
+        ).fetchone()
+        db.close()
+        self.assertEqual(row["cached_video_url"], "https://byteplus.example.test/fresh.mp4")
+        self.assertGreater(row["cached_video_url_until"], int(time.time()))
+
+    def test_signed_video_url_expiry_overrides_local_cache_guess(self):
+        signed_url = (
+            "https://ark-acg.example.test/video.mp4?"
+            "X-Tos-Date=20260611T173023Z&X-Tos-Expires=86400&X-Tos-Signature=secret"
+        )
+
+        expires_at = self.server._signed_video_url_expires_at(signed_url)
+
+        self.assertEqual(expires_at, 1781285423)
+        self.assertEqual(self.server._cache_until_for_video_url(signed_url, 1781199023), 1781281823)
+        self.assertEqual(self.server._cache_until_for_video_url(signed_url, 1781289000), 1781285423)
+
+    def test_video_content_refreshes_signed_expired_url_even_when_cached_until_future(self):
+        user = self.create_user("signed-expired-content-url@example.test")
+        expired_signed_url = (
+            "https://ark-acg.example.test/expired.mp4?"
+            "X-Tos-Date=20200101T000000Z&X-Tos-Expires=60&X-Tos-Signature=secret"
+        )
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, status, settled, cached_video_url,
+                cached_video_url_until, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_signed_expired_content_url",
+                user["id"],
+                "upstream-signed-expired-content-url",
+                "dreamina-seedance-2-0-260128",
+                "dreamina-seedance-2-0-260128",
+                "480p",
+                5,
+                "succeeded",
+                1,
+                expired_signed_url,
+                9999999999,
+                1,
+                1,
+            ),
+        )
+        db.close()
+        self.fake_http.get_payload = {
+            "id": "upstream-signed-expired-content-url",
+            "status": "succeeded",
+            "content": {"video_url": "https://byteplus.example.test/fresh.mp4"},
+        }
+
+        response = self.client.get(
+            "/v1/videos/vid_signed_expired_content_url/content",
+            headers={**self.auth_headers(user["api_key"]), "Range": "bytes=3-5"},
+        )
+
+        self.assertEqual(response.status_code, 206, response.text)
+        self.assertEqual(self.fake_http.gets[-1]["url"].split("/")[-1], "upstream-signed-expired-content-url")
+        self.assertEqual(self.fake_http.streams[-1]["url"], "https://byteplus.example.test/fresh.mp4")
+
+    def test_succeeded_task_response_includes_content_countdown(self):
+        user = self.create_user("content-countdown@example.test")
+        now = int(time.time())
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, status, settled, cached_video_url,
+                cached_video_url_until, local_video_expires_at, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_content_countdown",
+                user["id"],
+                "upstream-content-countdown",
+                "dreamina-seedance-2-0-260128",
+                "dreamina-seedance-2-0-260128",
+                "480p",
+                5,
+                "succeeded",
+                1,
+                "https://byteplus.example.test/video.mp4",
+                now + 86400,
+                now + 172800,
+                now,
+                now,
+            ),
+        )
+        db.close()
+
+        response = self.client.get(
+            "/v1/videos/vid_content_countdown",
+            headers=self.auth_headers(user["api_key"]),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["content_retention_seconds"], 172800)
+        self.assertGreater(body["content_seconds_remaining"], 172700)
+        self.assertFalse(body["content_expired"])
+        self.assertEqual(body["upstream_video_url"], "https://byteplus.example.test/video.mp4")
+        self.assertEqual(body["upstream_content_retention_seconds"], 86400)
+        self.assertGreater(body["upstream_content_seconds_remaining"], 86300)
+        self.assertFalse(body["upstream_content_expired"])
+
+    def test_local_video_expiry_is_capped_by_current_retention_policy(self):
+        now = int(time.time())
+        original_mode = self.server.VIDEO_PERSIST_MODE
+        try:
+            self.server.VIDEO_PERSIST_MODE = "local"
+            expires_at = self.server._task_content_expires_at({
+                "status": "succeeded",
+                "updated_at": now,
+                "local_video_expires_at": now + 604800,
+            })
+        finally:
+            self.server.VIDEO_PERSIST_MODE = original_mode
+
+        self.assertEqual(expires_at, now + 172800)
+
+    def test_expired_local_video_returns_clear_error_and_removes_file(self):
+        user = self.create_user("expired-local-video@example.test")
+        video_path = Path(self.tmp.name) / "videos" / "expired-local.mp4"
+        video_path.parent.mkdir(parents=True, exist_ok=True)
+        video_path.write_bytes(b"expired-video")
+        db = self.server.get_db()
+        db.execute(
+            """INSERT INTO tasks
+               (id, user_id, upstream_task_id, upstream_model, client_model,
+                resolution, duration, status, settled, cached_video_url,
+                cached_video_url_until, local_video_path, local_video_expires_at,
+                created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "vid_expired_local",
+                user["id"],
+                "upstream-expired-local",
+                "dreamina-seedance-2-0-260128",
+                "dreamina-seedance-2-0-260128",
+                "480p",
+                5,
+                "succeeded",
+                1,
+                "https://byteplus.example.test/video.mp4",
+                int(time.time()) + 3600,
+                str(video_path),
+                int(time.time()) - 1,
+                1,
+                1,
+            ),
+        )
+        db.close()
+
+        response = self.client.get(
+            "/v1/videos/vid_expired_local/content",
+            headers=self.auth_headers(user["api_key"]),
+        )
+
+        self.assertEqual(response.status_code, 410, response.text)
+        self.assertEqual(response.json()["detail"]["error"]["code"], "video_expired")
+        self.assertFalse(video_path.exists())
 
     def test_video_content_proxy_rejects_range_when_upstream_returns_full_body(self):
         user = self.create_user("proxy-range-unsupported@example.test")
@@ -1570,6 +1897,59 @@ class Alpha1SpecControlTests(unittest.TestCase):
         self.assertEqual(upload["asset_url"], "asset://asset-image")
         self.assertEqual(upload["face_asset_whitelisted"], 1)
 
+    def test_internal_runtime_prepare_refreshes_expiring_endpoint_key(self):
+        user = self.create_user("runtime-refresh-key@example.test")
+        now = int(time.time())
+        note = {
+            "upstream_mode": "auto_dedicated",
+            "byteplus_endpoint_map": {
+                "dreamina-seedance-2-0-260128": "ep-standard",
+                "seedance-1-5-pro-251215": "ep-seedance15",
+            },
+            "byteplus_endpoint_key_rotation_enabled": True,
+            "byteplus_endpoint_api_key_expires_at": now - 60,
+        }
+        db = self.server.get_db()
+        db.execute(
+            "UPDATE users SET byteplus_api_key=?, note=? WHERE id=?",
+            ("expired-endpoint-key", json.dumps(note), user["id"]),
+        )
+        db.close()
+
+        calls = []
+
+        def fake_get_endpoint_api_key(endpoint_ids, duration_seconds):
+            calls.append((endpoint_ids, duration_seconds))
+            return {"api_key": "fresh-endpoint-key", "expires_at": now + 2592000}
+
+        self.server._get_endpoint_api_key = fake_get_endpoint_api_key
+
+        response = self.client.post(
+            "/internal/runtime/prepare-video-content",
+            headers={"X-Runtime-Token": "runtime-internal-test"},
+            json={
+                "user_id": user["id"],
+                "client_model": "dreamina-seedance-2-0-260128",
+                "upstream_model": "dreamina-seedance-2-0-260128",
+                "content": [{"type": "text", "text": "A signed customer prompt passes through."}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["upstream_model"], "ep-standard")
+        self.assertEqual(body["upstream_api_key"], "fresh-endpoint-key")
+        self.assertEqual(set(calls[0][0]), {"ep-standard", "ep-seedance15"})
+        self.assertEqual(calls[0][1], 2592000)
+
+        db = self.server.get_db()
+        row = db.execute("SELECT byteplus_api_key, note FROM users WHERE id=?", (user["id"],)).fetchone()
+        db.close()
+        self.assertEqual(row["byteplus_api_key"], "fresh-endpoint-key")
+        stored_note = json.loads(row["note"])
+        self.assertEqual(stored_note["byteplus_endpoint_key_rotation_error"], "")
+        self.assertGreater(stored_note["byteplus_endpoint_key_next_rotate_at"], now)
+
     def test_internal_runtime_prepare_rejects_invalid_content_role(self):
         user = self.create_user("runtime-invalid-role@example.test")
 
@@ -1685,6 +2065,50 @@ class Alpha1SpecControlTests(unittest.TestCase):
             },
         )
         self.assertEqual(login.status_code, 200, login.text)
+
+    def test_admin_password_reset_clears_temporary_login_lock(self):
+        user = self.create_user("admin-reset-locked@example.test")
+        for _ in range(5):
+            failed = self.client.post(
+                "/auth/login",
+                json={"email": "admin-reset-locked@example.test", "password": "wrong-password"},
+            )
+            self.assertEqual(failed.status_code, 401, failed.text)
+
+        locked = self.client.post(
+            "/auth/login",
+            json={"email": "admin-reset-locked@example.test", "password": "initial-password"},
+        )
+        self.assertEqual(locked.status_code, 423, locked.text)
+
+        reset = self.client.post(
+            f"/admin/users/{user['id']}/password/reset",
+            headers=self.admin_headers(),
+            json={
+                "generate": False,
+                "new_password": "manual-reset-password",
+                "force_change_on_next_login": False,
+            },
+        )
+        self.assertEqual(reset.status_code, 200, reset.text)
+
+        login = self.client.post(
+            "/auth/login",
+            json={
+                "email": "admin-reset-locked@example.test",
+                "password": "manual-reset-password",
+            },
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+
+        db = self.server.get_db()
+        row = db.execute(
+            "SELECT failed_login_count, locked_until FROM users WHERE id=?",
+            (user["id"],),
+        ).fetchone()
+        db.close()
+        self.assertEqual(row["failed_login_count"], 0)
+        self.assertIsNone(row["locked_until"])
 
     def test_admin_api_key_rotation_revokes_existing_customer_sessions(self):
         user = self.create_user("admin-rotate-session@example.test")

@@ -25,13 +25,14 @@ Keep these values aligned:
 ```text
 Region: ap-southeast-1
 Project: default, or the same ProjectName used for both assets and endpoint
-Endpoint model: dreamina-seedance-2-0, version 260128
-Endpoint moderation: Skip, if operator policy allows this
+Endpoint model: follow Relay upstream config (`BYTEPLUS_ENDPOINT_MODEL_NAME` / `BYTEPLUS_ENDPOINT_MODEL_VERSION`; current verified example is dreamina-seedance-2-0, version 260128)
+Endpoint moderation: Skip
 Asset group project: same project as the endpoint
 ```
 
 The client-facing model remains the native BytePlus model id, for example
-`dreamina-seedance-2-0-260128`. In IAM upstream mode, Relay forwards the
+`dreamina-seedance-2-0-260128` or `dreamina-seedance-2-0-fast-260128`.
+In IAM upstream mode, Relay forwards the
 configured Endpoint ID to BytePlus while keeping the client model id in local
 task/accounting records.
 
@@ -67,6 +68,40 @@ sensitive.
 asset registration. Current BytePlus runtime SDKs require an API key for
 `content_generation.tasks.create`, so generation should use an endpoint-scoped
 key returned by IAM `GetApiKey`.
+
+## Endpoint Key Rotation Rules
+
+Changing a customer's endpoint API key does not affect upload asset
+registration. Uploads use the server IAM AK/SK plus the customer's
+`byteplus_project_name` and `modelark_asset_group_id`.
+
+Generation requests are affected by endpoint key changes. Relay chooses the
+endpoint id from `users.note.byteplus_endpoint_map` for the requested client
+model, then chooses the key in this order:
+
+1. `users.note.byteplus_endpoint_key_map` entry for the client model, upstream
+   model, or endpoint id.
+2. `users.byteplus_api_key`.
+3. Server fallback key only when the customer has no dedicated key.
+
+Before rotating or replacing a customer's endpoint key, verify:
+
+- every enabled customer model has an entry in `byteplus_endpoint_map`;
+- the new key is authorized for every endpoint id in that map;
+- when using per-endpoint keys, `byteplus_endpoint_key_map` covers every mapped
+  model or endpoint id;
+- the customer's `byteplus_project_name` and `modelark_asset_group_id` remain in
+  the same BytePlus project used by those endpoints.
+
+After the key change, run one smoke generation or provider-side permission probe
+for each enabled model. A key that works for one endpoint may still fail on a
+different endpoint in the same customer account.
+
+If the admin UI or upstream provision endpoint is unavailable, follow
+`docs/ops/alpha2-byteplus-dedicated-endpoint-ai-runbook.md`. That runbook records
+the verified fallback sequence: IAM `GetProject/CreateProject`, ModelArk
+`CreateEndpoint`, `GetEndpoint`, `CreateAssetGroup` with `GroupType=AIGC`, and
+`GetApiKey` with `ResourceType=endpoint`.
 
 For a temporary IP-only deployment, set `PUBLIC_DOMAIN` to the bare IP and
 `PUBLIC_BASE_URL` to `http://<ip>`. Switch `PUBLIC_BASE_URL` back to

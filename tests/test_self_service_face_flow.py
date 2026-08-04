@@ -31,6 +31,10 @@ class FakeHttp:
 
 class SelfServiceFaceFlowTests(unittest.TestCase):
     def setUp(self):
+        self._env_backup = {
+            key: os.environ.get(key)
+            for key in ("FACE_ASSET_ENFORCE", "FACE_ASSET_ALLOWLIST", "FACE_ASSET_SELF_SERVICE")
+        }
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         root = Path(self.tmp.name)
         os.environ["DB_PATH"] = str(root / "relay.sqlite")
@@ -72,6 +76,11 @@ class SelfServiceFaceFlowTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+        for key, value in self._env_backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     def auth_headers(self):
         return {"Authorization": f"Bearer {self.api_key}"}

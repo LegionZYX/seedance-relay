@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,33 @@ type Server struct {
 }
 
 var errInvalidAuth = errors.New("invalid auth credentials")
+
+var (
+	requestLogURLPattern           = regexp.MustCompile(`https?://[^\s"']+`)
+	requestLogAdminKeyPattern      = regexp.MustCompile(`(?i)\bx-admin-key\s*:\s*[A-Za-z0-9._~+/=-]+`)
+	requestLogAdminKeyAssign       = regexp.MustCompile(`(?i)\badmin[_-]?key\s*=\s*[A-Za-z0-9._~+/=-]+`)
+	requestLogAuthorizationPattern = regexp.MustCompile(`(?i)\bauthorization\s*:\s*bearer\s+[A-Za-z0-9._~+/=-]+`)
+	requestLogBearerPattern        = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
+	requestLogSessionPattern       = regexp.MustCompile(`(?i)\brelay_session=[^;\s]+`)
+	requestLogRelayKeyPattern      = regexp.MustCompile(`\bsk[-_][A-Za-z0-9][A-Za-z0-9_-]{8,}\b`)
+	requestLogUpstreamKeyPattern   = regexp.MustCompile(`(?i)\bark[\.\-][\w\.\-]+`)
+)
+
+var requestLogSecretKeywords = []string{
+	"password",
+	"api_key",
+	"admin_key",
+	"x_admin_key",
+	"relay_key",
+	"upstream_key",
+	"byteplus_key",
+	"token",
+	"session",
+	"authorization",
+	"cookie",
+	"credential",
+	"secret",
+}
 
 func NewServer(cfg config.Config, db *store.DB, client *http.Client) *Server {
 	if client == nil {
@@ -157,7 +185,36 @@ type createVideoRequest struct {
 }
 
 type customerNote struct {
-	BytePlusEndpointID string `json:"byteplus_endpoint_id"`
+	BytePlusEndpointID      string                         `json:"byteplus_endpoint_id"`
+	BytePlusEndpointMap     map[string]string              `json:"byteplus_endpoint_map"`
+	BytePlusEndpointKeyMap  map[string]endpointKeyMapEntry `json:"byteplus_endpoint_key_map"`
+	BytePlusEndpointKeyMode string                         `json:"byteplus_endpoint_key_mode"`
+}
+
+type endpointKeyMapEntry struct {
+	EndpointID string `json:"endpoint_id"`
+	APIKey     string `json:"api_key"`
+	ExpiresAt  any    `json:"expires_at"`
+}
+
+func (e *endpointKeyMapEntry) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err == nil {
+		e.APIKey = strings.TrimSpace(raw)
+		return nil
+	}
+	var obj struct {
+		EndpointID string `json:"endpoint_id"`
+		APIKey     string `json:"api_key"`
+		ExpiresAt  any    `json:"expires_at"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil
+	}
+	e.EndpointID = strings.TrimSpace(obj.EndpointID)
+	e.APIKey = strings.TrimSpace(obj.APIKey)
+	e.ExpiresAt = obj.ExpiresAt
+	return nil
 }
 
 var allowedContentBlockTypes = map[string]bool{
@@ -344,6 +401,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 	estimatedCost := round6(estimate.EstimatedCostUSD * priceMultiplier)
 	hold := round6(estimate.MaxCostUSD * priceMultiplier)
 	if user.BalanceUSD < hold {
+		s.logVideoCreate(r, user, req, "video_create_rejected", http.StatusPaymentRequired, "insufficient_balance", "", "", "")
 		writeJSON(w, http.StatusPaymentRequired, errorBodyWithFields(
 			"insufficient_balance",
 			"This request needs a larger reserved balance",
@@ -351,7 +409,11 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		))
 		return
 	}
-	upstreamKey, upstreamModel := s.customerUpstream(user, model.UpstreamID)
+	upstreamKey, upstreamModel, upstreamErr := s.customerUpstream(user, req.Model, model.UpstreamID)
+	if upstreamErr != nil {
+		writeJSON(w, http.StatusBadRequest, upstreamErr)
+		return
+	}
 	if upstreamKey == "" {
 		writeJSON(w, http.StatusServiceUnavailable, errorBody("no_upstream_key", "Service not configured: contact administrator"))
 		return
@@ -375,12 +437,18 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 			reserved = false
 		}
 	}
-	preparedContent, ok := s.prepareVideoContent(w, r, user, req)
+	preparedContent, preparedUpstreamKey, preparedUpstreamModel, ok := s.prepareVideoContent(w, r, user, req, model.UpstreamID)
 	if !ok {
 		refundReserved()
 		return
 	}
 	req.Content = preparedContent
+	if strings.TrimSpace(preparedUpstreamKey) != "" {
+		upstreamKey = strings.TrimSpace(preparedUpstreamKey)
+	}
+	if strings.TrimSpace(preparedUpstreamModel) != "" {
+		upstreamModel = strings.TrimSpace(preparedUpstreamModel)
+	}
 	upstreamPayload := map[string]any{
 		"model":      upstreamModel,
 		"content":    req.Content,
@@ -421,17 +489,16 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 	upstreamResp, err := s.client.Do(upstreamReq)
 	if err != nil {
 		refundReserved()
+		s.logVideoCreate(r, user, req, "video_create_failed", http.StatusBadGateway, "upstream_error", "", "", string(payloadBytes))
 		writeJSON(w, http.StatusBadGateway, errorBody("upstream_error", "upstream unavailable"))
 		return
 	}
 	defer upstreamResp.Body.Close()
 	if upstreamResp.StatusCode != http.StatusOK {
 		refundReserved()
-		extra := map[string]string{}
-		if requestID := upstreamRequestID(upstreamResp.Header); requestID != "" {
-			extra["request_id"] = requestID
-		}
-		writeJSON(w, http.StatusBadGateway, errorBodyWithMetadata("upstream_error", "upstream returned an error", extra))
+		extra, logCode := safeUpstreamErrorMetadata(upstreamResp)
+		s.logVideoCreate(r, user, req, "video_create_failed", http.StatusBadGateway, logCode, "", stringFromAny(extra["request_id"]), string(payloadBytes))
+		writeJSON(w, http.StatusBadGateway, errorBodyWithFields("upstream_error", "upstream returned an error", extra))
 		return
 	}
 	var upstreamBody struct {
@@ -480,6 +547,7 @@ func (s *Server) createVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reserved = false
+	s.logVideoCreate(r, user, req, "video_create_success", http.StatusOK, "", taskID, "", string(payloadBytes))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":                          taskID,
 		"model":                       req.Model,
@@ -519,22 +587,24 @@ func (s *Server) listVideos(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) prepareVideoContent(w http.ResponseWriter, r *http.Request, user *store.User, req createVideoRequest) ([]map[string]any, bool) {
+func (s *Server) prepareVideoContent(w http.ResponseWriter, r *http.Request, user *store.User, req createVideoRequest, upstreamModel string) ([]map[string]any, string, string, bool) {
 	if s.cfg.RuntimeInternalToken == "" {
 		if realPersonMode(req.ExtraBody) {
 			writeJSON(w, http.StatusConflict, errorBody("real_person_not_supported", "real_person_mode requires runtime control-plane delegation"))
-			return nil, false
+			return nil, "", "", false
 		}
-		return req.Content, true
+		return req.Content, "", "", true
 	}
 	payloadBytes, err := json.Marshal(map[string]any{
-		"user_id":    user.ID,
-		"content":    req.Content,
-		"extra_body": req.ExtraBody,
+		"user_id":        user.ID,
+		"content":        req.Content,
+		"extra_body":     req.ExtraBody,
+		"client_model":   req.Model,
+		"upstream_model": upstreamModel,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody("invalid_payload", "Invalid request payload"))
-		return nil, false
+		return nil, "", "", false
 	}
 	prepareReq, err := http.NewRequestWithContext(
 		r.Context(),
@@ -544,32 +614,36 @@ func (s *Server) prepareVideoContent(w http.ResponseWriter, r *http.Request, use
 	)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("prepare_error", "invalid control-plane URL"))
-		return nil, false
+		return nil, "", "", false
 	}
 	prepareReq.Header.Set("Content-Type", "application/json")
 	prepareReq.Header.Set("X-Runtime-Token", s.cfg.RuntimeInternalToken)
 	resp, err := s.client.Do(prepareReq)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, errorBody("prepare_error", "control-plane prepare failed"))
-		return nil, false
+		return nil, "", "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		writeJSON(w, resp.StatusCode, errorBody("prepare_error", "control-plane rejected video content"))
-		return nil, false
+		body, _ := io.ReadAll(resp.Body)
+		extra := safeControlPlaneErrorMetadata(body)
+		writeJSON(w, resp.StatusCode, errorBodyWithFields("prepare_error", "control-plane rejected video content", extra))
+		return nil, "", "", false
 	}
 	var prepared struct {
-		Content []map[string]any `json:"content"`
+		Content        []map[string]any `json:"content"`
+		UpstreamAPIKey string           `json:"upstream_api_key"`
+		UpstreamModel  string           `json:"upstream_model"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&prepared); err != nil {
 		writeJSON(w, http.StatusBadGateway, errorBody("prepare_error", "invalid control-plane prepare response"))
-		return nil, false
+		return nil, "", "", false
 	}
 	if len(prepared.Content) == 0 {
 		writeJSON(w, http.StatusBadGateway, errorBody("prepare_error", "control-plane returned empty content"))
-		return nil, false
+		return nil, "", "", false
 	}
-	return prepared.Content, true
+	return prepared.Content, prepared.UpstreamAPIKey, prepared.UpstreamModel, true
 }
 
 func (s *Server) getVideo(w http.ResponseWriter, r *http.Request) {
@@ -604,7 +678,10 @@ func (s *Server) getVideo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) refreshTask(r *http.Request, user *store.User, task *store.Task) (*store.Task, error) {
-	upstreamKey, _ := s.customerUpstream(user, task.UpstreamModel)
+	upstreamKey, _, upstreamErr := s.customerUpstream(user, task.ClientModel, task.UpstreamModel)
+	if upstreamErr != nil {
+		return task, nil
+	}
 	if upstreamKey == "" {
 		return task, nil
 	}
@@ -657,7 +734,7 @@ func (s *Server) refreshTask(r *http.Request, user *store.User, task *store.Task
 		actualCost := 0.0
 		if newStatus == "succeeded" {
 			resolution := taskResolution(task)
-			model := first(upstream.Model, task.UpstreamModel)
+			model := taskPricingModel(task, upstream.Model)
 			upstreamCost = pricing.ActualVideoCost(model, resolution, completionTokens, task.HasVideoRef)
 			actualCost = round6(upstreamCost * taskPriceMultiplier(task))
 		}
@@ -742,6 +819,33 @@ func (s *Server) cancelUpstreamTask(r *http.Request, upstreamKey, upstreamTaskID
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
+}
+
+func (s *Server) logVideoCreate(r *http.Request, user *store.User, req createVideoRequest, action string, statusCode int, errorCode, taskID, upstreamRequestID, payload string) {
+	if user == nil {
+		return
+	}
+	payload = sanitizeRequestLogPayload(payload, req)
+	logID, err := newRequestLogID()
+	if err != nil {
+		return
+	}
+	_ = s.db.InsertRequestLog(store.RequestLogParams{
+		ID:                logID,
+		UserID:            user.ID,
+		TaskID:            taskID,
+		Route:             "/v1/videos",
+		Action:            action,
+		Model:             req.Model,
+		PromptText:        truncate(sanitizeRequestLogString(promptText(req.Content)), 500),
+		RequestPayload:    truncate(payload, 20000),
+		StatusCode:        statusCode,
+		ErrorCode:         errorCode,
+		UpstreamRequestID: upstreamRequestID,
+		IP:                requestIP(r),
+		UserAgent:         truncate(r.UserAgent(), 500),
+		CreatedAt:         time.Now().Unix(),
+	})
 }
 
 func (s *Server) proxyVideo(w http.ResponseWriter, r *http.Request, taskID, upstreamURL string) {
@@ -980,6 +1084,145 @@ func upstreamRequestID(headers http.Header) string {
 	return ""
 }
 
+func safeUpstreamErrorMetadata(resp *http.Response) (map[string]any, string) {
+	extra := map[string]any{"upstream_status": resp.StatusCode}
+	if requestID := upstreamRequestID(resp.Header); requestID != "" {
+		extra["request_id"] = requestID
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	upstreamCode, upstreamType, upstreamMessage := parseNestedError(body)
+	if upstreamCode != "" {
+		extra["upstream_code"] = upstreamCode
+	}
+	if upstreamType != "" {
+		extra["upstream_type"] = upstreamType
+	}
+	if upstreamMessage != "" {
+		extra["upstream_message"] = upstreamMessage
+	}
+	logCode := "upstream_error"
+	if upstreamCode != "" {
+		logCode = "upstream_error:" + truncate(upstreamCode, 100)
+	}
+	return extra, logCode
+}
+
+func safeControlPlaneErrorMetadata(body []byte) map[string]any {
+	extra := map[string]any{}
+	code, typ, message := parseNestedError(body)
+	if code != "" {
+		extra["upstream_code"] = code
+	}
+	if typ != "" {
+		extra["upstream_type"] = typ
+	}
+	if message != "" {
+		extra["upstream_message"] = message
+	}
+	return extra
+}
+
+func parseNestedError(body []byte) (string, string, string) {
+	var decoded map[string]any
+	if len(body) == 0 || json.Unmarshal(body, &decoded) != nil {
+		return "", "", ""
+	}
+	errObj, _ := decoded["error"].(map[string]any)
+	if errObj == nil {
+		if detail, _ := decoded["detail"].(map[string]any); detail != nil {
+			errObj, _ = detail["error"].(map[string]any)
+		}
+	}
+	if errObj == nil {
+		return "", "", ""
+	}
+	code := safeMetadataString(errObj["code"], 120)
+	typ := safeMetadataString(errObj["type"], 120)
+	message := safeMetadataString(errObj["message"], 500)
+	return code, typ, message
+}
+
+func safeMetadataString(value any, limit int) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return truncate(sanitizeRequestLogString(strings.TrimSpace(text)), limit)
+}
+
+func stringFromAny(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func requestLogSecretKey(key string) bool {
+	lowered := strings.ToLower(key)
+	normalized := strings.Trim(regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(lowered, "_"), "_")
+	for _, word := range requestLogSecretKeywords {
+		if strings.Contains(lowered, word) || strings.Contains(normalized, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeRequestLogString(value string) string {
+	value = requestLogURLPattern.ReplaceAllString(value, "<redacted-url>")
+	value = requestLogAdminKeyPattern.ReplaceAllString(value, "X-Admin-Key: <redacted>")
+	value = requestLogAdminKeyAssign.ReplaceAllString(value, "ADMIN_KEY=<redacted>")
+	value = requestLogAuthorizationPattern.ReplaceAllString(value, "Authorization: Bearer <redacted>")
+	value = requestLogBearerPattern.ReplaceAllString(value, "Bearer <redacted>")
+	value = requestLogSessionPattern.ReplaceAllString(value, "relay_session=<redacted>")
+	value = requestLogRelayKeyPattern.ReplaceAllString(value, "<redacted-relay-key>")
+	value = requestLogUpstreamKeyPattern.ReplaceAllString(value, "<redacted-upstream-key>")
+	return value
+}
+
+func sanitizeRequestLogValue(value any, key string) any {
+	if requestLogSecretKey(key) {
+		return "<redacted>"
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for childKey, childValue := range typed {
+			out[childKey] = sanitizeRequestLogValue(childValue, childKey)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, sanitizeRequestLogValue(item, ""))
+		}
+		return out
+	case []map[string]any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, sanitizeRequestLogValue(item, ""))
+		}
+		return out
+	case string:
+		return sanitizeRequestLogString(typed)
+	default:
+		return typed
+	}
+}
+
+func sanitizeRequestLogPayload(payload string, fallback any) string {
+	var decoded any
+	if strings.TrimSpace(payload) != "" && json.Unmarshal([]byte(payload), &decoded) == nil {
+		if encoded, err := json.Marshal(sanitizeRequestLogValue(decoded, "")); err == nil {
+			return string(encoded)
+		}
+	}
+	if fallback != nil {
+		if encoded, err := json.Marshal(sanitizeRequestLogValue(fallback, "")); err == nil {
+			return string(encoded)
+		}
+	}
+	return sanitizeRequestLogString(payload)
+}
+
 func first(value, fallback string) string {
 	if value != "" {
 		return value
@@ -997,6 +1240,25 @@ func newTaskID() (string, error) {
 		return "", err
 	}
 	return "vid_" + hex.EncodeToString(bytes[:]), nil
+}
+
+func newRequestLogID() (string, error) {
+	var bytes [12]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	return "log_" + hex.EncodeToString(bytes[:]), nil
+}
+
+func requestIP(r *http.Request) string {
+	forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0])
+	if forwarded != "" {
+		return truncate(forwarded, 128)
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return truncate(host, 128)
+	}
+	return truncate(r.RemoteAddr, 128)
 }
 
 func realPersonMode(extra map[string]any) bool {
@@ -1108,6 +1370,21 @@ func taskPriceMultiplier(task *store.Task) float64 {
 	return 1.0
 }
 
+func taskPricingModel(task *store.Task, upstreamEchoModel string) string {
+	if task != nil && strings.TrimSpace(task.ClientModel) != "" {
+		if model, ok := models.Lookup(task.ClientModel); ok {
+			return model.UpstreamID
+		}
+	}
+	if task != nil && strings.TrimSpace(task.UpstreamModel) != "" {
+		if model, ok := models.Lookup(task.UpstreamModel); ok {
+			return model.UpstreamID
+		}
+		return strings.TrimSpace(task.UpstreamModel)
+	}
+	return strings.TrimSpace(upstreamEchoModel)
+}
+
 func modelAccess(user *store.User) []string {
 	if user == nil || !user.EnabledModelsSet {
 		return nil
@@ -1115,7 +1392,7 @@ func modelAccess(user *store.User) []string {
 	return user.EnabledModels
 }
 
-func (s *Server) customerUpstream(user *store.User, fallbackModel string) (string, string) {
+func (s *Server) customerUpstream(user *store.User, clientModel, fallbackModel string) (string, string, map[string]any) {
 	upstreamKey := strings.TrimSpace(s.cfg.UpstreamAPIKey)
 	upstreamModel := fallbackModel
 	customerKey := ""
@@ -1125,9 +1402,25 @@ func (s *Server) customerUpstream(user *store.User, fallbackModel string) (strin
 	if user != nil && user.Note.Valid && strings.TrimSpace(user.Note.String) != "" {
 		var note customerNote
 		if err := json.Unmarshal([]byte(user.Note.String), &note); err == nil {
-			if endpointID := strings.TrimSpace(note.BytePlusEndpointID); endpointID != "" {
+			if endpointID, hasMap, ok := selectedEndpointID(note, clientModel, fallbackModel); hasMap {
+				if !ok {
+					return "", "", errorBodyWithFields(
+						"endpoint_not_configured_for_model",
+						"This dedicated customer endpoint is not configured for the selected model",
+						map[string]any{"model": clientModel},
+					)
+				}
 				upstreamModel = endpointID
-				if customerKey != "" {
+				if endpointKey := endpointAPIKeyForSelectedModel(note, clientModel, fallbackModel, endpointID); endpointKey != "" {
+					upstreamKey = endpointKey
+				} else if customerKey != "" {
+					upstreamKey = customerKey
+				}
+			} else if endpointID := strings.TrimSpace(note.BytePlusEndpointID); endpointID != "" {
+				upstreamModel = endpointID
+				if endpointKey := endpointAPIKeyForSelectedModel(note, clientModel, fallbackModel, endpointID); endpointKey != "" {
+					upstreamKey = endpointKey
+				} else if customerKey != "" {
 					upstreamKey = customerKey
 				}
 			}
@@ -1136,7 +1429,50 @@ func (s *Server) customerUpstream(user *store.User, fallbackModel string) (strin
 	if upstreamModel == fallbackModel && customerKey != "" && !isEndpointAuthMode(s.cfg.UpstreamAuthMode) {
 		upstreamKey = customerKey
 	}
-	return upstreamKey, upstreamModel
+	return upstreamKey, upstreamModel, nil
+}
+
+func selectedEndpointID(note customerNote, clientModel, fallbackModel string) (string, bool, bool) {
+	endpointMap := cleanStringMap(note.BytePlusEndpointMap)
+	if len(endpointMap) == 0 {
+		return "", false, false
+	}
+	for _, candidate := range []string{clientModel, fallbackModel} {
+		if endpointID := endpointMap[strings.TrimSpace(candidate)]; endpointID != "" {
+			return endpointID, true, true
+		}
+	}
+	return "", true, false
+}
+
+func endpointAPIKeyForSelectedModel(note customerNote, clientModel, fallbackModel, endpointID string) string {
+	if len(note.BytePlusEndpointKeyMap) == 0 {
+		return ""
+	}
+	for _, candidate := range []string{clientModel, fallbackModel, endpointID} {
+		entry, ok := note.BytePlusEndpointKeyMap[strings.TrimSpace(candidate)]
+		if ok && strings.TrimSpace(entry.APIKey) != "" {
+			return strings.TrimSpace(entry.APIKey)
+		}
+	}
+	for _, entry := range note.BytePlusEndpointKeyMap {
+		if endpointID != "" && strings.TrimSpace(entry.EndpointID) == endpointID && strings.TrimSpace(entry.APIKey) != "" {
+			return strings.TrimSpace(entry.APIKey)
+		}
+	}
+	return ""
+}
+
+func cleanStringMap(raw map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range raw {
+		k := strings.TrimSpace(key)
+		v := strings.TrimSpace(value)
+		if k != "" && v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func isEndpointAuthMode(mode string) bool {

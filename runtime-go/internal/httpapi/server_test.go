@@ -326,7 +326,7 @@ func TestEstimateAppliesCustomerPriceMultiplier(t *testing.T) {
 	defer server.Close()
 	defer db.Close()
 
-	if err := db.InsertTestUserWithBalance("sk-estimate", "u_estimate", "", 0.55, 1.2); err != nil {
+	if err := db.InsertTestUserWithBalance("sk-estimate", "u_estimate", "", 0.45, 1.2); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 
@@ -357,10 +357,10 @@ func TestEstimateAppliesCustomerPriceMultiplier(t *testing.T) {
 	if payload["estimated_tokens"].(float64) != 50640 {
 		t.Fatalf("estimated_tokens = %v", payload["estimated_tokens"])
 	}
-	if payload["estimated_cost_usd"].(float64) != 0.510451 {
+	if payload["estimated_cost_usd"].(float64) != 0.425376 {
 		t.Fatalf("estimated_cost_usd = %v", payload["estimated_cost_usd"])
 	}
-	if payload["max_cost_usd"].(float64) != 0.561497 {
+	if payload["max_cost_usd"].(float64) != 0.467914 {
 		t.Fatalf("max_cost_usd = %v", payload["max_cost_usd"])
 	}
 	if payload["price_multiplier"].(float64) != 1.2 {
@@ -369,7 +369,7 @@ func TestEstimateAppliesCustomerPriceMultiplier(t *testing.T) {
 	if payload["can_afford"].(bool) {
 		t.Fatalf("can_afford should be false for balance below max hold")
 	}
-	if payload["shortage_usd"].(float64) != 0.011497 {
+	if payload["shortage_usd"].(float64) != 0.017914 {
 		t.Fatalf("shortage_usd = %v", payload["shortage_usd"])
 	}
 }
@@ -694,18 +694,208 @@ func TestCreateVideoPostsNativePayloadAndHoldsBalance(t *testing.T) {
 	if gotPayload["ratio"] != "9:16" {
 		t.Fatalf("upstream ratio = %v", gotPayload["ratio"])
 	}
-	if balanceAtUpstream != 9.438503 {
+	if balanceAtUpstream != 9.532086 {
 		t.Fatalf("balance at upstream = %v", balanceAtUpstream)
 	}
-	if payload["held_usd"].(float64) != 0.561497 {
+	if payload["held_usd"].(float64) != 0.467914 {
 		t.Fatalf("held_usd = %v", payload["held_usd"])
 	}
 	balance, err := db.TestUserBalance("u_create")
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.438503 {
+	if balance != 9.532086 {
 		t.Fatalf("balance = %v", balance)
+	}
+}
+
+func TestCreateVideoWritesSuccessRequestLog(t *testing.T) {
+	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-log-success"})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey("sk-log-success", "u_log_success", "", 10, 1.0, "ark-log-success"); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"A logged product demo."}],
+		"resolution":"480p",
+		"ratio":"16:9",
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-log-success")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "runtime-log-test")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%v", resp.StatusCode, body)
+	}
+
+	log, err := db.TestLatestRequestLog("u_log_success", "video_create_success")
+	if err != nil {
+		t.Fatalf("latest log: %v", err)
+	}
+	if log.TaskID.String != body["id"].(string) {
+		t.Fatalf("log task id = %q, want %q", log.TaskID.String, body["id"].(string))
+	}
+	if log.Model.String != "dreamina-seedance-2-0-260128" {
+		t.Fatalf("log model = %q", log.Model.String)
+	}
+	if log.PromptText.String != "A logged product demo." {
+		t.Fatalf("log prompt = %q", log.PromptText.String)
+	}
+	if log.StatusCode.Int64 != 200 {
+		t.Fatalf("log status = %d", log.StatusCode.Int64)
+	}
+}
+
+func TestCreateVideoRequestLogRedactsSecretLikePayloadFields(t *testing.T) {
+	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-secret-log"})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithBalance("sk-log-secret", "u_log_secret", "", 10, 1.0); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[
+			{"type":"text","text":"A secret payload log."},
+			{
+				"type":"image_url",
+				"image_url":{"url":"https://cdn.example.com/ref.png?token=sk-should-not-persist"},
+				"role":"reference_image"
+			}
+		],
+		"resolution":"480p",
+		"ratio":"16:9",
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-log-secret")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+
+	log, err := db.TestLatestRequestLog("u_log_secret", "video_create_success")
+	if err != nil {
+		t.Fatalf("latest log: %v", err)
+	}
+	payload := log.RequestPayload.String
+	for _, leaked := range []string{"sk-should-not-persist", "cdn.example.com"} {
+		if strings.Contains(payload, leaked) {
+			t.Fatalf("request log payload leaked %q: %s", leaked, payload)
+		}
+	}
+	if !strings.Contains(payload, `\u003credacted-url\u003e`) && !strings.Contains(payload, `<redacted-url>`) {
+		t.Fatalf("request log payload was not redacted: %s", payload)
+	}
+}
+
+func TestCreateVideoWritesFailedRequestLogForUpstreamError(t *testing.T) {
+	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "req-upstream-log-failed")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "boom"})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithBalance("sk-log-failed", "u_log_failed", "", 10, 1.0); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"A failed logged request."}],
+		"resolution":"480p",
+		"ratio":"16:9",
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-log-failed")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+
+	log, err := db.TestLatestRequestLog("u_log_failed", "video_create_failed")
+	if err != nil {
+		t.Fatalf("latest log: %v", err)
+	}
+	if log.ErrorCode.String != "upstream_error" {
+		t.Fatalf("error code = %q", log.ErrorCode.String)
+	}
+	if log.UpstreamRequestID.String != "req-upstream-log-failed" {
+		t.Fatalf("request id = %q", log.UpstreamRequestID.String)
+	}
+	if log.StatusCode.Int64 != 502 {
+		t.Fatalf("log status = %d", log.StatusCode.Int64)
+	}
+}
+
+func TestCreateVideoWritesRejectedRequestLog(t *testing.T) {
+	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithBalance("sk-log-rejected", "u_log_rejected", "", 0.01, 1.0); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"A rejected logged request."}],
+		"resolution":"480p",
+		"ratio":"16:9",
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-log-rejected")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPaymentRequired {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+
+	log, err := db.TestLatestRequestLog("u_log_rejected", "video_create_rejected")
+	if err != nil {
+		t.Fatalf("latest log: %v", err)
+	}
+	if log.ErrorCode.String != "insufficient_balance" {
+		t.Fatalf("error code = %q", log.ErrorCode.String)
+	}
+	if log.StatusCode.Int64 != 402 {
+		t.Fatalf("log status = %d", log.StatusCode.Int64)
 	}
 }
 
@@ -1088,7 +1278,13 @@ func TestCreateVideoUpstreamErrorReturnsSafeRequestIDWithoutSecretLeakage(t *tes
 	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Request-Id", "req_safe_go_123")
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte("blocked https://byteplus.example.test/private-video.mp4 ark-customer-secret-key"))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"code":    "AuthenticationError",
+				"type":    "Unauthorized",
+				"message": "blocked https://byteplus.example.test/private-video.mp4 ark-customer-secret-key",
+			},
+		})
 	})
 	defer server.Close()
 	defer db.Close()
@@ -1118,6 +1314,12 @@ func TestCreateVideoUpstreamErrorReturnsSafeRequestIDWithoutSecretLeakage(t *tes
 	raw := string(body)
 	if !strings.Contains(raw, `"request_id":"req_safe_go_123"`) {
 		t.Fatalf("body missing upstream request id: %s", body)
+	}
+	if !strings.Contains(raw, `"upstream_code":"AuthenticationError"`) {
+		t.Fatalf("body missing upstream code: %s", body)
+	}
+	if !strings.Contains(raw, `blocked \u003credacted-url\u003e \u003credacted-upstream-key\u003e`) {
+		t.Fatalf("body missing sanitized upstream message: %s", body)
 	}
 	for _, leaked := range []string{"byteplus.example.test", "private-video.mp4", "ark-customer-secret-key"} {
 		if strings.Contains(raw, leaked) {
@@ -1552,6 +1754,335 @@ func TestCreateVideoUsesCustomerEndpointFromUserNote(t *testing.T) {
 	}
 }
 
+func TestCreateVideoRoutesCustomerEndpointMapByClientModel(t *testing.T) {
+	var gotAuthorization string
+	var gotUpstreamPayload map[string]any
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotUpstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-customer-endpoint-map"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		var gotPreparePayload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"content": gotPreparePayload["content"]})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-customer-endpoint-map",
+		"u_customer_endpoint_map",
+		`["dreamina-seedance-2-0-260128","seedance-1-5-pro-251215"]`,
+		10,
+		1.0,
+		"customer-map-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_customer_endpoint_map", `{
+		"byteplus_endpoint_id":"ep-default-standard",
+		"byteplus_endpoint_map":{
+			"dreamina-seedance-2-0-260128":"ep-standard",
+			"seedance-1-5-pro-251215":"ep-seedance15"
+		}
+	}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"seedance-1-5-pro-251215",
+		"content":[{"type":"text","text":"customer endpoint map routing"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-customer-endpoint-map")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if gotAuthorization != "Bearer customer-map-key" {
+		t.Fatalf("authorization = %q", gotAuthorization)
+	}
+	if gotUpstreamPayload["model"] != "ep-seedance15" {
+		t.Fatalf("upstream model = %#v payload=%#v", gotUpstreamPayload["model"], gotUpstreamPayload)
+	}
+}
+
+func TestCreateVideoUsesEndpointKeyMapForSelectedModel(t *testing.T) {
+	var gotAuthorization string
+	var gotUpstreamPayload map[string]any
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotUpstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-customer-endpoint-key-map"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		var gotPreparePayload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"content": gotPreparePayload["content"]})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-customer-endpoint-key-map",
+		"u_customer_endpoint_key_map",
+		`["dreamina-seedance-2-0-260128","dreamina-seedance-2-0-fast-260128"]`,
+		10,
+		1.0,
+		"legacy-map-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_customer_endpoint_key_map", `{
+		"byteplus_endpoint_id":"ep-default-standard",
+		"byteplus_endpoint_map":{
+			"dreamina-seedance-2-0-260128":"ep-standard",
+			"dreamina-seedance-2-0-fast-260128":"ep-fast"
+		},
+		"byteplus_endpoint_key_map":{
+			"dreamina-seedance-2-0-260128":{"endpoint_id":"ep-standard","api_key":"standard-endpoint-key","expires_at":3333333333},
+			"dreamina-seedance-2-0-fast-260128":{"endpoint_id":"ep-fast","api_key":"fast-endpoint-key","expires_at":3333333333}
+		},
+		"byteplus_endpoint_key_mode":"per_endpoint"
+	}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-fast-260128",
+		"content":[{"type":"text","text":"selected endpoint key routing"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-customer-endpoint-key-map")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if gotAuthorization != "Bearer fast-endpoint-key" {
+		t.Fatalf("authorization = %q", gotAuthorization)
+	}
+	if gotUpstreamPayload["model"] != "ep-fast" {
+		t.Fatalf("upstream model = %#v payload=%#v", gotUpstreamPayload["model"], gotUpstreamPayload)
+	}
+}
+
+func TestCreateVideoUsesResolvedControlPlaneEndpointKey(t *testing.T) {
+	var gotAuthorization string
+	var gotUpstreamPayload map[string]any
+	var gotPreparePayload map[string]any
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotUpstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-control-plane-key"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"content":          gotPreparePayload["content"],
+			"upstream_api_key": "fresh-control-plane-key",
+			"upstream_model":   "ep-control-plane-fresh",
+		})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-control-plane-key",
+		"u_control_plane_key",
+		`["dreamina-seedance-2-0-260128"]`,
+		10,
+		1.0,
+		"stale-db-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_control_plane_key", `{
+		"byteplus_endpoint_map":{
+			"dreamina-seedance-2-0-260128":"ep-stale-db"
+		}
+	}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"control plane key refresh"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-control-plane-key")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if gotPreparePayload["client_model"] != "dreamina-seedance-2-0-260128" {
+		t.Fatalf("prepare client_model = %#v", gotPreparePayload["client_model"])
+	}
+	if gotPreparePayload["upstream_model"] != "dreamina-seedance-2-0-260128" {
+		t.Fatalf("prepare upstream_model = %#v", gotPreparePayload["upstream_model"])
+	}
+	if gotAuthorization != "Bearer fresh-control-plane-key" {
+		t.Fatalf("authorization = %q", gotAuthorization)
+	}
+	if gotUpstreamPayload["model"] != "ep-control-plane-fresh" {
+		t.Fatalf("upstream model = %#v payload=%#v", gotUpstreamPayload["model"], gotUpstreamPayload)
+	}
+}
+
+func TestCreateVideoIgnoresMalformedEndpointKeyMapEntries(t *testing.T) {
+	var gotAuthorization string
+	var gotUpstreamPayload map[string]any
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotUpstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": "upstream-malformed-key-map"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		var gotPreparePayload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"content": gotPreparePayload["content"]})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-malformed-endpoint-key-map",
+		"u_malformed_endpoint_key_map",
+		`["dreamina-seedance-2-0-260128"]`,
+		10,
+		1.0,
+		"customer-map-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_malformed_endpoint_key_map", `{
+		"byteplus_endpoint_map":{
+			"dreamina-seedance-2-0-260128":"ep-standard"
+		},
+		"byteplus_endpoint_key_map":{
+			"dreamina-seedance-2-0-260128":123
+		}
+	}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-260128",
+		"content":[{"type":"text","text":"ignore bad endpoint key entry"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-malformed-endpoint-key-map")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if gotAuthorization != "Bearer customer-map-key" {
+		t.Fatalf("authorization = %q", gotAuthorization)
+	}
+	if gotUpstreamPayload["model"] != "ep-standard" {
+		t.Fatalf("upstream model = %#v payload=%#v", gotUpstreamPayload["model"], gotUpstreamPayload)
+	}
+}
+
+func TestCreateVideoRejectsUnmappedCustomerEndpointMapModel(t *testing.T) {
+	upstreamCalled := false
+	server, db := newTestServerWithControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		writeJSON(w, http.StatusOK, map[string]string{"id": "should-not-create"})
+	}, func(w http.ResponseWriter, r *http.Request) {
+		var gotPreparePayload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&gotPreparePayload); err != nil {
+			t.Fatalf("decode prepare payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"content": gotPreparePayload["content"]})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithUpstreamKey(
+		"sk-customer-endpoint-map-missing",
+		"u_customer_endpoint_map_missing",
+		`["dreamina-seedance-2-0-260128","dreamina-seedance-2-0-fast-260128"]`,
+		10,
+		1.0,
+		"customer-map-key",
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.SetTestUserNote("u_customer_endpoint_map_missing", `{
+		"byteplus_endpoint_id":"ep-default-standard",
+		"byteplus_endpoint_map":{
+			"dreamina-seedance-2-0-260128":"ep-standard"
+		}
+	}`); err != nil {
+		t.Fatalf("set note: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/videos", strings.NewReader(`{
+		"model":"dreamina-seedance-2-0-fast-260128",
+		"content":[{"type":"text","text":"must not fall back"}],
+		"duration":5
+	}`))
+	req.Header.Set("Authorization", "Bearer sk-customer-endpoint-map-missing")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "endpoint_not_configured_for_model") {
+		t.Fatalf("body missing endpoint_not_configured_for_model: %s", body)
+	}
+	if upstreamCalled {
+		t.Fatalf("unmapped endpoint map request called upstream")
+	}
+}
+
 func TestCreateVideoDelegatesRealPersonMaterializationBeforeUpstream(t *testing.T) {
 	var gotPrepareAuth string
 	var gotPreparePayload map[string]any
@@ -1638,10 +2169,10 @@ func TestGetVideoRefreshesSucceededTaskAndHidesUpstreamURL(t *testing.T) {
 	defer server.Close()
 	defer db.Close()
 
-	if err := db.InsertTestUserWithBalance("sk-get-success", "u_get_success", "", 9.438503, 1.2); err != nil {
+	if err := db.InsertTestUserWithBalance("sk-get-success", "u_get_success", "", 9.532086, 1.2); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
-	if err := db.InsertTestQueuedTask("vid_success", "u_get_success", "upstream-success", 0.561497, 1.2); err != nil {
+	if err := db.InsertTestQueuedTask("vid_success", "u_get_success", "upstream-success", 0.467914, 1.2); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 
@@ -1663,14 +2194,14 @@ func TestGetVideoRefreshesSucceededTaskAndHidesUpstreamURL(t *testing.T) {
 	if !strings.Contains(string(body), `"video_url":"https://media.example.test/v1/videos/vid_success/content"`) {
 		t.Fatalf("response missing relay video_url: %s", body)
 	}
-	if !strings.Contains(string(body), `"actual_cost_usd":0.01008`) {
+	if !strings.Contains(string(body), `"actual_cost_usd":0.0084`) {
 		t.Fatalf("response missing customer actual cost: %s", body)
 	}
 	balance, err := db.TestUserBalance("u_get_success")
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.98992 {
+	if balance != 9.9916 {
 		t.Fatalf("balance = %v", balance)
 	}
 }
@@ -1692,10 +2223,10 @@ func TestGetVideoSettlementUsesTaskPriceMultiplierSnapshot(t *testing.T) {
 	defer server.Close()
 	defer db.Close()
 
-	if err := db.InsertTestUserWithBalance("sk-snapshot-settle", "u_snapshot_settle", "", 9.438503, 1.2); err != nil {
+	if err := db.InsertTestUserWithBalance("sk-snapshot-settle", "u_snapshot_settle", "", 9.532086, 1.2); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
-	if err := db.InsertTestQueuedTask("vid_snapshot_settle", "u_snapshot_settle", "upstream-snapshot-settle", 0.561497, 1.2); err != nil {
+	if err := db.InsertTestQueuedTask("vid_snapshot_settle", "u_snapshot_settle", "upstream-snapshot-settle", 0.467914, 1.2); err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 	if err := db.SetTestUserPriceMultiplier("u_snapshot_settle", 1.8); err != nil {
@@ -1714,18 +2245,62 @@ func TestGetVideoSettlementUsesTaskPriceMultiplierSnapshot(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
 	}
-	if !strings.Contains(string(body), `"actual_cost_usd":0.01008`) {
+	if !strings.Contains(string(body), `"actual_cost_usd":0.0084`) {
 		t.Fatalf("settlement should use task multiplier snapshot, body=%s", body)
 	}
-	if strings.Contains(string(body), `"actual_cost_usd":0.01512`) {
+	if strings.Contains(string(body), `"actual_cost_usd":0.0126`) {
 		t.Fatalf("settlement used latest customer multiplier: %s", body)
 	}
 	balance, err := db.TestUserBalance("u_snapshot_settle")
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.98992 {
+	if balance != 9.9916 {
 		t.Fatalf("balance = %v", balance)
+	}
+}
+
+func TestGetVideoSettlementUsesTaskModelSnapshot(t *testing.T) {
+	server, db, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     "succeeded",
+			"model":      "seedance-1-0-pro-fast-251015",
+			"resolution": "480p",
+			"usage": map[string]any{
+				"completion_tokens": 1000,
+			},
+			"content": map[string]any{
+				"video_url": "https://byteplus.example.test/private-video.mp4",
+			},
+		})
+	})
+	defer server.Close()
+	defer db.Close()
+
+	if err := db.InsertTestUserWithBalance("sk-model-snapshot-settle", "u_model_snapshot_settle", "", 9.532086, 1.0); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := db.InsertTestQueuedTask("vid_model_snapshot_settle", "u_model_snapshot_settle", "upstream-model-snapshot-settle", 0.467914, 1.0); err != nil {
+		t.Fatalf("insert task: %v", err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/videos/vid_model_snapshot_settle", nil)
+	req.Header.Set("Authorization", "Bearer sk-model-snapshot-settle")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("get video: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"actual_cost_usd":0.007`) {
+		t.Fatalf("settlement should use task model snapshot, body=%s", body)
+	}
+	if strings.Contains(string(body), `"actual_cost_usd":0.0009`) {
+		t.Fatalf("settlement used upstream echo model: %s", body)
 	}
 }
 
@@ -2014,7 +2589,7 @@ func TestVideoContentRefreshesQueuedTaskBeforeReturningNotReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.9916 {
+	if balance != 9.993 {
 		t.Fatalf("balance = %v", balance)
 	}
 }
@@ -2085,7 +2660,7 @@ func TestVideoContentHeadRefreshesQueuedTaskBeforeReturningNotReady(t *testing.T
 	if err != nil {
 		t.Fatalf("balance: %v", err)
 	}
-	if balance != 9.9916 {
+	if balance != 9.993 {
 		t.Fatalf("balance = %v", balance)
 	}
 }

@@ -33,24 +33,36 @@ var fallbackTokensPerSecond = map[string]int{
 }
 
 var outputRate = map[string]float64{
-	"seedance-1-0-lite-t2v-250428":      0.0007,
-	"seedance-1-0-lite-i2v-250428":      0.0007,
-	"seedance-1-0-pro-250528":           0.0014,
-	"seedance-1-0-pro-fast-251015":      0.001,
-	"seedance-1-5-pro-251215":           0.0017,
-	"dreamina-seedance-2-0-fast-260128": 0.0014,
+	"seedance-1-0-lite-t2v-250428": 0.00153,
+	"seedance-1-0-lite-i2v-250428": 0.00153,
+	"seedance-1-0-pro-250528":      0.002375,
+	"seedance-1-0-pro-fast-251015": 0.0009,
+	"seedance-1-5-pro-251215":      0.00216,
 }
 
 var dreamina20Rate = map[bool]map[string]float64{
 	false: {
-		"480p":  0.0084,
-		"720p":  0.0084,
-		"1080p": 0.00924,
+		"480p":  0.007,
+		"720p":  0.007,
+		"1080p": 0.0077,
 	},
 	true: {
-		"480p":  0.00516,
-		"720p":  0.00516,
-		"1080p": 0.00564,
+		"480p":  0.0043,
+		"720p":  0.0043,
+		"1080p": 0.0047,
+	},
+}
+
+var dreamina20FastRate = map[bool]map[string]float64{
+	false: {
+		"480p":  0.0056,
+		"720p":  0.0056,
+		"1080p": 0.0056,
+	},
+	true: {
+		"480p":  0.0033,
+		"720p":  0.0033,
+		"1080p": 0.0033,
 	},
 }
 
@@ -102,7 +114,15 @@ func outputRateFor(model, resolution string, hasVideoRef bool) float64 {
 				return rate
 			}
 		}
-		return 0.00924
+		return 0.0077
+	}
+	if model == "dreamina-seedance-2-0-fast-260128" {
+		if byResolution, ok := dreamina20FastRate[hasVideoRef]; ok {
+			if rate, ok := byResolution[resolution]; ok {
+				return rate
+			}
+		}
+		return 0.0056
 	}
 	return outputRate[model]
 }
